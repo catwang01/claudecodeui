@@ -111,6 +111,7 @@
   },
   "search": {
     "modeProjects": "Projects",
+    "modeRecent": "Recent",
     "modeConversations": "Conversations",
     "conversationsPlaceholder": "Search in conversations...",
     "searching": "Searching...",

@@ -1,11 +1,11 @@
-import { Folder, FolderPlus, MessageSquare, Plus, RefreshCw, Search, X, PanelLeftClose } from 'lucide-react';
+import { Clock, Folder, FolderPlus, MessageSquare, Plus, RefreshCw, Search, X, PanelLeftClose } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { Button, Input } from '../../../../shared/view/ui';
 import { IS_PLATFORM } from '../../../../constants/config';
 import { cn } from '../../../../lib/utils';
 import GitHubStarBadge from './GitHubStarBadge';
 
-type SearchMode = 'projects' | 'conversations';
+type SearchMode = 'projects' | 'conversations' | 'recent';
 
 type SidebarHeaderProps = {
   isPWA: boolean;
@@ -115,6 +115,19 @@ export default function SidebarHeader({
             {/* Search mode toggle */}
             <div className="flex rounded-lg bg-muted/50 p-0.5">
               <button
+                onClick={() => onSearchModeChange('recent')}
+                aria-pressed={searchMode === 'recent'}
+                className={cn(
+                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all",
+                  searchMode === 'recent'
+                    ? "bg-background shadow-sm text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                <Clock className="h-3 w-3" />
+                {t('search.modeRecent')}
+              </button>
+              <button
                 onClick={() => onSearchModeChange('projects')}
                 aria-pressed={searchMode === 'projects'}
                 className={cn(
@@ -145,7 +158,7 @@ export default function SidebarHeader({
               <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/50" />
               <Input
                 type="text"
-                placeholder={searchMode === 'conversations' ? t('search.conversationsPlaceholder') : t('projects.searchPlaceholder')}
+                placeholder={(searchMode === 'conversations' || searchMode === 'recent') ? t('search.conversationsPlaceholder') : t('projects.searchPlaceholder')}
                 value={searchFilter}
                 onChange={(event) => onSearchFilterChange(event.target.value)}
                 className="nav-search-input h-9 rounded-xl border-0 pl-9 pr-8 text-sm transition-all duration-200 placeholder:text-muted-foreground/40 focus-visible:ring-0 focus-visible:ring-offset-0"
@@ -207,6 +220,19 @@ export default function SidebarHeader({
           <div className="mt-2.5 space-y-2">
             <div className="flex rounded-lg bg-muted/50 p-0.5">
               <button
+                onClick={() => onSearchModeChange('recent')}
+                aria-pressed={searchMode === 'recent'}
+                className={cn(
+                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all",
+                  searchMode === 'recent'
+                    ? "bg-background shadow-sm text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                <Clock className="h-3 w-3" />
+                {t('search.modeRecent')}
+              </button>
+              <button
                 onClick={() => onSearchModeChange('projects')}
                 aria-pressed={searchMode === 'projects'}
                 className={cn(
@@ -237,7 +263,7 @@ export default function SidebarHeader({
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/50" />
               <Input
                 type="text"
-                placeholder={searchMode === 'conversations' ? t('search.conversationsPlaceholder') : t('projects.searchPlaceholder')}
+                placeholder={(searchMode === 'conversations' || searchMode === 'recent') ? t('search.conversationsPlaceholder') : t('projects.searchPlaceholder')}
                 value={searchFilter}
                 onChange={(event) => onSearchFilterChange(event.target.value)}
                 className="nav-search-input h-10 rounded-xl border-0 pl-10 pr-9 text-sm transition-all duration-200 placeholder:text-muted-foreground/40 focus-visible:ring-0 focus-visible:ring-offset-0"

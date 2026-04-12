@@ -1,5 +1,5 @@
-import { type ReactNode } from 'react';
-import { Folder, MessageSquare, Search } from 'lucide-react';
+import { useMemo, type ReactNode } from 'react';
+import { Clock, Folder, MessageSquare, Search } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { ScrollArea } from '../../../../shared/view/ui';
 import type { Project } from '../../../../types/app';
@@ -8,8 +8,11 @@ import type { ConversationSearchResults, SearchProgress } from '../../hooks/useS
 import SidebarFooter from './SidebarFooter';
 import SidebarHeader from './SidebarHeader';
 import SidebarProjectList, { type SidebarProjectListProps } from './SidebarProjectList';
+import { formatTimeAgo } from '../../../../utils/dateUtils';
+import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
+import { getSessionName } from '../../utils/utils';
 
-type SearchMode = 'projects' | 'conversations';
+type SearchMode = 'projects' | 'conversations' | 'recent';
 
 function HighlightedSnippet({ snippet, highlights }: { snippet: string; highlights: { start: number; end: number }[] }) {
   const parts: ReactNode[] = [];
@@ -90,8 +93,27 @@ export default function SidebarContent({
   projectListProps,
   t,
 }: SidebarContentProps) {
-  const showConversationSearch = searchMode === 'conversations' && searchFilter.trim().length >= 2;
+  const showConversationSearch = (searchMode === 'conversations' || searchMode === 'recent') && searchFilter.trim().length >= 2;
   const hasPartialResults = conversationResults && conversationResults.results.length > 0;
+
+  const recentSessions = useMemo(() => {
+    if (searchMode !== 'recent') return [];
+    const all: Array<{ session: ReturnType<typeof projectListProps.getProjectSessions>[number]; project: Project }> = [];
+    for (const project of projectListProps.projects) {
+      for (const session of projectListProps.getProjectSessions(project)) {
+        all.push({ session, project });
+      }
+    }
+    return all
+      .sort((a, b) => {
+        const getTime = (s: typeof a.session) => {
+          const date = s.lastActivity || s.createdAt || '';
+          return date ? new Date(date).getTime() : 0;
+        };
+        return getTime(b.session) - getTime(a.session);
+      })
+      .slice(0, 10);
+  }, [searchMode, projectListProps]);
 
   return (
     <div
@@ -116,7 +138,52 @@ export default function SidebarContent({
       />
 
       <ScrollArea className="flex-1 overflow-y-auto overscroll-contain md:px-1.5 md:py-2">
-        {showConversationSearch ? (
+        {searchMode === 'recent' && !showConversationSearch ? (
+          <div className="space-y-1 px-2 py-1">
+            {recentSessions.length === 0 ? (
+              <div className="px-4 py-12 text-center">
+                <Clock className="mx-auto mb-3 h-8 w-8 text-muted-foreground/40" />
+                <p className="text-sm text-muted-foreground">No recent sessions</p>
+              </div>
+            ) : recentSessions.map(({ session, project }) => {
+              const isProcessing = projectListProps.processingSessions?.has(session.id) ?? false;
+              const sessionDate = new Date(session.lastActivity || session.createdAt || 0);
+              const isActive = (projectListProps.currentTime.getTime() - sessionDate.getTime()) / 60000 < 10;
+              return (
+              <div key={`${project.name}-${session.id}`} className="relative">
+                {isProcessing && (
+                  <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2">
+                    <div className="h-2 w-2 animate-spin rounded-full border border-yellow-400 border-t-transparent" />
+                  </div>
+                )}
+                {!isProcessing && isActive && (
+                  <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2">
+                    <div className="h-2 w-2 rounded-full bg-blue-500" />
+                  </div>
+                )}
+                <button
+                  className="w-full rounded-md px-2 py-2 text-left transition-colors hover:bg-accent/50"
+                  onClick={() => projectListProps.onSessionSelect(session, project.name)}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <SessionProviderLogo provider={session.__provider} className="h-3 w-3 flex-shrink-0" />
+                    <span className="truncate text-xs font-medium text-foreground flex-1">
+                      {getSessionName(session, t)}
+                    </span>
+                  </div>
+                  <div className="mt-0.5 flex items-center gap-1.5 pl-5">
+                    <Folder className="h-2.5 w-2.5 flex-shrink-0 text-muted-foreground/60" />
+                    <span className="truncate text-[10px] text-muted-foreground/60">{project.displayName || project.name}</span>
+                    <span className="ml-auto flex-shrink-0 text-[10px] text-muted-foreground/50">
+                      {formatTimeAgo(session.lastActivity || session.createdAt || '', projectListProps.currentTime, t)}
+                    </span>
+                  </div>
+                </button>
+              </div>
+              );
+            })}
+          </div>
+        ) : showConversationSearch ? (
           isSearching && !hasPartialResults ? (
             <div className="px-4 py-12 text-center md:py-8">
               <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-muted md:mb-3">

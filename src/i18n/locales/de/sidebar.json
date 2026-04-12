@@ -111,6 +111,7 @@
   },
   "search": {
     "modeProjects": "Projekte",
+    "modeRecent": "Recent",
     "modeConversations": "Unterhaltungen",
     "conversationsPlaceholder": "In Unterhaltungen suchen...",
     "searching": "Sucht...",

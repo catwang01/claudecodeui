@@ -229,7 +229,7 @@ function Sidebar({
             onSearchFilterChange={setSearchFilter}
             onClearSearchFilter={() => setSearchFilter('')}
             searchMode={searchMode}
-            onSearchModeChange={(mode: 'projects' | 'conversations') => {
+            onSearchModeChange={(mode: 'projects' | 'conversations' | 'recent') => {
               setSearchMode(mode);
               if (mode === 'projects') clearConversationResults();
             }}
