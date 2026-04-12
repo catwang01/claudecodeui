@@ -106,12 +106,29 @@ function createEmptySlot(): SessionSlot {
  * Compute merged messages: server + realtime, deduped by id.
  * Server messages take priority (they're the persisted source of truth).
  * Realtime messages that aren't yet in server stay (in-flight streaming).
+ *
+ * Additionally, a local_ realtime message is dropped if all subsequent
+ * realtime messages are already in serverMessages — this means the server has
+ * "caught up" past it (e.g. a local_xxx user message whose server counterpart
+ * was persisted under a different ID).
  */
 function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[]): NormalizedMessage[] {
   if (realtime.length === 0) return server;
   if (server.length === 0) return realtime;
   const serverIds = new Set(server.map(m => m.id));
-  const extra = realtime.filter(m => !serverIds.has(m.id));
+  const extra = realtime.filter((msg, idx) => {
+    if (serverIds.has(msg.id)) return false;
+    // Only drop local messages (optimistic UI copies with a "local_" prefix ID).
+    // If all subsequent realtime messages are already in server,
+    // the server has overtaken this message — drop the stale local copy.
+    if (msg.id.startsWith('local_')) {
+      const subsequent = realtime.slice(idx + 1);
+      if (subsequent.length > 0 && subsequent.every(m => serverIds.has(m.id))) {
+        return false;
+      }
+    }
+    return true;
+  });
   if (extra.length === 0) return server;
   return [...server, ...extra];
 }
