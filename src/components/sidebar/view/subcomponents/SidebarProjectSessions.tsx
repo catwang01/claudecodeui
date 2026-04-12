@@ -29,6 +29,7 @@ type SidebarProjectSessionsProps = {
   ) => void;
   onLoadMoreSessions: (project: Project) => void;
   onNewSession: (project: Project) => void;
+  processingSessions?: Set<string>;
   t: TFunction;
 };
 
@@ -69,6 +70,7 @@ export default function SidebarProjectSessions({
   onDeleteSession,
   onLoadMoreSessions,
   onNewSession,
+  processingSessions,
   t,
 }: SidebarProjectSessionsProps) {
   if (!isExpanded) {
@@ -126,6 +128,7 @@ export default function SidebarProjectSessions({
             onProjectSelect={onProjectSelect}
             onSessionSelect={onSessionSelect}
             onDeleteSession={onDeleteSession}
+            isProcessing={processingSessions?.has(session.id) ?? false}
             t={t}
           />
         ))

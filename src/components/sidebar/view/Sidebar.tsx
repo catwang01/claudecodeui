@@ -35,6 +35,7 @@ function Sidebar({
   settingsInitialTab,
   onCloseSettings,
   isMobile,
+  processingSessions,
 }: SidebarProps) {
   const { t } = useTranslation(['sidebar', 'common']);
   const { isPWA } = useDeviceSettings({ trackMobile: false });
@@ -180,6 +181,7 @@ function Sidebar({
     onSaveEditingSession: (projectName: string, sessionId: string, summary: string, provider: SessionProvider) => {
       void updateSessionSummary(projectName, sessionId, summary, provider);
     },
+    processingSessions,
     t,
   };
 

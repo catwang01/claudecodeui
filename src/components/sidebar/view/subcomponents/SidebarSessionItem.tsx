@@ -27,6 +27,7 @@ type SidebarSessionItemProps = {
     sessionTitle: string,
     provider: SessionProvider,
   ) => void;
+  isProcessing?: boolean;
   t: TFunction;
 };
 
@@ -44,9 +45,10 @@ export default function SidebarSessionItem({
   onProjectSelect,
   onSessionSelect,
   onDeleteSession,
+  isProcessing = false,
   t,
 }: SidebarSessionItemProps) {
-  const sessionView = createSessionViewModel(session, currentTime, t);
+  const sessionView = createSessionViewModel(session, currentTime, t, isProcessing);
   const isSelected = selectedSession?.id === session.id;
 
   const selectMobileSession = () => {
@@ -64,9 +66,14 @@ export default function SidebarSessionItem({
 
   return (
     <div className="group relative">
-      {sessionView.isActive && (
+      {sessionView.isProcessing && (
         <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2 transform">
-          <div className="h-2 w-2 animate-pulse rounded-full bg-green-500" />
+          <div className="h-2 w-2 animate-spin rounded-full border border-yellow-400 border-t-transparent" />
+        </div>
+      )}
+      {!sessionView.isProcessing && sessionView.isActive && (
+        <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2 transform">
+          <div className="h-2 w-2 rounded-full bg-blue-500" />
         </div>
       )}
 
@@ -75,9 +82,11 @@ export default function SidebarSessionItem({
           className={cn(
             'p-2 mx-3 my-0.5 rounded-md bg-card border active:scale-[0.98] transition-all duration-150 relative',
             isSelected ? 'bg-primary/5 border-primary/20' : '',
-            !isSelected && sessionView.isActive
-              ? 'border-green-500/30 bg-green-50/5 dark:bg-green-900/5'
-              : 'border-border/30',
+            !isSelected && sessionView.isProcessing
+              ? 'border-yellow-400/30 bg-yellow-50/5 dark:bg-yellow-900/5'
+              : !isSelected && sessionView.isActive
+                ? 'border-blue-500/30 bg-blue-50/5 dark:bg-blue-900/5'
+                : 'border-border/30',
           )}
           onClick={selectMobileSession}
         >

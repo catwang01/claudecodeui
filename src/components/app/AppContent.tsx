@@ -126,7 +126,7 @@ export default function AppContent() {
     <div className="fixed inset-0 flex bg-background">
       {!isMobile ? (
         <div className="h-full flex-shrink-0 border-r border-border/50">
-          <Sidebar {...sidebarSharedProps} />
+          <Sidebar {...sidebarSharedProps} processingSessions={processingSessions} />
         </div>
       ) : (
         <div
@@ -152,7 +152,7 @@ export default function AppContent() {
             onClick={(event) => event.stopPropagation()}
             onTouchStart={(event) => event.stopPropagation()}
           >
-            <Sidebar {...sidebarSharedProps} />
+            <Sidebar {...sidebarSharedProps} processingSessions={processingSessions} />
           </div>
         </div>
       )}
