@@ -7,7 +7,7 @@
  * No localStorage for messages. Backend JSONL is the source of truth.
  */
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SessionProvider } from '../types/app';
 import { authenticatedFetch } from '../utils/api';
 
@@ -169,6 +169,23 @@ export function useSessionStore() {
   const setActiveSession = useCallback((sessionId: string | null) => {
     activeSessionIdRef.current = sessionId;
   }, []);
+
+  // Debug: log only when serverMessages / realtimeMessages / merged actually change
+  const _debugPrevRef = useRef<{ server: NormalizedMessage[]; realtime: NormalizedMessage[]; merged: NormalizedMessage[] } | null>(null);
+  useEffect(() => {
+    const sessionId = activeSessionIdRef.current;
+    if (!sessionId) return;
+    const slot = storeRef.current.get(sessionId);
+    if (!slot) return;
+    const prev = _debugPrevRef.current;
+    if (prev && prev.server === slot.serverMessages && prev.realtime === slot.realtimeMessages && prev.merged === slot.merged) return;
+    _debugPrevRef.current = { server: slot.serverMessages, realtime: slot.realtimeMessages, merged: slot.merged };
+    console.group(`[SessionStore] session=${sessionId.slice(0, 8)}`);
+    console.log('serverMessages  (%d):', slot.serverMessages.length, slot.serverMessages);
+    console.log('realtimeMessages(%d):', slot.realtimeMessages.length, slot.realtimeMessages);
+    console.log('merged          (%d):', slot.merged.length, slot.merged);
+    console.groupEnd();
+  });
 
   const getSlot = useCallback((sessionId: string): SessionSlot => {
     const store = storeRef.current;

@@ -64,7 +64,10 @@ const useWebSocketProviderState = (): WebSocketContextType => {
         wsRef.current = websocket;
         if (hasConnectedRef.current) {
           // This is a reconnect — signal so components can catch up on missed messages
+          console.log('[WS] Reconnected at', new Date().toISOString());
           setLatestMessage({ type: 'websocket-reconnected', timestamp: Date.now() });
+        } else {
+          console.log('[WS] Connected (first time) at', new Date().toISOString());
         }
         hasConnectedRef.current = true;
       };

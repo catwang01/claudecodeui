@@ -623,7 +623,11 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
     // Process streaming messages
     console.log('Starting async generator loop for session:', capturedSessionId || 'NEW');
+    let _msgCount = 0;
     for await (const message of queryInstance) {
+      _msgCount++;
+      const _sid = capturedSessionId || sessionId || 'NEW';
+      console.log(`[SDK] session=${_sid.slice(0, 8)} msg#${_msgCount}`, JSON.stringify(message, null, 2));
       // Capture session ID from first message
       if (message.session_id && !capturedSessionId) {
 
