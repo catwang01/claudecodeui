@@ -102,15 +102,18 @@ function createEmptySlot(): SessionSlot {
   };
 }
 
+// Kinds that are persisted to server (JSONL). Ephemeral kinds (status, complete, etc.) are excluded.
+const PERSISTED_KINDS = new Set<MessageKind>(['text', 'thinking', 'tool_use', 'tool_result']);
+
 /**
  * Compute merged messages: server + realtime, deduped by id.
  * Server messages take priority (they're the persisted source of truth).
  * Realtime messages that aren't yet in server stay (in-flight streaming).
  *
  * Additionally, a local_ realtime message is dropped if all subsequent
- * realtime messages are already in serverMessages — this means the server has
- * "caught up" past it (e.g. a local_xxx user message whose server counterpart
- * was persisted under a different ID).
+ * persisted-kind realtime messages are already in serverMessages — this means
+ * the server has "caught up" past it (e.g. a local_xxx user message whose
+ * server counterpart was persisted under a different ID).
  */
 function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[]): NormalizedMessage[] {
   if (realtime.length === 0) return server;
@@ -119,11 +122,11 @@ function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[
   const extra = realtime.filter((msg, idx) => {
     if (serverIds.has(msg.id)) return false;
     // Only drop local messages (optimistic UI copies with a "local_" prefix ID).
-    // If all subsequent realtime messages are already in server,
+    // If all subsequent persisted-kind realtime messages are already in server,
     // the server has overtaken this message — drop the stale local copy.
     if (msg.id.startsWith('local_')) {
-      const subsequent = realtime.slice(idx + 1);
-      if (subsequent.length > 0 && subsequent.every(m => serverIds.has(m.id))) {
+      const subsequentPersisted = realtime.slice(idx + 1).filter(m => PERSISTED_KINDS.has(m.kind));
+      if (subsequentPersisted.length > 0 && subsequentPersisted.every(m => serverIds.has(m.id))) {
         return false;
       }
     }
