@@ -258,6 +258,14 @@ function getAllSessions() {
   return Array.from(activeSessions.keys());
 }
 
+function appendToSessionLog(sessionId, content) {
+  const logsDir = path.join(os.homedir(), '.claudecodeui', 'logs');
+  const logPath = path.join(logsDir, `${sessionId}.log`);
+  fs.mkdir(logsDir, { recursive: true })
+    .then(() => fs.appendFile(logPath, content + '\n', 'utf8'))
+    .catch(() => {});
+}
+
 /**
  * Transforms SDK messages to WebSocket format expected by frontend
  * @param {Object} sdkMessage - SDK message object
@@ -622,12 +630,12 @@ async function queryClaudeSDK(command, options = {}, ws) {
     }
 
     // Process streaming messages
-    console.log('Starting async generator loop for session:', capturedSessionId || 'NEW');
+    appendToSessionLog(capturedSessionId || sessionId || 'unknown', `[${new Date().toISOString()}] Starting async generator loop for session: ${capturedSessionId || 'NEW'}`);
     let _msgCount = 0;
     for await (const message of queryInstance) {
       _msgCount++;
-      const _sid = capturedSessionId || sessionId || 'NEW';
-      console.log(`[SDK] session=${_sid.slice(0, 8)} msg#${_msgCount}`, JSON.stringify(message, null, 2));
+      const _sid = capturedSessionId || sessionId || 'unknown';
+      appendToSessionLog(_sid, `[${new Date().toISOString()}] [SDK] msg#${_msgCount} ${JSON.stringify(message, null, 2)}`);
       // Capture session ID from first message
       if (message.session_id && !capturedSessionId) {
 
