@@ -263,6 +263,17 @@ export function useChatRealtimeHandlers({
         onSessionInactive?.(sid);
         onSessionNotProcessing?.(sid);
 
+        // Refresh server messages after completion to clear realtimeMessages,
+        // regardless of projects_updated ordering
+        const completeSessionId = sid || currentSessionId;
+        if (completeSessionId && selectedProject && selectedSession) {
+          sessionStore.refreshFromServer(completeSessionId, {
+            provider: (selectedSession.__provider || provider) as SessionProvider,
+            projectName: selectedProject.name,
+            projectPath: selectedProject.fullPath || selectedProject.path || '',
+          });
+        }
+
         // Handle aborted case
         if (msg.aborted) {
           // Abort was requested — the complete event confirms it
