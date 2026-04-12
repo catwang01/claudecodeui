@@ -102,36 +102,63 @@ function createEmptySlot(): SessionSlot {
   };
 }
 
-// Kinds that are persisted to server (JSONL). Ephemeral kinds (status, complete, etc.) are excluded.
-const PERSISTED_KINDS = new Set<MessageKind>(['text', 'thinking', 'tool_use', 'tool_result']);
 
 /**
- * Compute merged messages: server + realtime, deduped by id.
- * Server messages take priority (they're the persisted source of truth).
- * Realtime messages that aren't yet in server stay (in-flight streaming).
+ * Check whether two messages have the same content (content-based equality,
+ * ignoring ID differences between optimistic local copies and server versions).
+ */
+function sameContent(a: NormalizedMessage, b: NormalizedMessage): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.role !== b.role) return false;
+  if (a.content !== b.content) return false;
+  return true;
+}
+
+/**
+ * Compute merged messages: server + realtime, deduped.
  *
- * Additionally, a local_ realtime message is dropped if all subsequent
- * persisted-kind realtime messages are already in serverMessages — this means
- * the server has "caught up" past it (e.g. a local_xxx user message whose
- * server counterpart was persisted under a different ID).
+ * Standard path: server messages take priority (persisted source of truth).
+ * Realtime messages not yet in server stay (in-flight streaming).
+ *
+ * Overlap detection: if realtimeMessages starts with a local_ message,
+ * search backwards from the tail of serverMessages for a message with the
+ * same content. If found, walk forward comparing server[i+1..end] against
+ * realtime[1..N]. If the overlap extends to the end of serverMessages,
+ * the server has fully caught up — drop those realtime messages from the merge.
  */
 function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[]): NormalizedMessage[] {
   if (realtime.length === 0) return server;
   if (server.length === 0) return realtime;
+
   const serverIds = new Set(server.map(m => m.id));
-  const extra = realtime.filter((msg, idx) => {
-    if (serverIds.has(msg.id)) return false;
-    // Only drop local messages (optimistic UI copies with a "local_" prefix ID).
-    // If all subsequent persisted-kind realtime messages are already in server,
-    // the server has overtaken this message — drop the stale local copy.
-    if (msg.id.startsWith('local_')) {
-      const subsequentPersisted = realtime.slice(idx + 1).filter(m => PERSISTED_KINDS.has(m.kind));
-      if (subsequentPersisted.length > 0 && subsequentPersisted.every(m => serverIds.has(m.id))) {
-        return false;
+
+  // Content-based overlap detection when realtime starts with a local_ message
+  if (realtime[0].id.startsWith('local_')) {
+    for (let i = server.length - 1; i >= 0; i--) {
+      if (!sameContent(server[i], realtime[0])) continue;
+
+      // Found a content match at server[i]; walk forward to measure overlap.
+      // realtime may skip server messages (subsequence matching): advance si
+      // unconditionally, advance ri only on a content match.
+      let si = i + 1;
+      let ri = 1;
+      while (si < server.length && ri < realtime.length) {
+        if (sameContent(server[si], realtime[ri])) ri++;
+        si++;
       }
+
+      // Overlap extends to end of server or all realtime matched — drop the overlapping realtime head
+      if (si === server.length || ri === realtime.length) {
+        const remaining = realtime.slice(ri).filter(m => !serverIds.has(m.id));
+        if (remaining.length === 0) return server;
+        return [...server, ...remaining];
+      }
+      break;
     }
-    return true;
-  });
+  }
+
+  // Standard ID-based dedup
+  const extra = realtime.filter(m => !serverIds.has(m.id));
   if (extra.length === 0) return server;
   return [...server, ...extra];
 }
