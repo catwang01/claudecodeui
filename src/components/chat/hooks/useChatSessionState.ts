@@ -148,17 +148,20 @@ export function useChatSessionState({
     sessionStore.setActiveSession(activeSessionId);
   }
 
-  // When a real session ID arrives and we have a pending user message, flush it to the store
-  const prevActiveSessionRef = useRef<string | null>(null);
-  if (activeSessionId && activeSessionId !== prevActiveSessionRef.current && pendingUserMessage) {
+  // When a real session ID arrives and we have a pending user message, flush it to the store.
+  // Must be a useEffect (not a render-time side effect) so it only runs once after commit —
+  // calling appendRealtime during render can fire multiple times in React 18 concurrent mode,
+  // which is what caused the message to be duplicated across sessions on every switch.
+  useEffect(() => {
+    if (!activeSessionId || !pendingUserMessage) return;
     const prov = (localStorage.getItem('selected-provider') as SessionProvider) || 'claude';
     const normalized = chatMessageToNormalized(pendingUserMessage, activeSessionId, prov);
     if (normalized) {
       sessionStore.appendRealtime(activeSessionId, normalized);
     }
     setPendingUserMessage(null);
-  }
-  prevActiveSessionRef.current = activeSessionId;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSessionId, pendingUserMessage]);
 
   const storeMessages = activeSessionId ? sessionStore.getMessages(activeSessionId) : [];
 

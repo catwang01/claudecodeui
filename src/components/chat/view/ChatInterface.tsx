@@ -205,25 +205,24 @@ function ChatInterface({
   // On WebSocket reconnect, re-fetch the current session's messages from the server
   // so missed streaming events are shown. Also reset isLoading.
   const handleWebSocketReconnect = useCallback(async () => {
-    console.log('[WS Reconnect] handleWebSocketReconnect called', {
-      selectedSession: selectedSession?.id ?? null,
-      selectedProject: selectedProject?.name ?? null,
-    });
-    if (!selectedProject || !selectedSession) {
-      console.log('[WS Reconnect] skipped — no session/project selected');
-      return;
-    }
-    const providerVal = (localStorage.getItem('selected-provider') as SessionProvider) || 'claude';
-    console.log('[WS Reconnect] calling refreshFromServer for session', selectedSession.id);
+    if (!selectedProject || !selectedSession) return;
+    const providerVal = (selectedSession.__provider || (localStorage.getItem('selected-provider') as SessionProvider)) || 'claude';
     await sessionStore.refreshFromServer(selectedSession.id, {
-      provider: (selectedSession.__provider || providerVal) as SessionProvider,
+      provider: providerVal as SessionProvider,
       projectName: selectedProject.name,
       projectPath: selectedProject.fullPath || selectedProject.path || '',
     });
-    console.log('[WS Reconnect] refreshFromServer done, resetting loading state');
+    // Clear processing state optimistically so the processingSessions effect doesn't
+    // fight setIsLoading(false). check-session-status will restore loading state if
+    // the session is still actually running on the backend.
+    onSessionNotProcessing?.(selectedSession.id);
     setIsLoading(false);
     setCanAbortSession(false);
-  }, [selectedProject, selectedSession, sessionStore, setIsLoading, setCanAbortSession]);
+    setClaudeStatus(null);
+    if (ws) {
+      sendMessage({ type: 'check-session-status', sessionId: selectedSession.id, provider: providerVal });
+    }
+  }, [selectedProject, selectedSession, sessionStore, onSessionNotProcessing, setIsLoading, setCanAbortSession, setClaudeStatus, ws, sendMessage]);
 
   useChatRealtimeHandlers({
     latestMessage,
