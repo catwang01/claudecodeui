@@ -217,8 +217,9 @@ export function useChatRealtimeHandlers({
       return;
     }
 
-    // --- All other messages: route to store ---
-    if (sid) {
+    // --- All other messages: route to store (skip control-only events) ---
+    const CONTROL_KINDS = new Set(['complete', 'status', 'permission_request', 'permission_cancelled', 'session_created']);
+    if (sid && !CONTROL_KINDS.has(msg.kind)) {
       sessionStore.appendRealtime(sid, msg as NormalizedMessage);
     }
 
