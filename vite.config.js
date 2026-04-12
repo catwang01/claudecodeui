@@ -22,6 +22,7 @@ export default defineConfig(({ mode }) => {
     server: {
       host,
       port: parseInt(env.VITE_PORT) || 5173,
+      allowedHosts: ['claude-test.catwang.top'],
       proxy: {
         '/api': `http://${proxyHost}:${serverPort}`,
         '/ws': {
