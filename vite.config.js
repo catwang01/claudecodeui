@@ -7,18 +7,22 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
 
   const configuredHost = env.HOST || '0.0.0.0'
-  // if the host is not a loopback address, it should be used directly. 
-  // This allows the vite server to EXPOSE all interfaces when the host 
-  // is set to '0.0.0.0' or '::', while still using 'localhost' for browser 
+  // if the host is not a loopback address, it should be used directly.
+  // This allows the vite server to EXPOSE all interfaces when the host
+  // is set to '0.0.0.0' or '::', while still using 'localhost' for browser
   // URLs and proxy targets.
   const host = normalizeLoopbackHost(configuredHost)
-  
+
   const proxyHost = getConnectableHost(configuredHost)
   // TODO: Remove support for legacy PORT variables in all locations in a future major release, leaving only SERVER_PORT.
   const serverPort = env.SERVER_PORT || env.PORT || 3001
 
   return {
     plugins: [react()],
+    test: {
+      environment: 'node',
+      include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+    },
     server: {
       host,
       port: parseInt(env.VITE_PORT) || 5173,
