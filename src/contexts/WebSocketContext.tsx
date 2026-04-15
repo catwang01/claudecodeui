@@ -36,8 +36,9 @@ const useWebSocketProviderState = (): WebSocketContextType => {
   const { token } = useAuth();
 
   useEffect(() => {
+    unmountedRef.current = false; // Reset on each effect run (cleanup fires on deps change too, not just unmount)
     connect();
-    
+
     return () => {
       unmountedRef.current = true;
       if (reconnectTimeoutRef.current) {
@@ -75,6 +76,9 @@ const useWebSocketProviderState = (): WebSocketContextType => {
       websocket.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+          if (data.type !== 'loading_progress') {
+            console.log('[WS] message kind=%s type=%s', data.kind ?? '-', data.type ?? '-', data);
+          }
           setLatestMessage(data);
         } catch (error) {
           console.error('Error parsing WebSocket message:', error);
