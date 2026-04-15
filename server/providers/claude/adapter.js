@@ -8,6 +8,9 @@
 import { getSessionMessages } from '../../projects.js';
 import { createNormalizedMessage, generateMessageId } from '../types.js';
 import { isInternalContent } from '../utils.js';
+import { promises as fs } from 'fs';
+import path from 'path';
+import os from 'os';
 
 const PROVIDER = 'claude';
 
@@ -229,6 +232,18 @@ export const claudeAdapter = {
     const total = Array.isArray(result) ? rawMessages.length : (result.total || 0);
     const hasMore = Array.isArray(result) ? false : Boolean(result.hasMore);
 
+    // Load localid mappings for this session (written by claude-sdk.js)
+    const localidMap = new Map(); // serverUUID → localId
+    try {
+      const localidsFile = path.join(os.homedir(), '.claudecodeui', 'localids', `${sessionId}.json`);
+      const entries = JSON.parse(await fs.readFile(localidsFile, 'utf8'));
+      for (const entry of entries) {
+        if (entry.serverUUID && entry.localId) {
+          localidMap.set(entry.serverUUID, entry.localId);
+        }
+      }
+    } catch { /* no localids file — skip */ }
+
     // First pass: collect tool results for attachment to tool_use messages
     const toolResultMap = new Map();
     for (const raw of rawMessages) {
@@ -251,6 +266,14 @@ export const claudeAdapter = {
     const normalized = [];
     for (const raw of rawMessages) {
       const entries = normalizeMessage(raw, sessionId);
+      // Tag user text messages that have a localid mapping
+      if (raw.uuid && localidMap.has(raw.uuid)) {
+        for (const msg of entries) {
+          if (msg.kind === 'text' && msg.role === 'user') {
+            msg.localMessageId = localidMap.get(raw.uuid);
+          }
+        }
+      }
       normalized.push(...entries);
     }
 

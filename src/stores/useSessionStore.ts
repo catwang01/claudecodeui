@@ -63,6 +63,8 @@ export interface NormalizedMessage {
   // Cursor-specific ordering
   sequence?: number;
   rowid?: number;
+  // Maps this server message back to the frontend optimistic local_ id it corresponds to
+  localMessageId?: string;
 }
 
 // ─── Per-session slot ────────────────────────────────────────────────────────
@@ -104,69 +106,27 @@ function createEmptySlot(): SessionSlot {
 
 
 /**
- * Check whether two messages have the same content (content-based equality,
- * ignoring ID differences between optimistic local copies and server versions).
- */
-function sameContent(a: NormalizedMessage, b: NormalizedMessage): boolean {
-  if (a.kind !== b.kind) return false;
-  if (a.role !== b.role) return false;
-  if (a.content !== b.content) return false;
-  return true;
-}
-
-/**
- * Return the subset of realtime messages not yet represented in server.
- *
- * If realtime starts with a local_ message, use content-based subsequence
- * matching to find the overlap: search backwards in server for the local_
- * message's content, then walk forward to see how far the subsequence extends.
- * If the overlap reaches the end of server, drop those matched realtime
- * messages and return the remainder.
- * Falls back to ID-based dedup for non-local_ leading messages.
- */
-function trimRealtime(server: NormalizedMessage[], realtime: NormalizedMessage[]): NormalizedMessage[] {
-  if (realtime.length === 0) return realtime;
-
-  const serverIds = new Set(server.map(m => m.id));
-
-  if (realtime[0].id.startsWith('local_')) {
-    for (let i = server.length - 1; i >= 0; i--) {
-      if (!sameContent(server[i], realtime[0])) continue;
-
-      // Walk forward: advance si unconditionally, ri only on a content match.
-      let si = i + 1;
-      let ri = 1;
-      while (si < server.length && ri < realtime.length) {
-        if (sameContent(server[si], realtime[ri])) ri++;
-        si++;
-      }
-
-      if (si === server.length || ri === realtime.length) {
-        return realtime.slice(ri).filter(m => !serverIds.has(m.id));
-      }
-      break;
-    }
-    // No overlap found — server hasn't caught up yet
-    return realtime;
-  }
-
-  // Standard ID-based dedup
-  return realtime.filter(m => !serverIds.has(m.id));
-}
-
-/**
  * Compute merged messages: server + realtime, deduped.
  *
- * Server messages take priority (persisted source of truth).
- * Realtime messages not yet in server stay (in-flight streaming).
+ * Server messages are the source of truth. Realtime messages are the
+ * in-flight streaming window. Dedup uses two signals:
+ *  1. ID equality: realtime message id already in server → skip
+ *  2. localMessageId: server message has localMessageId == realtime message id
+ *     (the backend tagged the server-persisted copy of an optimistic local_ message) → skip
  */
-function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[]): NormalizedMessage[] {
+/** @internal exported for testing */
+export function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[]): NormalizedMessage[] {
   if (realtime.length === 0) return server;
   if (server.length === 0) return realtime;
 
-  const remaining = trimRealtime(server, realtime);
-  if (remaining.length === 0) return server;
-  return [...server, ...remaining];
+  const serverIds = new Set(server.map(m => m.id));
+  const mappedLocalIds = new Set(
+    server.filter(m => m.localMessageId).map(m => m.localMessageId!)
+  );
+
+  const extra = realtime.filter(m => !serverIds.has(m.id) && !mappedLocalIds.has(m.id));
+  if (extra.length === 0) return server;
+  return [...server, ...extra];
 }
 
 /**
@@ -396,12 +356,15 @@ export function useSessionStore() {
       slot.total = data.total ?? slot.serverMessages.length;
       slot.hasMore = Boolean(data.hasMore);
       slot.fetchedAt = Date.now();
-      // Trim realtimeMessages using the same overlap logic as computeMerged:
-      // if realtimeMessages starts with a local_ message, find where it lands in
-      // serverMessages and walk forward as a subsequence match; once the overlap
-      // extends to the end of serverMessages, drop those matched realtime messages.
-      // Falls back to ID-based dedup for non-local_ leading messages.
-      slot.realtimeMessages = trimRealtime(slot.serverMessages, slot.realtimeMessages);
+      // Drop realtime messages that are now confirmed in serverMessages (by id or localMessageId).
+      // Keep any that have no server counterpart yet (e.g. optimistic user messages mid-flight).
+      const serverIds = new Set(slot.serverMessages.map(m => m.id));
+      const mappedLocalIds = new Set(
+        slot.serverMessages.filter(m => m.localMessageId).map(m => m.localMessageId!)
+      );
+      slot.realtimeMessages = slot.realtimeMessages.filter(
+        m => !serverIds.has(m.id) && !mappedLocalIds.has(m.id)
+      );
       recomputeMergedIfNeeded(slot);
       notify(sessionId);
     } catch (error) {

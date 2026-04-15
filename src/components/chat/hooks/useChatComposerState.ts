@@ -531,12 +531,14 @@ export function useChatComposerState({
         currentSessionId || selectedSession?.id || sessionStorage.getItem('cursorSessionId');
       const sessionToActivate = effectiveSessionId || `new-session-${Date.now()}`;
 
+      const localMessageId = `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       const userMessage: ChatMessage = {
         type: 'user',
         content: currentInput,
         images: uploadedImages as any,
         timestamp: new Date(),
-      };
+        _localId: localMessageId,
+      } as any;
 
       addMessage(userMessage);
       setIsLoading(true); // Processing banner starts
@@ -652,6 +654,7 @@ export function useChatComposerState({
             model: claudeModel,
             sessionSummary,
             images: uploadedImages,
+            localMessageId,
           },
         });
       }

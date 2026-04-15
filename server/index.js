@@ -45,7 +45,7 @@ import fetch from 'node-fetch';
 import mime from 'mime-types';
 
 import { getProjects, getSessions, renameProject, deleteSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, searchConversations } from './projects.js';
-import { queryClaudeSDK, abortClaudeSDKSession, isClaudeSDKSessionActive, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
+import { queryClaudeSDK, abortClaudeSDKSession, isClaudeSDKSessionActive, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter, saveLocalIdMapping } from './claude-sdk.js';
 import { spawnCursor, abortCursorSession, isCursorSessionActive, getActiveCursorSessions } from './cursor-cli.js';
 import { queryCodex, abortCodexSession, isCodexSessionActive, getActiveCodexSessions } from './openai-codex.js';
 import { spawnGemini, abortGeminiSession, isGeminiSessionActive, getActiveGeminiSessions } from './gemini-cli.js';
@@ -99,6 +99,10 @@ let projectsWatcherDebounceTimer = null;
 const connectedClients = new Set();
 let isGetProjectsRunning = false; // Flag to prevent reentrant calls
 
+// Pending localid mappings: { localMessageId, sessionId, projectPath, cursorUUID }
+// Populated when a claude-command is received; resolved by the JSONL file watcher.
+const pendingLocalIdMappings = [];
+
 // Broadcast progress to all connected WebSocket clients
 function broadcastProgress(progress) {
     const message = JSON.stringify({
@@ -113,6 +117,74 @@ function broadcastProgress(progress) {
 }
 
 // Setup file system watchers for Claude, Cursor, and Codex project/session folders
+
+/**
+ * Read the last UUID from a JSONL file. Used as a cursor so we can find
+ * the *first* new user message appended after this point.
+ */
+async function getLastJsonlUUID(projectPath, sessionId) {
+    if (!projectPath || !sessionId) return null;
+    try {
+        const encodedPath = projectPath.replace(/[^a-zA-Z0-9-]/g, '-');
+        const jsonlPath = path.join(os.homedir(), '.claude', 'projects', encodedPath, `${sessionId}.jsonl`);
+        const content = await fsPromises.readFile(jsonlPath, 'utf8');
+        const lines = content.split('\n').filter(l => l.trim());
+        for (let i = lines.length - 1; i >= 0; i--) {
+            try {
+                const entry = JSON.parse(lines[i]);
+                if (entry.uuid) return entry.uuid;
+            } catch { /* skip */ }
+        }
+    } catch { /* file doesn't exist yet (new session) */ }
+    return null;
+}
+
+// When a Claude JSONL file is added or changed, resolve any pending localid mappings
+// for that session. By the time chokidar fires (after awaitWriteFinish stabilization),
+// the user message is guaranteed to be written to the JSONL.
+async function resolveLocalIdIfPending(filePath) {
+    if (!filePath.endsWith('.jsonl')) return;
+    const sessionId = path.basename(filePath, '.jsonl');
+
+    const pendingIdx = pendingLocalIdMappings.findIndex(p => {
+        if (p.sessionId) return p.sessionId === sessionId;
+        // New session: match by project directory
+        const projectKey = p.projectPath.replace(/[^a-zA-Z0-9-]/g, '-');
+        return path.dirname(filePath).endsWith(projectKey);
+    });
+    if (pendingIdx < 0) return;
+
+    const pending = pendingLocalIdMappings[pendingIdx];
+    try {
+        const content = await fsPromises.readFile(filePath, 'utf8');
+        const lines = content.split('\n').filter(l => l.trim());
+        // Find the first user message that appears AFTER the cursor (cursorUUID).
+        // cursorUUID is the last UUID we recorded before the SDK was invoked,
+        // so the newly written user message is guaranteed to come after it.
+        // If cursorUUID is null (new session), start from the beginning of the file.
+        let pastCursor = (pending.cursorUUID === null);
+        for (const line of lines) {
+            try {
+                const entry = JSON.parse(line);
+                if (!pastCursor) {
+                    if (entry.uuid === pending.cursorUUID) pastCursor = true;
+                    continue;
+                }
+                if (entry.type === 'user' && entry.uuid && entry.message?.content) {
+                    const hasText = Array.isArray(entry.message.content)
+                        ? entry.message.content.some(p => p.type === 'text')
+                        : typeof entry.message.content === 'string';
+                    if (hasText) {
+                        pendingLocalIdMappings.splice(pendingIdx, 1);
+                        await saveLocalIdMapping(sessionId, pending.localMessageId, entry.uuid);
+                        break;
+                    }
+                }
+            } catch { /* skip malformed line */ }
+        }
+    } catch { /* JSONL not readable — leave pending for next watcher event */ }
+}
+
 async function setupProjectsWatcher() {
     const chokidar = (await import('chokidar')).default;
 
@@ -197,8 +269,8 @@ async function setupProjectsWatcher() {
 
             // Set up event listeners
             watcher
-                .on('add', (filePath) => debouncedUpdate('add', filePath, provider, rootPath))
-                .on('change', (filePath) => debouncedUpdate('change', filePath, provider, rootPath))
+                .on('add', (filePath) => { resolveLocalIdIfPending(filePath); debouncedUpdate('add', filePath, provider, rootPath); })
+                .on('change', (filePath) => { resolveLocalIdIfPending(filePath); debouncedUpdate('change', filePath, provider, rootPath); })
                 .on('unlink', (filePath) => debouncedUpdate('unlink', filePath, provider, rootPath))
                 .on('addDir', (dirPath) => debouncedUpdate('addDir', dirPath, provider, rootPath))
                 .on('unlinkDir', (dirPath) => debouncedUpdate('unlinkDir', dirPath, provider, rootPath))
@@ -1496,6 +1568,23 @@ function handleChatConnection(ws, request) {
                 console.log('[DEBUG] User message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
+
+                // Register pending localid mapping to be resolved by the JSONL file watcher.
+                // Record the current last UUID in the JSONL as a cursor so the watcher can
+                // find the *first* new user message appended after this point, not just the
+                // last user message in the whole file (which could be a previous turn).
+                if (data.options?.localMessageId) {
+                    const cursorUUID = await getLastJsonlUUID(
+                        data.options.cwd || data.options.projectPath,
+                        data.options.sessionId || null,
+                    );
+                    pendingLocalIdMappings.push({
+                        localMessageId: data.options.localMessageId,
+                        sessionId: data.options.sessionId || null,
+                        projectPath: data.options.cwd || data.options.projectPath || '',
+                        cursorUUID,
+                    });
+                }
 
                 // Use Claude Agents SDK
                 await queryClaudeSDK(data.command, data.options, writer);

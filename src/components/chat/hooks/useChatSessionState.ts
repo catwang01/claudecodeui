@@ -42,7 +42,7 @@ function chatMessageToNormalized(
   sessionId: string,
   provider: SessionProvider,
 ): NormalizedMessage | null {
-  const id = `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const id = (msg as any)._localId || `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const ts = msg.timestamp instanceof Date
     ? msg.timestamp.toISOString()
     : typeof msg.timestamp === 'number'
@@ -330,7 +330,13 @@ export function useChatSessionState({
     const provider = (selectedSession.__provider || localStorage.getItem('selected-provider') as Provider) || 'claude';
     const sessionKey = `${selectedSession.id}:${selectedProject.name}:${provider}`;
 
-    // Skip if already loaded and fresh
+    // Always check session status so that a WS reconnect corrects any stale
+    // processing/loading state even if the session data is already cached.
+    if (ws) {
+      sendMessage({ type: 'check-session-status', sessionId: selectedSession.id, provider });
+    }
+
+    // Skip full reload if already loaded and fresh
     if (lastLoadedSessionKeyRef.current === sessionKey && sessionStore.has(selectedSession.id) && !sessionStore.isStale(selectedSession.id)) {
       return;
     }
@@ -365,11 +371,6 @@ export function useChatSessionState({
     setCurrentSessionId(selectedSession.id);
     if (provider === 'cursor') {
       sessionStorage.setItem('cursorSessionId', selectedSession.id);
-    }
-
-    // Check session status
-    if (ws) {
-      sendMessage({ type: 'check-session-status', sessionId: selectedSession.id, provider });
     }
 
     lastLoadedSessionKeyRef.current = sessionKey;
