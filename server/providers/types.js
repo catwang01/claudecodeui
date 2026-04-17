@@ -31,6 +31,7 @@
  * @property {string} timestamp - ISO 8601
  * @property {SessionProvider} provider
  * @property {MessageKind} kind
+ * @property {boolean} [isMeta] - True for system-injected messages (skill prompts, resume markers, etc.) hidden by default
  *
  * Additional fields depending on kind:
  * - text:                 role ('user'|'assistant'), content, images?

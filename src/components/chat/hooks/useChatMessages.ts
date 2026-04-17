@@ -48,6 +48,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
               type: 'user',
               content: unescapeWithMathProtection(decodeHtmlEntities(content)),
               timestamp: msg.timestamp,
+              isMeta: msg.isMeta,
             });
           }
         } else {

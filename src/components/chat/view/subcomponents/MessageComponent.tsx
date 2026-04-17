@@ -30,6 +30,7 @@ type MessageComponentProps = {
   autoExpandTools?: boolean;
   showRawParameters?: boolean;
   showThinking?: boolean;
+  showMetaMessages?: boolean;
   selectedProject?: Project | null;
   provider: Provider | string;
 };
@@ -43,7 +44,7 @@ type InteractiveOption = {
 type PermissionGrantState = 'idle' | 'granted' | 'error';
 const COPY_HIDDEN_TOOL_NAMES = new Set(['Bash', 'Edit', 'Write', 'ApplyPatch']);
 
-const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, selectedProject, provider }: MessageComponentProps) => {
+const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, showMetaMessages, selectedProject, provider }: MessageComponentProps) => {
   const { t } = useTranslation('chat');
   const isGrouped = prevMessage && prevMessage.type === message.type &&
     ((prevMessage.type === 'assistant') ||
@@ -103,8 +104,9 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
 
   const formattedTime = useMemo(() => new Date(message.timestamp).toLocaleTimeString(), [message.timestamp]);
   const shouldHideThinkingMessage = Boolean(message.isThinking && !showThinking);
+  const shouldHideMetaMessage = Boolean(message.isMeta && !showMetaMessages);
 
-  if (shouldHideThinkingMessage) {
+  if (shouldHideThinkingMessage || shouldHideMetaMessage) {
     return null;
   }
 

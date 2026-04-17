@@ -38,6 +38,7 @@ function ChatInterface({
   autoExpandTools,
   showRawParameters,
   showThinking,
+  showMetaMessages,
   autoScrollToBottom,
   sendByCtrlEnter,
   externalMessageUpdate,
@@ -347,7 +348,7 @@ function ChatInterface({
           autoExpandTools={autoExpandTools}
           showRawParameters={showRawParameters}
           showThinking={showThinking}
-          selectedProject={selectedProject}
+          showMetaMessages={showMetaMessages}
         />
 
         <ChatComposer

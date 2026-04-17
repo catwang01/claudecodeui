@@ -39,6 +39,7 @@ export function normalizeMessage(raw, sessionId) {
 
   // User message
   if (raw.message?.role === 'user' && raw.message?.content) {
+    const isMeta = Boolean(raw.isMeta);
     if (Array.isArray(raw.message.content)) {
       // Handle tool_result parts
       for (const part of raw.message.content) {
@@ -58,7 +59,7 @@ export function normalizeMessage(raw, sessionId) {
         } else if (part.type === 'text') {
           // Regular text parts from user
           const text = part.text || '';
-          if (text && !isInternalContent(text)) {
+          if (text && (isMeta || !isInternalContent(text))) {
             messages.push(createNormalizedMessage({
               id: `${baseId}_text`,
               sessionId,
@@ -67,6 +68,7 @@ export function normalizeMessage(raw, sessionId) {
               kind: 'text',
               role: 'user',
               content: text,
+              isMeta,
             }));
           }
         }
@@ -79,7 +81,7 @@ export function normalizeMessage(raw, sessionId) {
           .map(p => p.text)
           .filter(Boolean)
           .join('\n');
-        if (textParts && !isInternalContent(textParts)) {
+        if (textParts && (isMeta || !isInternalContent(textParts))) {
           messages.push(createNormalizedMessage({
             id: `${baseId}_text`,
             sessionId,
@@ -88,12 +90,13 @@ export function normalizeMessage(raw, sessionId) {
             kind: 'text',
             role: 'user',
             content: textParts,
+            isMeta,
           }));
         }
       }
     } else if (typeof raw.message.content === 'string') {
       const text = raw.message.content;
-      if (text && !isInternalContent(text)) {
+      if (text && (isMeta || !isInternalContent(text))) {
         messages.push(createNormalizedMessage({
           id: baseId,
           sessionId,
@@ -102,6 +105,7 @@ export function normalizeMessage(raw, sessionId) {
           kind: 'text',
           role: 'user',
           content: text,
+          isMeta,
         }));
       }
     }
