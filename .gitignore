@@ -139,3 +139,6 @@ tasks/
 
 # Git worktrees
 .worktrees/
+
+# Local startup scripts
+start.sh
