@@ -9,6 +9,7 @@ import { useChatSessionState } from '../hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
 import { useSessionStore } from '../../../stores/useSessionStore';
+import { useWebSocket } from '../../../contexts/WebSocketContext';
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
 
@@ -44,6 +45,7 @@ function ChatInterface({
 }: ChatInterfaceProps) {
   const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings();
   const { t } = useTranslation('chat');
+  const { isConnected } = useWebSocket();
 
   const sessionStore = useSessionStore();
   const streamBufferRef = useRef('');
@@ -184,6 +186,7 @@ function ChatInterface({
     canAbortSession,
     tokenBudget,
     sendMessage,
+    isConnected,
     sendByCtrlEnter,
     onSessionActive,
     onSessionProcessing,
@@ -353,6 +356,7 @@ function ChatInterface({
           handleGrantToolPermission={handleGrantToolPermission}
           claudeStatus={claudeStatus}
           isLoading={isLoading}
+          isConnected={isConnected}
           onAbortSession={handleAbortSession}
           provider={provider}
           permissionMode={permissionMode}

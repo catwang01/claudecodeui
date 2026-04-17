@@ -44,9 +44,10 @@ interface UseChatComposerStateArgs {
   canAbortSession: boolean;
   tokenBudget: Record<string, unknown> | null;
   sendMessage: (message: unknown) => void;
+  isConnected: boolean;
   sendByCtrlEnter?: boolean;
   onSessionActive?: (sessionId?: string | null) => void;
-  onSessionProcessing?: (sessionId?: string | null) => void;
+  onSessionProcessing?: (sessionId?: string | null, provider?: string) => void;
   onInputFocusChange?: (focused: boolean) => void;
   onFileOpen?: (filePath: string, diffInfo?: unknown) => void;
   onShowSettings?: () => void;
@@ -116,6 +117,7 @@ export function useChatComposerState({
   canAbortSession,
   tokenBudget,
   sendMessage,
+  isConnected,
   sendByCtrlEnter,
   onSessionActive,
   onSessionProcessing,
@@ -463,7 +465,7 @@ export function useChatComposerState({
     ) => {
       event.preventDefault();
       const currentInput = inputValueRef.current;
-      if (!currentInput.trim() || isLoading || !selectedProject) {
+      if (!currentInput.trim() || isLoading || !selectedProject || !isConnected) {
         return;
       }
 
@@ -561,7 +563,7 @@ export function useChatComposerState({
       }
       onSessionActive?.(sessionToActivate);
       if (effectiveSessionId && !isTemporarySessionId(effectiveSessionId)) {
-        onSessionProcessing?.(effectiveSessionId);
+        onSessionProcessing?.(effectiveSessionId, provider);
       }
 
       const getToolsSettings = () => {
