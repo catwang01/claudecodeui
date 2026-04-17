@@ -59,10 +59,12 @@ const useWebSocketProviderState = (): WebSocketContextType => {
       if (!wsUrl) return console.warn('No authentication token found for WebSocket connection');
       
       const websocket = new WebSocket(wsUrl);
+      // Set immediately so onclose guards can detect stale events from replaced sockets
+      wsRef.current = websocket;
 
       websocket.onopen = () => {
+        if (wsRef.current !== websocket) return; // Stale open: a newer socket replaced us
         setIsConnected(true);
-        wsRef.current = websocket;
         if (hasConnectedRef.current) {
           // This is a reconnect — signal so components can catch up on missed messages
           console.log('[WS] Reconnected at', new Date().toISOString());
@@ -74,6 +76,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
       };
 
       websocket.onmessage = (event) => {
+        if (wsRef.current !== websocket) return; // Stale message from replaced socket
         try {
           const data = JSON.parse(event.data);
           if (data.type !== 'loading_progress') {
@@ -86,9 +89,10 @@ const useWebSocketProviderState = (): WebSocketContextType => {
       };
 
       websocket.onclose = () => {
+        if (wsRef.current !== websocket) return; // Stale close: a newer socket already took over, ignore
         setIsConnected(false);
         wsRef.current = null;
-        
+
         // Attempt to reconnect after 3 seconds
         reconnectTimeoutRef.current = setTimeout(() => {
           if (unmountedRef.current) return; // Prevent reconnection if unmounted

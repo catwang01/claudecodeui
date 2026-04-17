@@ -11,6 +11,7 @@ import { isInternalContent } from '../utils.js';
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
+import { resolvePendingLocalIds } from '../../localids.js';
 
 const PROVIDER = 'claude';
 
@@ -243,6 +244,13 @@ export const claudeAdapter = {
         }
       }
     } catch { /* no localids file — skip */ }
+
+    // Inline resolution: resolve any pending localId mappings using already-loaded
+    // rawMessages, eliminating the race with the chokidar-triggered file write.
+    const inlineResolved = resolvePendingLocalIds(sessionId, projectName, rawMessages);
+    for (const [serverUUID, localId] of inlineResolved) {
+      localidMap.set(serverUUID, localId);
+    }
 
     // First pass: collect tool results for attachment to tool_use messages
     const toolResultMap = new Map();

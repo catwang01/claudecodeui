@@ -34,28 +34,6 @@ const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEO
 
 const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion']);
 
-// ─── LocalIds helpers ─────────────────────────────────────────────────────────
-
-/** Directory for per-session localid mapping files */
-const LOCALIDS_DIR = path.join(os.homedir(), '.claudecodeui', 'localids');
-
-/** Persist { localId, serverUUID } so fetchHistory can tag historical messages. */
-async function saveLocalIdMapping(sessionId, localId, serverUUID) {
-  if (!sessionId || !localId || !serverUUID) return;
-  try {
-    await fs.mkdir(LOCALIDS_DIR, { recursive: true });
-    const filePath = path.join(LOCALIDS_DIR, `${sessionId}.json`);
-    let entries = [];
-    try { entries = JSON.parse(await fs.readFile(filePath, 'utf8')); } catch { /* new file */ }
-    if (!entries.some(e => e.localId === localId)) {
-      entries.push({ localId, serverUUID });
-      await fs.writeFile(filePath, JSON.stringify(entries, null, 2), 'utf8');
-    }
-  } catch (err) {
-    console.warn('[localids] Failed to save mapping:', err?.message);
-  }
-}
-
 function createRequestId() {
   if (typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
@@ -848,5 +826,4 @@ export {
   resolveToolApproval,
   getPendingApprovalsForSession,
   reconnectSessionWriter,
-  saveLocalIdMapping
 };
