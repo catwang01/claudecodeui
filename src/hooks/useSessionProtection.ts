@@ -1,8 +1,10 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 
 export function useSessionProtection() {
   const [activeSessions, setActiveSessions] = useState<Set<string>>(new Set());
-  const [processingSessions, setProcessingSessions] = useState<Set<string>>(new Set());
+  const [processingSessionsMap, setProcessingSessionsMap] = useState<Map<string, string>>(new Map());
+
+  const processingSessions = useMemo(() => new Set(processingSessionsMap.keys()), [processingSessionsMap]);
 
   const markSessionAsActive = useCallback((sessionId?: string | null) => {
     if (!sessionId) {
@@ -24,12 +26,12 @@ export function useSessionProtection() {
     });
   }, []);
 
-  const markSessionAsProcessing = useCallback((sessionId?: string | null) => {
+  const markSessionAsProcessing = useCallback((sessionId?: string | null, provider = 'claude') => {
     if (!sessionId) {
       return;
     }
 
-    setProcessingSessions((prev) => new Set([...prev, sessionId]));
+    setProcessingSessionsMap((prev) => new Map([...prev, [sessionId, provider]]));
   }, []);
 
   const markSessionAsNotProcessing = useCallback((sessionId?: string | null) => {
@@ -37,8 +39,8 @@ export function useSessionProtection() {
       return;
     }
 
-    setProcessingSessions((prev) => {
-      const next = new Set(prev);
+    setProcessingSessionsMap((prev) => {
+      const next = new Map(prev);
       next.delete(sessionId);
       return next;
     });
@@ -64,6 +66,7 @@ export function useSessionProtection() {
   return {
     activeSessions,
     processingSessions,
+    processingSessionsMap,
     markSessionAsActive,
     markSessionAsInactive,
     markSessionAsProcessing,

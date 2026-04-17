@@ -2,6 +2,7 @@ import type { Dispatch, SetStateAction } from 'react';
 import type { AppTab, Project, ProjectSession } from '../../../types/app';
 
 export type SessionLifecycleHandler = (sessionId?: string | null) => void;
+export type SessionProcessingHandler = (sessionId?: string | null, provider?: string) => void;
 
 export type TaskMasterTask = {
   id: string | number;
@@ -46,7 +47,7 @@ export type MainContentProps = {
   onInputFocusChange: (focused: boolean) => void;
   onSessionActive: SessionLifecycleHandler;
   onSessionInactive: SessionLifecycleHandler;
-  onSessionProcessing: SessionLifecycleHandler;
+  onSessionProcessing: SessionProcessingHandler;
   onSessionNotProcessing: SessionLifecycleHandler;
   processingSessions: Set<string>;
   onReplaceTemporarySession: SessionLifecycleHandler;

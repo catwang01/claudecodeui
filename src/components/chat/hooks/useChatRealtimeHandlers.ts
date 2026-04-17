@@ -63,7 +63,7 @@ interface UseChatRealtimeHandlersArgs {
   streamTimerRef: MutableRefObject<number | null>;
   accumulatedStreamRef: MutableRefObject<string>;
   onSessionInactive?: (sessionId?: string | null) => void;
-  onSessionProcessing?: (sessionId?: string | null) => void;
+  onSessionProcessing?: (sessionId?: string | null, provider?: string) => void;
   onSessionNotProcessing?: (sessionId?: string | null) => void;
   onReplaceTemporarySession?: (sessionId?: string | null) => void;
   onNavigateToSession?: (sessionId: string) => void;
@@ -154,7 +154,7 @@ export function useChatRealtimeHandlers({
             statusSessionId === currentSessionId || (selectedSession && statusSessionId === selectedSession.id);
 
           if (msg.isProcessing) {
-            onSessionProcessing?.(statusSessionId);
+            onSessionProcessing?.(statusSessionId, msg.provider);
             if (isCurrentSession) { setIsLoading(true); setCanAbortSession(true); }
             return;
           }
