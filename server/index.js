@@ -1010,7 +1010,21 @@ app.get('/api/projects/:projectName/files', authenticateToken, async (req, res) 
             return res.status(404).json({ error: `Project path not found: ${actualPath}` });
         }
 
-        const files = await getFileTree(actualPath, 10, 0, true);
+        // Support lazy loading: optional ?path=<subdir>&depth=<n>
+        const subPath = req.query.path;
+        const depth = Math.min(parseInt(req.query.depth) || 1, 20);
+
+        let targetPath = actualPath;
+        if (subPath) {
+            targetPath = path.resolve(actualPath, subPath);
+            try {
+                await validatePathInProject(actualPath, targetPath);
+            } catch (e) {
+                return res.status(403).json({ error: 'Path is outside project directory' });
+            }
+        }
+
+        const files = await getFileTree(targetPath, depth, 0, true);
         res.json(files);
     } catch (error) {
         console.error('[ERROR] File tree error:', error.message);

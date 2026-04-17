@@ -7,13 +7,42 @@ type UseFileTreeDataResult = {
   files: FileTreeNode[];
   loading: boolean;
   refreshFiles: () => void;
+  loadChildren: (dirPath: string) => void;
 };
+
+/** Mark all directory nodes with childrenStatus: 'unloaded' (depth=1 response has empty children) */
+function markDirectoriesUnloaded(nodes: FileTreeNode[]): FileTreeNode[] {
+  return nodes.map((node) => {
+    if (node.type === 'directory') {
+      return { ...node, children: [], childrenStatus: 'unloaded' as const };
+    }
+    return node;
+  });
+}
+
+/** Recursively update a node at targetPath, applying updater to it */
+function updateNodeAtPath(
+  nodes: FileTreeNode[],
+  targetPath: string,
+  updater: (node: FileTreeNode) => FileTreeNode,
+): FileTreeNode[] {
+  return nodes.map((node) => {
+    if (node.path === targetPath) {
+      return updater(node);
+    }
+    if (node.type === 'directory' && node.children && node.children.length > 0) {
+      return { ...node, children: updateNodeAtPath(node.children, targetPath, updater) };
+    }
+    return node;
+  });
+}
 
 export function useFileTreeData(selectedProject: Project | null): UseFileTreeDataResult {
   const [files, setFiles] = useState<FileTreeNode[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const projectNameRef = useRef<string | undefined>(undefined);
 
   const refreshFiles = useCallback(() => {
     setRefreshKey((prev) => prev + 1);
@@ -21,6 +50,7 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
 
   useEffect(() => {
     const projectName = selectedProject?.name;
+    projectNameRef.current = projectName;
 
     if (!projectName) {
       setFiles([]);
@@ -34,7 +64,6 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
     }
     abortControllerRef.current = new AbortController();
 
-    // Track mount state so aborted or late responses do not enqueue stale state updates.
     let isActive = true;
 
     const fetchFiles = async () => {
@@ -42,7 +71,10 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
         setLoading(true);
       }
       try {
-        const response = await api.getFiles(projectName, { signal: abortControllerRef.current!.signal });
+        const response = await api.getFiles(projectName, {
+          depth: 1,
+          signal: abortControllerRef.current!.signal,
+        });
 
         if (!response.ok) {
           const errorText = await response.text();
@@ -55,7 +87,7 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
 
         const data = (await response.json()) as FileTreeNode[];
         if (isActive) {
-          setFiles(data);
+          setFiles(markDirectoriesUnloaded(data));
         }
       } catch (error) {
         if ((error as { name?: string }).name === 'AbortError') {
@@ -81,9 +113,63 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
     };
   }, [selectedProject?.name, refreshKey]);
 
+  const loadChildren = useCallback(
+    (dirPath: string) => {
+      const projectName = projectNameRef.current;
+      if (!projectName) return;
+
+      // Prevent duplicate in-flight requests
+      setFiles((prev) => {
+        const findNode = (nodes: FileTreeNode[]): FileTreeNode | null => {
+          for (const n of nodes) {
+            if (n.path === dirPath) return n;
+            if (n.children) {
+              const found = findNode(n.children);
+              if (found) return found;
+            }
+          }
+          return null;
+        };
+        const node = findNode(prev);
+        if (!node || node.childrenStatus !== 'unloaded') return prev;
+        return updateNodeAtPath(prev, dirPath, (n) => ({ ...n, childrenStatus: 'loading' as const }));
+      });
+
+      const fetchChildren = async () => {
+        try {
+          const response = await api.getFiles(projectName, { path: dirPath, depth: 1 });
+          if (!response.ok) {
+            setFiles((prev) =>
+              updateNodeAtPath(prev, dirPath, (n) => ({ ...n, childrenStatus: 'unloaded' as const })),
+            );
+            return;
+          }
+          const data = (await response.json()) as FileTreeNode[];
+          const children = markDirectoriesUnloaded(data);
+          setFiles((prev) =>
+            updateNodeAtPath(prev, dirPath, (n) => ({
+              ...n,
+              children,
+              childrenStatus: 'loaded' as const,
+            })),
+          );
+        } catch (error) {
+          console.error('Error loading children:', error);
+          setFiles((prev) =>
+            updateNodeAtPath(prev, dirPath, (n) => ({ ...n, childrenStatus: 'unloaded' as const })),
+          );
+        }
+      };
+
+      void fetchChildren();
+    },
+    [],
+  );
+
   return {
     files,
     loading,
     refreshFiles,
+    loadChildren,
   };
 }

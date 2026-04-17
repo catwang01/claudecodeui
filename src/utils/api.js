@@ -118,8 +118,15 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ filePath, content }),
     }),
-  getFiles: (projectName, options = {}) =>
-    authenticatedFetch(`/api/projects/${projectName}/files`, options),
+  getFiles: (projectName, options = {}) => {
+    const { path: subPath, depth, signal, ...rest } = options;
+    const params = new URLSearchParams();
+    if (subPath) params.set('path', subPath);
+    if (depth !== undefined) params.set('depth', String(depth));
+    const query = params.toString();
+    const url = `/api/projects/${projectName}/files${query ? '?' + query : ''}`;
+    return authenticatedFetch(url, { signal, ...rest });
+  },
 
   // File operations
   createFile: (projectName, { path, type, name }) =>

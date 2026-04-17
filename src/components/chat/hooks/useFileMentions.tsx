@@ -68,7 +68,7 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
 
 
       try {
-        const response = await api.getFiles(projectName, { signal: abortController.signal });
+        const response = await api.getFiles(projectName, { depth: 10, signal: abortController.signal });
         if (!response.ok) {
           return;
         }

@@ -1,5 +1,5 @@
 import type { ReactNode, RefObject } from 'react';
-import { ChevronRight, Folder, FolderOpen } from 'lucide-react';
+import { ChevronRight, Folder, FolderOpen, Loader2 } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import type { FileTreeNode as FileTreeNodeType, FileTreeViewMode } from '../types/types';
 import { Input } from '../../../shared/view/ui';
@@ -39,14 +39,19 @@ type TreeItemIconProps = {
 
 function TreeItemIcon({ item, isOpen, renderFileIcon }: TreeItemIconProps) {
   if (item.type === 'directory') {
+    const isLoading = item.childrenStatus === 'loading';
     return (
       <span className="flex flex-shrink-0 items-center gap-0.5">
-        <ChevronRight
-          className={cn(
-            'w-3.5 h-3.5 text-muted-foreground/70 transition-transform duration-150',
-            isOpen && 'rotate-90',
-          )}
-        />
+        {isLoading ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground/70" />
+        ) : (
+          <ChevronRight
+            className={cn(
+              'w-3.5 h-3.5 text-muted-foreground/70 transition-transform duration-150',
+              isOpen && 'rotate-90',
+            )}
+          />
+        )}
         {isOpen ? (
           <FolderOpen className="h-4 w-4 flex-shrink-0 text-blue-500" />
         ) : (
@@ -85,7 +90,12 @@ export default function FileTreeNode({
 }: FileTreeNodeProps) {
   const isDirectory = item.type === 'directory';
   const isOpen = isDirectory && expandedDirs.has(item.path);
-  const hasChildren = Boolean(isDirectory && item.children && item.children.length > 0);
+  const hasChildren = Boolean(
+    isDirectory &&
+      (item.childrenStatus === 'unloaded' ||
+        item.childrenStatus === 'loading' ||
+        (item.children && item.children.length > 0)),
+  );
   const isRenaming = renamingItem?.path === item.path;
 
   const nameClassName = cn(
@@ -206,7 +216,8 @@ export default function FileTreeNode({
             style={{ left: `${level * 16 + 14}px` }}
             aria-hidden="true"
           />
-          {item.children?.map((child) => (
+          {item.childrenStatus !== 'loading' && (
+            item.children?.map((child) => (
             <FileTreeNode
               key={child.path}
               item={child}
@@ -232,7 +243,8 @@ export default function FileTreeNode({
               renameInputRef={renameInputRef}
               operationLoading={operationLoading}
             />
-          ))}
+            ))
+          )}
         </div>
       )}
     </div>

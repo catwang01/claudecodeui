@@ -12,6 +12,7 @@ export interface FileTreeNode {
   modified?: string;
   permissionsRwx?: string;
   children?: FileTreeNode[];
+  childrenStatus?: 'loaded' | 'loading' | 'unloaded';
   [key: string]: unknown;
 }
 
