@@ -82,6 +82,7 @@ function Sidebar({
     saveProjectName,
     showDeleteSessionConfirmation,
     confirmDeleteSession,
+    handleForkSession,
     requestProjectDelete,
     confirmDeleteProject,
     loadMoreSessions,
@@ -165,6 +166,7 @@ function Sidebar({
     onDeleteProject: requestProjectDelete,
     onSessionSelect: handleSessionClick,
     onDeleteSession: showDeleteSessionConfirmation,
+    onForkSession: handleForkSession,
     onLoadMoreSessions: (project) => {
       void loadMoreSessions(project);
     },

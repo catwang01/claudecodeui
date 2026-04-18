@@ -44,7 +44,7 @@ import pty from 'node-pty';
 import fetch from 'node-fetch';
 import mime from 'mime-types';
 
-import { getProjects, getSessions, renameProject, deleteSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, searchConversations } from './projects.js';
+import { getProjects, getSessions, renameProject, deleteSession, forkSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, searchConversations } from './projects.js';
 import { queryClaudeSDK, abortClaudeSDKSession, isClaudeSDKSessionActive, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
 import { pendingLocalIdMappings, saveLocalIdMapping } from './localids.js';
 import { spawnCursor, abortCursorSession, isCursorSessionActive, getActiveCursorSessions } from './cursor-cli.js';
@@ -605,6 +605,20 @@ app.delete('/api/projects/:projectName/sessions/:sessionId', authenticateToken, 
         res.json({ success: true });
     } catch (error) {
         console.error(`[API] Error deleting session ${req.params.sessionId}:`, error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Fork session endpoint
+app.post('/api/projects/:projectName/sessions/:sessionId/fork', authenticateToken, async (req, res) => {
+    try {
+        const { projectName, sessionId } = req.params;
+        console.log(`[API] Forking session: ${sessionId} in project: ${projectName}`);
+        const newSessionId = await forkSession(projectName, sessionId);
+        console.log(`[API] Session ${sessionId} forked as ${newSessionId}`);
+        res.json({ success: true, newSessionId });
+    } catch (error) {
+        console.error(`[API] Error forking session ${req.params.sessionId}:`, error);
         res.status(500).json({ error: error.message });
     }
 });

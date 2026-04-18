@@ -442,6 +442,26 @@ export function useSidebarController({
     }
   }, [onSessionDelete, sessionDeleteConfirmation, t]);
 
+  const handleForkSession = useCallback(
+    async (projectName: string, sessionId: string) => {
+      try {
+        const result = await api.forkSession(projectName, sessionId);
+        if (result.newSessionId) {
+          // Clear cached sessions for this project so the refreshed list includes the fork
+          setAdditionalSessions(prev => {
+            const next = { ...prev };
+            delete next[projectName];
+            return next;
+          });
+          await onRefresh();
+        }
+      } catch (error) {
+        console.error('[Sidebar] Error forking session:', error);
+      }
+    },
+    [onRefresh],
+  );
+
   const requestProjectDelete = useCallback(
     (project: Project) => {
       setDeleteConfirmation({
@@ -610,6 +630,7 @@ export function useSidebarController({
     saveProjectName,
     showDeleteSessionConfirmation,
     confirmDeleteSession,
+    handleForkSession,
     requestProjectDelete,
     confirmDeleteProject,
     loadMoreSessions,

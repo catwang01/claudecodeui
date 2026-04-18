@@ -1102,6 +1102,54 @@ async function renameProject(projectName, newDisplayName) {
 }
 
 // Delete a session from a project
+async function forkSession(projectName, sessionId) {
+  const { randomUUID } = await import('crypto');
+  const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
+
+  const files = await fs.readdir(projectDir);
+  const jsonlFiles = files.filter(file => file.endsWith('.jsonl') && !file.startsWith('agent-'));
+
+  for (const file of jsonlFiles) {
+    const jsonlFile = path.join(projectDir, file);
+    const content = await fs.readFile(jsonlFile, 'utf8');
+    const lines = content.split('\n').filter(line => line.trim());
+
+    const sessionLines = lines.filter(line => {
+      try { return JSON.parse(line).sessionId === sessionId; } catch { return false; }
+    });
+
+    if (sessionLines.length === 0) continue;
+
+    const newSessionId = randomUUID();
+    const now = new Date().toISOString();
+
+    // Build a uuid remapping so the forked session has its own unique message IDs.
+    // Without this, both sessions share the same first-user-message uuid and the
+    // grouping logic in getSessions() collapses them into one group, hiding the original.
+    const uuidMap = new Map();
+    for (const line of sessionLines) {
+      try {
+        const entry = JSON.parse(line);
+        if (entry.uuid) uuidMap.set(entry.uuid, randomUUID());
+      } catch {}
+    }
+
+    const newLines = sessionLines.map(line => {
+      const entry = JSON.parse(line);
+      const newEntry = { ...entry, sessionId: newSessionId, timestamp: now };
+      if (entry.uuid && uuidMap.has(entry.uuid)) newEntry.uuid = uuidMap.get(entry.uuid);
+      if (entry.parentUuid && uuidMap.has(entry.parentUuid)) newEntry.parentUuid = uuidMap.get(entry.parentUuid);
+      return JSON.stringify(newEntry);
+    });
+
+    const newSessionFile = path.join(projectDir, `${newSessionId}.jsonl`);
+    await fs.writeFile(newSessionFile, newLines.join('\n') + '\n', 'utf8');
+    return newSessionId;
+  }
+
+  throw new Error(`Session ${sessionId} not found in any files`);
+}
+
 async function deleteSession(projectName, sessionId) {
   const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
 
@@ -2545,6 +2593,7 @@ export {
   parseJsonlSessions,
   renameProject,
   deleteSession,
+  forkSession,
   isProjectEmpty,
   deleteProject,
   addProjectManually,

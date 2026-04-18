@@ -212,6 +212,12 @@ function mapCliOptionsToSDK(options = {}) {
     sdkOptions.resume = sessionId;
   }
 
+  // Remove CLAUDECODE env var so the spawned claude CLI doesn't refuse to start
+  // when the server itself is running inside a Claude Code session.
+  const env = { ...process.env };
+  delete env.CLAUDECODE;
+  sdkOptions.env = env;
+
   return sdkOptions;
 }
 

@@ -40,6 +40,7 @@ type SidebarProjectItemProps = {
     sessionTitle: string,
     provider: SessionProvider,
   ) => void;
+  onForkSession: (projectName: string, sessionId: string) => void;
   onLoadMoreSessions: (project: Project) => void;
   onNewSession: (project: Project) => void;
   onEditingSessionNameChange: (value: string) => void;
@@ -86,6 +87,7 @@ export default function SidebarProjectItem({
   onDeleteProject,
   onSessionSelect,
   onDeleteSession,
+  onForkSession,
   onLoadMoreSessions,
   onNewSession,
   onEditingSessionNameChange,
@@ -422,6 +424,7 @@ export default function SidebarProjectItem({
         onProjectSelect={onProjectSelect}
         onSessionSelect={onSessionSelect}
         onDeleteSession={onDeleteSession}
+        onForkSession={onForkSession}
         onLoadMoreSessions={onLoadMoreSessions}
         onNewSession={onNewSession}
         processingSessions={processingSessions}

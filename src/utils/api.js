@@ -76,6 +76,10 @@ export const api = {
     authenticatedFetch(`/api/projects/${projectName}/sessions/${sessionId}`, {
       method: 'DELETE',
     }),
+  forkSession: (projectName, sessionId) =>
+    authenticatedFetch(`/api/projects/${projectName}/sessions/${sessionId}/fork`, {
+      method: 'POST',
+    }).then(r => r.json()),
   renameSession: (sessionId, summary, provider) =>
     authenticatedFetch(`/api/sessions/${sessionId}/rename`, {
       method: 'PUT',

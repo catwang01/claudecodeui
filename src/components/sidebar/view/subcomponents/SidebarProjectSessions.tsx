@@ -27,6 +27,7 @@ type SidebarProjectSessionsProps = {
     sessionTitle: string,
     provider: SessionProvider,
   ) => void;
+  onForkSession: (projectName: string, sessionId: string) => void;
   onLoadMoreSessions: (project: Project) => void;
   onNewSession: (project: Project) => void;
   processingSessions?: Set<string>;
@@ -68,6 +69,7 @@ export default function SidebarProjectSessions({
   onProjectSelect,
   onSessionSelect,
   onDeleteSession,
+  onForkSession,
   onLoadMoreSessions,
   onNewSession,
   processingSessions,
@@ -128,6 +130,7 @@ export default function SidebarProjectSessions({
             onProjectSelect={onProjectSelect}
             onSessionSelect={onSessionSelect}
             onDeleteSession={onDeleteSession}
+            onForkSession={onForkSession}
             isProcessing={processingSessions?.has(session.id) ?? false}
             t={t}
           />

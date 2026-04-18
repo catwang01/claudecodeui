@@ -1,4 +1,4 @@
-import { Check, Clock, Edit2, Trash2, X } from 'lucide-react';
+import { Check, Clock, Edit2, GitFork, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { Badge, Button } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
@@ -27,6 +27,7 @@ type SidebarSessionItemProps = {
     sessionTitle: string,
     provider: SessionProvider,
   ) => void;
+  onForkSession: (projectName: string, sessionId: string) => void;
   isProcessing?: boolean;
   t: TFunction;
 };
@@ -45,6 +46,7 @@ export default function SidebarSessionItem({
   onProjectSelect,
   onSessionSelect,
   onDeleteSession,
+  onForkSession,
   isProcessing = false,
   t,
 }: SidebarSessionItemProps) {
@@ -218,6 +220,16 @@ export default function SidebarSessionItem({
                   title={t('tooltips.editSessionName')}
                 >
                   <Edit2 className="h-3 w-3 text-gray-600 dark:text-gray-400" />
+                </button>
+                <button
+                  className="flex h-6 w-6 items-center justify-center rounded bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 dark:hover:bg-gray-900/40"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onForkSession(project.name, session.id);
+                  }}
+                  title="Fork session"
+                >
+                  <GitFork className="h-3 w-3 text-gray-600 dark:text-gray-400" />
                 </button>
                 {!sessionView.isCursorSession && (
                   <button
