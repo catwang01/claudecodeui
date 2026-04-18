@@ -172,8 +172,8 @@ async function resolveLocalIdIfPending(filePath) {
                         ? entry.message.content.some(p => p.type === 'text')
                         : typeof entry.message.content === 'string';
                     if (hasText) {
-                        pendingLocalIdMappings.splice(pendingIdx, 1);
                         await saveLocalIdMapping(sessionId, pending.localMessageId, entry.uuid);
+                        pendingLocalIdMappings.splice(pendingIdx, 1);
                         break;
                     }
                 }

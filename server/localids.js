@@ -75,8 +75,10 @@ export function resolvePendingLocalIds(sessionId, projectName, rawMessages) {
           : typeof raw.message.content === 'string';
         if (hasText) {
           result.set(raw.uuid, pending.localMessageId);
-          pendingLocalIdMappings.splice(i, 1);
-          // Persist async so future fetchHistory calls (after restart) still work
+          // Don't splice here — resolveLocalIdIfPending (chokidar path) will splice
+          // after the disk write completes. Keeping the entry in memory ensures that
+          // if the disk write is still in-flight, the next fetchHistory call can still
+          // find the mapping via resolvePendingLocalIds.
           saveLocalIdMapping(sessionId, pending.localMessageId, raw.uuid);
           break;
         }
