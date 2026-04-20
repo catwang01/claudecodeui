@@ -154,6 +154,12 @@ export function useChatSessionState({
   // which is what caused the message to be duplicated across sessions on every switch.
   useEffect(() => {
     if (!activeSessionId || !pendingUserMessage) return;
+    // Guard: only flush to the session that was created for this pending message.
+    // pendingViewSessionRef.current is set (non-null) while a new session is being created.
+    // Its .sessionId is null until session_created fires, then set to the real session ID.
+    // If it's non-null but .sessionId doesn't match activeSessionId, the user navigated
+    // to a different session before session_created fired — don't misattribute the message.
+    if (pendingViewSessionRef.current !== null && pendingViewSessionRef.current.sessionId !== activeSessionId) return;
     const prov = (localStorage.getItem('selected-provider') as SessionProvider) || 'claude';
     const normalized = chatMessageToNormalized(pendingUserMessage, activeSessionId, prov);
     if (normalized) {
@@ -455,7 +461,13 @@ export function useChatSessionState({
   }, [selectedSession]);
 
   useEffect(() => {
-    if (selectedSession?.id) pendingViewSessionRef.current = null;
+    if (!selectedSession?.id) return;
+    // Clear the pending session ref when a real session is selected.
+    pendingViewSessionRef.current = null;
+    // Also discard any pending user message that belonged to a new-session flow.
+    // Either it was already flushed to the correct session (no-op), or the user navigated
+    // away before session_created fired — the message will be loaded from the server instead.
+    setPendingUserMessage(null);
   }, [pendingViewSessionRef, selectedSession?.id]);
 
   // Scroll to search target
