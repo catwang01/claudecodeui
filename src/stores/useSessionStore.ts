@@ -149,6 +149,25 @@ const STALE_THRESHOLD_MS = 30_000;
 
 const MAX_REALTIME_MESSAGES = 500;
 
+/**
+ * Pure helper: determine whether a refresh actually changed anything worth re-rendering.
+ * Compares all message IDs so insertions/deletions anywhere in the list are detected.
+ * Exported for unit testing.
+ */
+export function didRefreshChange(
+  prevMessages: NormalizedMessage[],
+  newMessages: NormalizedMessage[],
+  prevRealtimeCount: number,
+  newRealtimeCount: number,
+): boolean {
+  if (prevMessages.length !== newMessages.length) return true;
+  if (prevRealtimeCount !== newRealtimeCount) return true;
+  for (let i = 0; i < prevMessages.length; i++) {
+    if (prevMessages[i].id !== newMessages[i].id) return true;
+  }
+  return false;
+}
+
 // ─── Hook ────────────────────────────────────────────────────────────────────
 
 export function useSessionStore() {
@@ -336,14 +355,21 @@ export function useSessionStore() {
       provider?: SessionProvider;
       projectName?: string;
       projectPath?: string;
+      limit?: number | null;
+      offset?: number;
     } = {},
   ) => {
     const slot = getSlot(sessionId);
+    console.trace(`[DBG:refreshFromServer] session=${sessionId.slice(0, 8)}`);
     try {
       const params = new URLSearchParams();
       if (opts.provider) params.append('provider', opts.provider);
       if (opts.projectName) params.append('projectName', opts.projectName);
       if (opts.projectPath) params.append('projectPath', opts.projectPath);
+      if (opts.limit !== null && opts.limit !== undefined) {
+        params.append('limit', String(opts.limit));
+        params.append('offset', String(opts.offset ?? 0));
+      }
 
       const qs = params.toString();
       const url = `/api/sessions/${encodeURIComponent(sessionId)}/messages${qs ? `?${qs}` : ''}`;
@@ -352,21 +378,40 @@ export function useSessionStore() {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
 
-      slot.serverMessages = data.messages || [];
-      slot.total = data.total ?? slot.serverMessages.length;
-      slot.hasMore = Boolean(data.hasMore);
-      slot.fetchedAt = Date.now();
-      // Drop realtime messages that are now confirmed in serverMessages (by id or localMessageId).
-      // Keep any that have no server counterpart yet (e.g. optimistic user messages mid-flight).
-      const serverIds = new Set(slot.serverMessages.map(m => m.id));
+      const prevMessages = slot.serverMessages;
+      const prevRealtimeCount = slot.realtimeMessages.length;
+
+      const newMessages: NormalizedMessage[] = data.messages || [];
+
+      // Drop realtime messages confirmed in new server data.
+      const serverIds = new Set(newMessages.map(m => m.id));
       const mappedLocalIds = new Set(
-        slot.serverMessages.filter(m => m.localMessageId).map(m => m.localMessageId!)
+        newMessages.filter(m => m.localMessageId).map(m => m.localMessageId!)
       );
-      slot.realtimeMessages = slot.realtimeMessages.filter(
+      const newRealtime = slot.realtimeMessages.filter(
         m => !serverIds.has(m.id) && !mappedLocalIds.has(m.id)
       );
-      recomputeMergedIfNeeded(slot);
-      notify(sessionId);
+
+      // Always update metadata so isStale doesn't keep re-triggering.
+      slot.fetchedAt = Date.now();
+      slot.total = data.total ?? newMessages.length;
+      slot.hasMore = Boolean(data.hasMore);
+
+      // Only replace arrays and notify when content actually changed.
+      // Preserving the existing reference prevents spurious recomputeMerged
+      // calls and avoids React re-renders when nothing visible changed.
+      const changed = didRefreshChange(prevMessages, newMessages, prevRealtimeCount, newRealtime.length);
+      console.log(
+        `[refreshFromServer] session=${sessionId.slice(0, 8)} changed=${changed}`,
+        `prevServer=${prevMessages.length} newServer=${newMessages.length}`,
+        `prevRealtime=${prevRealtimeCount} newRealtime=${newRealtime.length}`,
+      );
+      if (changed) {
+        slot.serverMessages = newMessages;
+        slot.realtimeMessages = newRealtime;
+        recomputeMergedIfNeeded(slot);
+        notify(sessionId);
+      }
     } catch (error) {
       console.error(`[SessionStore] refresh failed for ${sessionId}:`, error);
     }

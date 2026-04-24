@@ -240,11 +240,17 @@ export function useProjectsState({
         const filename = changedFileParts[changedFileParts.length - 1];
         const changedSessionId = filename.replace('.jsonl', '');
 
+        console.log('[projects_updated] changedFile=%s changedSessionId=%s currentSession=%s match=%s',
+          filename, changedSessionId.slice(0, 8), selectedSession.id.slice(0, 8), changedSessionId === selectedSession.id);
+
         if (changedSessionId === selectedSession.id) {
           const isSessionActive = activeSessions.has(selectedSession.id);
 
           if (!isSessionActive) {
+            console.log('[projects_updated] → setExternalMessageUpdate (session file changed, not active)');
             setExternalMessageUpdate((prev) => prev + 1);
+          } else {
+            console.log('[projects_updated] → skip setExternalMessageUpdate (session is active/streaming)');
           }
         }
       }
@@ -278,7 +284,16 @@ export function useProjectsState({
     }
 
     if (serialize(updatedSelectedProject) !== serialize(selectedProject)) {
+      console.log('[projects_updated] → setSelectedProject changed fields:', {
+        name: updatedSelectedProject.name !== selectedProject.name ? `${selectedProject.name}→${updatedSelectedProject.name}` : 'same',
+        sessions: updatedSelectedProject.sessions?.length !== selectedProject.sessions?.length
+          ? `${selectedProject.sessions?.length}→${updatedSelectedProject.sessions?.length}`
+          : 'same count',
+        fullPath: updatedSelectedProject.fullPath !== selectedProject.fullPath ? 'changed' : 'same',
+      });
       setSelectedProject(updatedSelectedProject);
+    } else {
+      console.log('[projects_updated] → skip setSelectedProject (no change)');
     }
 
     if (!selectedSession) {

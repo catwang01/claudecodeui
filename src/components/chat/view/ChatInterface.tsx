@@ -211,10 +211,13 @@ function ChatInterface({
   const handleWebSocketReconnect = useCallback(async () => {
     if (!selectedProject || !selectedSession) return;
     const providerVal = (selectedSession.__provider || (localStorage.getItem('selected-provider') as SessionProvider)) || 'claude';
+    const currentSlot = sessionStore.getSessionSlot(selectedSession.id);
+    const currentCount = currentSlot?.serverMessages.length ?? 0;
     await sessionStore.refreshFromServer(selectedSession.id, {
       provider: providerVal as SessionProvider,
       projectName: selectedProject.name,
       projectPath: selectedProject.fullPath || selectedProject.path || '',
+      limit: currentCount > 0 ? Math.max(20, currentCount) : undefined,
     });
     // Clear processing state optimistically so the processingSessions effect doesn't
     // fight setIsLoading(false). check-session-status will restore loading state if

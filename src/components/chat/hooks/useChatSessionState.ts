@@ -315,8 +315,21 @@ export function useChatSessionState({
     if (!searchScrollActiveRef.current) setTimeout(() => scrollToBottom(), 200);
   }, [chatMessages.length, isLoadingSessionMessages, scrollToBottom]);
 
+  // Stable refs so the effects below always read the latest values
+  // without needing selectedProject/selectedSession in their dependency arrays.
+  // (Putting them in deps caused spurious refreshes: any session file change in
+  // the same project updates selectedProject's reference, re-triggering effects
+  // even though the relevant data did NOT change.)
+  const selectedProjectRef = useRef(selectedProject);
+  selectedProjectRef.current = selectedProject;
+  const selectedSessionRef = useRef(selectedSession);
+  selectedSessionRef.current = selectedSession;
+  const isLoadingRef = useRef(isLoading);
+  isLoadingRef.current = isLoading;
+
   // Main session loading effect — store-based
   useEffect(() => {
+    const selectedProject = selectedProjectRef.current;
     if (!selectedSession || !selectedProject) {
       resetStreamingState();
       pendingViewSessionRef.current = null;
@@ -342,8 +355,14 @@ export function useChatSessionState({
       sendMessage({ type: 'check-session-status', sessionId: selectedSession.id, provider });
     }
 
-    // Skip full reload if already loaded and fresh
-    if (lastLoadedSessionKeyRef.current === sessionKey && sessionStore.has(selectedSession.id) && !sessionStore.isStale(selectedSession.id)) {
+    const alreadyLoaded = lastLoadedSessionKeyRef.current === sessionKey;
+    const hasData = sessionStore.has(selectedSession.id);
+    console.log('[mainEffect] triggered sessionKey=%s alreadyLoaded=%s hasData=%s',
+      sessionKey.slice(0, 24), alreadyLoaded, hasData);
+
+    // Already loaded — skip. WS reconnect data sync is handled by handleWebSocketReconnect.
+    if (alreadyLoaded && hasData) {
+      console.log('[mainEffect] → skip (already loaded)');
       return;
     }
 
@@ -399,10 +418,16 @@ export function useChatSessionState({
     }).catch(() => {
       setIsLoadingSessionMessages(false);
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     pendingViewSessionRef,
     resetStreamingState,
-    selectedProject,
+    // Use selectedProject?.name (not the full object) so that changes to OTHER
+    // sessions in the same project don't re-trigger this effect. The full object
+    // is read via selectedProjectRef.current inside the effect.
+    selectedProject?.name,
+    selectedProject?.fullPath,
+    selectedProject?.path,
     selectedSession?.id,
     sendMessage,
     ws,
@@ -411,18 +436,28 @@ export function useChatSessionState({
 
   // External message update (e.g. WebSocket reconnect, background refresh)
   useEffect(() => {
-    if (!externalMessageUpdate || !selectedSession || !selectedProject) return;
+    if (!externalMessageUpdate) return;
+    const selectedSession = selectedSessionRef.current;
+    const selectedProject = selectedProjectRef.current;
+    if (!selectedSession || !selectedProject) return;
+
+    console.log('[DBG:externalUpdate] triggered externalMessageUpdate=%d sessionId=%s',
+      externalMessageUpdate, selectedSession.id.slice(0, 8));
 
     const reloadExternalMessages = async () => {
       try {
         const provider = (localStorage.getItem('selected-provider') as Provider) || 'claude';
 
         // Skip store refresh during active streaming
-        if (!isLoading) {
+        if (!isLoadingRef.current) {
+          const currentSlot = sessionStore.getSessionSlot(selectedSession.id);
+          const currentCount = currentSlot?.serverMessages.length ?? 0;
+          console.log('[DBG:externalUpdate] calling refreshFromServer currentCount=%d', currentCount);
           await sessionStore.refreshFromServer(selectedSession.id, {
             provider: (selectedSession.__provider || provider) as SessionProvider,
             projectName: selectedProject.name,
             projectPath: selectedProject.fullPath || selectedProject.path || '',
+            limit: currentCount > 0 ? Math.max(MESSAGES_PER_PAGE, currentCount) : undefined,
           });
 
           if (Boolean(autoScrollToBottom) && isNearBottom()) {
@@ -435,15 +470,13 @@ export function useChatSessionState({
     };
 
     reloadExternalMessages();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     autoScrollToBottom,
     externalMessageUpdate,
     isNearBottom,
     scrollToBottom,
-    selectedProject,
-    selectedSession,
     sessionStore,
-    isLoading,
   ]);
 
   // Search navigation target
