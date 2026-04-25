@@ -697,6 +697,9 @@ async function queryClaudeSDK(command, options = {}, ws) {
     // Clean up temporary image files
     await cleanupTempFiles(tempImagePaths, tempDir);
 
+    // Wait for file system watcher to flush projects_updated before notifying client
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
     // Send completion event
     ws.send(createNormalizedMessage({ kind: 'complete', exitCode: 0, isNewSession: !sessionId && !!command, sessionId: capturedSessionId, provider: 'claude' }));
     notifyRunStopped({
