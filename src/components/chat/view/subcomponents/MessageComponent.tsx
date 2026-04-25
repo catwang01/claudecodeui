@@ -214,18 +214,21 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                 {/* Tool Result Section */}
                 {message.toolResult && !shouldHideToolResult(message.toolName || 'UnknownTool', message.toolResult) && (
                   message.toolResult.isError ? (
-                    // Error results - red error box with content
-                    <div
+                    // Error results - collapsible red error box (collapsed by default)
+                    <details
                       id={`tool-result-${message.toolId}`}
-                      className="relative mt-2 scroll-mt-4 rounded border border-red-200/60 bg-red-50/50 p-3 dark:border-red-800/40 dark:bg-red-950/10"
+                      className="group/error relative mt-2 scroll-mt-4 rounded border border-red-200/60 bg-red-50/50 dark:border-red-800/40 dark:bg-red-950/10"
                     >
-                      <div className="relative mb-2 flex items-center gap-1.5">
-                        <svg className="h-4 w-4 text-red-500 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <summary className="flex cursor-pointer list-none items-center gap-1.5 p-3 marker:hidden">
+                        <svg className="h-3 w-3 flex-shrink-0 text-red-500 transition-transform duration-150 group-open/error:rotate-90 dark:text-red-400" fill="currentColor" viewBox="0 0 24 24">
+                          <path d="M8 5l8 7-8 7V5z" />
+                        </svg>
+                        <svg className="h-4 w-4 flex-shrink-0 text-red-500 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                         </svg>
                         <span className="text-xs font-medium text-red-700 dark:text-red-300">{t('messageTypes.error')}</span>
-                      </div>
-                      <div className="relative text-sm text-red-900 dark:text-red-100">
+                      </summary>
+                      <div className="relative px-3 pb-3 text-sm text-red-900 dark:text-red-100">
                         <Markdown className="prose prose-sm prose-red max-w-none dark:prose-invert">
                           {String(message.toolResult.content || '')}
                         </Markdown>
@@ -279,7 +282,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                           </div>
                         )}
                       </div>
-                    </div>
+                    </details>
                   ) : (
                     // Non-error results - route through ToolRenderer (single source of truth)
                     <div id={`tool-result-${message.toolId}`} className="scroll-mt-4">
