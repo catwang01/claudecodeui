@@ -15,7 +15,7 @@ export const QuestionAnswerContent: React.FC<QuestionAnswerContentProps> = ({
 }) => {
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
 
-  if (!questions || questions.length === 0) {
+  if (!questions || !Array.isArray(questions) || questions.length === 0) {
     return null;
   }
 

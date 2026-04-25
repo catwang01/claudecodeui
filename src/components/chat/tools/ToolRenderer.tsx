@@ -179,14 +179,20 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
         contentComponent = <TaskListContent content={contentProps.content || ''} />;
         break;
 
-      case 'question-answer':
+      case 'question-answer': {
+        const rawQuestions = contentProps.questions;
+        let questionsArray = Array.isArray(rawQuestions) ? rawQuestions : [];
+        if (!questionsArray.length && typeof rawQuestions === 'string') {
+          try { questionsArray = JSON.parse(rawQuestions); } catch { questionsArray = []; }
+        }
         contentComponent = (
           <QuestionAnswerContent
-            questions={contentProps.questions || []}
+            questions={Array.isArray(questionsArray) ? questionsArray : []}
             answers={contentProps.answers || {}}
           />
         );
         break;
+      }
 
       case 'text':
         contentComponent = (
