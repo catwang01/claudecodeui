@@ -325,7 +325,8 @@ export default function ChatComposer({
               disabled={!input.trim() || isLoading || !isConnected}
               onMouseDown={(event) => {
                 event.preventDefault();
-                onSubmit(event);
+                // Don't call onSubmit here — form's onSubmit handles it.
+                // preventDefault only prevents textarea from losing focus.
               }}
               onTouchStart={(event) => {
                 event.preventDefault();
