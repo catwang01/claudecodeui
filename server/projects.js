@@ -204,6 +204,28 @@ function clearProjectDirectoryCache() {
   projectDirectoryCache.clear();
 }
 
+// Module-level cache for the Codex sessions index.
+// buildCodexSessionsIndex() recursively scans and parses all ~/.codex/sessions files,
+// which is expensive (can be 10-60s on cold disk). Cache it with a short TTL so
+// repeated getProjects() calls (e.g. WebSocket refresh) don't rebuild from scratch.
+let _codexIndexCache = null;
+let _codexIndexCacheTime = 0;
+const CODEX_INDEX_TTL_MS = 30_000; // 30 seconds
+
+async function getCachedCodexIndex() {
+  const now = Date.now();
+  if (!_codexIndexCache || now - _codexIndexCacheTime > CODEX_INDEX_TTL_MS) {
+    _codexIndexCache = await buildCodexSessionsIndex();
+    _codexIndexCacheTime = now;
+  }
+  return _codexIndexCache;
+}
+
+function invalidateCodexIndexCache() {
+  _codexIndexCache = null;
+  _codexIndexCacheTime = 0;
+}
+
 // Load project configuration file
 async function loadProjectConfig() {
   const configPath = path.join(os.homedir(), '.claude', 'project-config.json');
@@ -262,6 +284,35 @@ async function generateDisplayName(projectName, actualProjectDir = null) {
   return projectPath;
 }
 
+// Read the first cwd value found in a JSONL file, then stop reading.
+// Uses a callback-based readline so we can destroy the stream early.
+function readFirstCwdFromJsonl(filePath) {
+  return new Promise((resolve) => {
+    const fileStream = fsSync.createReadStream(filePath);
+    const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
+    let resolved = false;
+
+    function finish(cwd) {
+      if (resolved) return;
+      resolved = true;
+      rl.close();
+      fileStream.destroy();
+      resolve(cwd);
+    }
+
+    rl.on('line', (line) => {
+      if (resolved || !line.trim()) return;
+      try {
+        const entry = JSON.parse(line);
+        if (entry.cwd) finish(entry.cwd);
+      } catch { /* skip malformed lines */ }
+    });
+
+    rl.on('close', () => finish(null));
+    fileStream.on('error', () => finish(null));
+  });
+}
+
 // Extract the actual project directory from JSONL sessions (with caching)
 async function extractProjectDirectory(projectName) {
   // Check cache first
@@ -279,9 +330,6 @@ async function extractProjectDirectory(projectName) {
   }
 
   const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
-  const cwdCounts = new Map();
-  let latestTimestamp = 0;
-  let latestCwd = null;
   let extractedPath;
 
   try {
@@ -295,67 +343,27 @@ async function extractProjectDirectory(projectName) {
       // Fall back to decoded project name if no sessions
       extractedPath = projectName.replace(/-/g, '/');
     } else {
-      // Process all JSONL files to collect cwd values
-      for (const file of jsonlFiles) {
-        const jsonlFile = path.join(projectDir, file);
-        const fileStream = fsSync.createReadStream(jsonlFile);
-        const rl = readline.createInterface({
-          input: fileStream,
-          crlfDelay: Infinity
-        });
+      // Sort files by mtime descending so we read the most recently used session first.
+      // cwd is consistent within a project, so the first cwd we find is the right one.
+      const fileStats = await Promise.all(
+        jsonlFiles.map(async f => ({
+          file: f,
+          mtime: (await fs.stat(path.join(projectDir, f))).mtimeMs
+        }))
+      );
+      fileStats.sort((a, b) => b.mtime - a.mtime);
 
-        for await (const line of rl) {
-          if (line.trim()) {
-            try {
-              const entry = JSON.parse(line);
-
-              if (entry.cwd) {
-                // Count occurrences of each cwd
-                cwdCounts.set(entry.cwd, (cwdCounts.get(entry.cwd) || 0) + 1);
-
-                // Track the most recent cwd
-                const timestamp = new Date(entry.timestamp || 0).getTime();
-                if (timestamp > latestTimestamp) {
-                  latestTimestamp = timestamp;
-                  latestCwd = entry.cwd;
-                }
-              }
-            } catch (parseError) {
-              // Skip malformed lines
-            }
-          }
+      // Fast path: read just enough of each file to find the first cwd, then stop.
+      for (const { file } of fileStats) {
+        const cwd = await readFirstCwdFromJsonl(path.join(projectDir, file));
+        if (cwd) {
+          extractedPath = cwd;
+          break;
         }
       }
 
-      // Determine the best cwd to use
-      if (cwdCounts.size === 0) {
-        // No cwd found, fall back to decoded project name
+      if (!extractedPath) {
         extractedPath = projectName.replace(/-/g, '/');
-      } else if (cwdCounts.size === 1) {
-        // Only one cwd, use it
-        extractedPath = Array.from(cwdCounts.keys())[0];
-      } else {
-        // Multiple cwd values - prefer the most recent one if it has reasonable usage
-        const mostRecentCount = cwdCounts.get(latestCwd) || 0;
-        const maxCount = Math.max(...cwdCounts.values());
-
-        // Use most recent if it has at least 25% of the max count
-        if (mostRecentCount >= maxCount * 0.25) {
-          extractedPath = latestCwd;
-        } else {
-          // Otherwise use the most frequently used cwd
-          for (const [cwd, count] of cwdCounts.entries()) {
-            if (count === maxCount) {
-              extractedPath = cwd;
-              break;
-            }
-          }
-        }
-
-        // Fallback (shouldn't reach here)
-        if (!extractedPath) {
-          extractedPath = latestCwd || projectName.replace(/-/g, '/');
-        }
       }
     }
 
@@ -392,163 +400,110 @@ async function getProjects(progressCallback = null) {
   let directories = [];
 
   try {
-    // Check if the .claude/projects directory exists
     await fs.access(claudeDir);
-
-    // First, get existing Claude projects from the file system
     const entries = await fs.readdir(claudeDir, { withFileTypes: true });
     directories = entries.filter(e => e.isDirectory());
-
-    // Build set of existing project names for later
     directories.forEach(e => existingProjects.add(e.name));
 
-    // Count manual projects not already in directories
     const manualProjectsCount = Object.entries(config)
       .filter(([name, cfg]) => cfg.manuallyAdded && !existingProjects.has(name))
       .length;
-
     totalProjects = directories.length + manualProjectsCount;
 
     for (const entry of directories) {
       processedProjects++;
-
-      // Emit progress
       if (progressCallback) {
-        progressCallback({
-          phase: 'loading',
-          current: processedProjects,
-          total: totalProjects,
-          currentProject: entry.name
-        });
+        progressCallback({ phase: 'loading', current: processedProjects, total: totalProjects, currentProject: entry.name });
       }
 
-      // Extract actual project directory from JSONL sessions
       const actualProjectDir = await extractProjectDirectory(entry.name);
-
-      // Get display name from config or generate one
       const customName = config[entry.name]?.displayName;
       const autoDisplayName = await generateDisplayName(entry.name, actualProjectDir);
-      const fullPath = actualProjectDir;
 
       const project = {
         name: entry.name,
         path: actualProjectDir,
         displayName: customName || autoDisplayName,
-        fullPath: fullPath,
+        fullPath: actualProjectDir,
         isCustomName: !!customName,
         sessions: [],
         geminiSessions: [],
-        sessionMeta: {
-          hasMore: false,
-          total: 0
-        }
+        cursorSessions: [],
+        codexSessions: [],
+        sessionMeta: { hasMore: false, total: 0 }
       };
 
-      // Try to get sessions for this project (just first 5 for performance)
-      try {
-        const sessionResult = await getSessions(entry.name, 5, 0);
-        project.sessions = sessionResult.sessions || [];
-        project.sessionMeta = {
-          hasMore: sessionResult.hasMore,
-          total: sessionResult.total
-        };
-      } catch (e) {
-        console.warn(`Could not load sessions for project ${entry.name}:`, e.message);
-        project.sessionMeta = {
-          hasMore: false,
-          total: 0
-        };
+      // getSessions reads .jsonl files — keep sequential to avoid I/O contention.
+      // Everything else accesses different directories and can run in parallel.
+      const [sessionResult, cursorSessions, codexSessions, geminiResult, taskMasterResult] =
+        await Promise.allSettled([
+          getSessions(entry.name, 5, 0),
+          getCursorSessions(actualProjectDir),
+          getCodexSessions(actualProjectDir, { indexRef: codexSessionsIndexRef }),
+          (async () => {
+            const uiSessions = sessionManager.getProjectSessions(actualProjectDir) || [];
+            const cliSessions = await getGeminiCliSessions(actualProjectDir);
+            const uiIds = new Set(uiSessions.map(s => s.id));
+            return [...uiSessions, ...cliSessions.filter(s => !uiIds.has(s.id))];
+          })(),
+          detectTaskMasterFolder(actualProjectDir),
+        ]);
+
+      if (sessionResult.status === 'fulfilled') {
+        project.sessions = sessionResult.value.sessions || [];
+        project.sessionMeta = { hasMore: sessionResult.value.hasMore, total: sessionResult.value.total };
+      } else {
+        console.warn(`Could not load sessions for project ${entry.name}:`, sessionResult.reason?.message);
       }
       applyCustomSessionNames(project.sessions, 'claude');
 
-      // Also fetch Cursor sessions for this project
-      try {
-        project.cursorSessions = await getCursorSessions(actualProjectDir);
-      } catch (e) {
-        console.warn(`Could not load Cursor sessions for project ${entry.name}:`, e.message);
-        project.cursorSessions = [];
-      }
+      project.cursorSessions = cursorSessions.status === 'fulfilled' ? cursorSessions.value : [];
+      if (cursorSessions.status === 'rejected') console.warn(`Could not load Cursor sessions for project ${entry.name}:`, cursorSessions.reason?.message);
       applyCustomSessionNames(project.cursorSessions, 'cursor');
 
-      // Also fetch Codex sessions for this project
-      try {
-        project.codexSessions = await getCodexSessions(actualProjectDir, {
-          indexRef: codexSessionsIndexRef,
-        });
-      } catch (e) {
-        console.warn(`Could not load Codex sessions for project ${entry.name}:`, e.message);
-        project.codexSessions = [];
-      }
+      project.codexSessions = codexSessions.status === 'fulfilled' ? codexSessions.value : [];
+      if (codexSessions.status === 'rejected') console.warn(`Could not load Codex sessions for project ${entry.name}:`, codexSessions.reason?.message);
       applyCustomSessionNames(project.codexSessions, 'codex');
 
-      // Also fetch Gemini sessions for this project (UI + CLI)
-      try {
-        const uiSessions = sessionManager.getProjectSessions(actualProjectDir) || [];
-        const cliSessions = await getGeminiCliSessions(actualProjectDir);
-        const uiIds = new Set(uiSessions.map(s => s.id));
-        const mergedGemini = [...uiSessions, ...cliSessions.filter(s => !uiIds.has(s.id))];
-        project.geminiSessions = mergedGemini;
-      } catch (e) {
-        console.warn(`Could not load Gemini sessions for project ${entry.name}:`, e.message);
-        project.geminiSessions = [];
-      }
+      project.geminiSessions = geminiResult.status === 'fulfilled' ? geminiResult.value : [];
+      if (geminiResult.status === 'rejected') console.warn(`Could not load Gemini sessions for project ${entry.name}:`, geminiResult.reason?.message);
       applyCustomSessionNames(project.geminiSessions, 'gemini');
 
-      // Add TaskMaster detection
-      try {
-        const taskMasterResult = await detectTaskMasterFolder(actualProjectDir);
+      if (taskMasterResult.status === 'fulfilled') {
+        const r = taskMasterResult.value;
         project.taskmaster = {
-          hasTaskmaster: taskMasterResult.hasTaskmaster,
-          hasEssentialFiles: taskMasterResult.hasEssentialFiles,
-          metadata: taskMasterResult.metadata,
-          status: taskMasterResult.hasTaskmaster && taskMasterResult.hasEssentialFiles ? 'configured' : 'not-configured'
+          hasTaskmaster: r.hasTaskmaster,
+          hasEssentialFiles: r.hasEssentialFiles,
+          metadata: r.metadata,
+          status: r.hasTaskmaster && r.hasEssentialFiles ? 'configured' : 'not-configured'
         };
-      } catch (e) {
-        console.warn(`Could not detect TaskMaster for project ${entry.name}:`, e.message);
-        project.taskmaster = {
-          hasTaskmaster: false,
-          hasEssentialFiles: false,
-          metadata: null,
-          status: 'error'
-        };
+      } else {
+        console.warn(`Could not detect TaskMaster for project ${entry.name}:`, taskMasterResult.reason?.message);
+        project.taskmaster = { hasTaskmaster: false, hasEssentialFiles: false, metadata: null, status: 'error' };
       }
 
       projects.push(project);
     }
   } catch (error) {
-    // If the directory doesn't exist (ENOENT), that's okay - just continue with empty projects
     if (error.code !== 'ENOENT') {
       console.error('Error reading projects directory:', error);
     }
-    // Calculate total for manual projects only (no directories exist)
-    totalProjects = Object.entries(config)
-      .filter(([name, cfg]) => cfg.manuallyAdded)
-      .length;
+    totalProjects = Object.entries(config).filter(([name, cfg]) => cfg.manuallyAdded).length;
   }
 
   // Add manually configured projects that don't exist as folders yet
   for (const [projectName, projectConfig] of Object.entries(config)) {
     if (!existingProjects.has(projectName) && projectConfig.manuallyAdded) {
       processedProjects++;
-
-      // Emit progress for manual projects
       if (progressCallback) {
-        progressCallback({
-          phase: 'loading',
-          current: processedProjects,
-          total: totalProjects,
-          currentProject: projectName
-        });
+        progressCallback({ phase: 'loading', current: processedProjects, total: totalProjects, currentProject: projectName });
       }
 
-      // Use the original path if available, otherwise extract from potential sessions
       let actualProjectDir = projectConfig.originalPath;
-
       if (!actualProjectDir) {
         try {
           actualProjectDir = await extractProjectDirectory(projectName);
-        } catch (error) {
-          // Fall back to decoded project name
+        } catch {
           actualProjectDir = projectName.replace(/-/g, '/');
         }
       }
@@ -562,80 +517,49 @@ async function getProjects(progressCallback = null) {
         isManuallyAdded: true,
         sessions: [],
         geminiSessions: [],
-        sessionMeta: {
-          hasMore: false,
-          total: 0
-        },
+        sessionMeta: { hasMore: false, total: 0 },
         cursorSessions: [],
         codexSessions: []
       };
 
-      // Try to fetch Cursor sessions for manual projects too
-      try {
-        project.cursorSessions = await getCursorSessions(actualProjectDir);
-      } catch (e) {
-        console.warn(`Could not load Cursor sessions for manual project ${projectName}:`, e.message);
-      }
+      const [cursorSessions, codexSessions, geminiResult, taskMasterResult] =
+        await Promise.allSettled([
+          getCursorSessions(actualProjectDir),
+          getCodexSessions(actualProjectDir, { indexRef: codexSessionsIndexRef }),
+          (async () => {
+            const uiSessions = sessionManager.getProjectSessions(actualProjectDir) || [];
+            const cliSessions = await getGeminiCliSessions(actualProjectDir);
+            const uiIds = new Set(uiSessions.map(s => s.id));
+            return [...uiSessions, ...cliSessions.filter(s => !uiIds.has(s.id))];
+          })(),
+          detectTaskMasterFolder(actualProjectDir),
+        ]);
+
+      project.cursorSessions = cursorSessions.status === 'fulfilled' ? cursorSessions.value : [];
       applyCustomSessionNames(project.cursorSessions, 'cursor');
 
-      // Try to fetch Codex sessions for manual projects too
-      try {
-        project.codexSessions = await getCodexSessions(actualProjectDir, {
-          indexRef: codexSessionsIndexRef,
-        });
-      } catch (e) {
-        console.warn(`Could not load Codex sessions for manual project ${projectName}:`, e.message);
-      }
+      project.codexSessions = codexSessions.status === 'fulfilled' ? codexSessions.value : [];
       applyCustomSessionNames(project.codexSessions, 'codex');
 
-      // Try to fetch Gemini sessions for manual projects too (UI + CLI)
-      try {
-        const uiSessions = sessionManager.getProjectSessions(actualProjectDir) || [];
-        const cliSessions = await getGeminiCliSessions(actualProjectDir);
-        const uiIds = new Set(uiSessions.map(s => s.id));
-        project.geminiSessions = [...uiSessions, ...cliSessions.filter(s => !uiIds.has(s.id))];
-      } catch (e) {
-        console.warn(`Could not load Gemini sessions for manual project ${projectName}:`, e.message);
-      }
+      project.geminiSessions = geminiResult.status === 'fulfilled' ? geminiResult.value : [];
       applyCustomSessionNames(project.geminiSessions, 'gemini');
 
-      // Add TaskMaster detection for manual projects
-      try {
-        const taskMasterResult = await detectTaskMasterFolder(actualProjectDir);
-
-        // Determine TaskMaster status
+      if (taskMasterResult.status === 'fulfilled') {
+        const r = taskMasterResult.value;
         let taskMasterStatus = 'not-configured';
-        if (taskMasterResult.hasTaskmaster && taskMasterResult.hasEssentialFiles) {
-          taskMasterStatus = 'taskmaster-only'; // We don't check MCP for manual projects in bulk
-        }
-
-        project.taskmaster = {
-          status: taskMasterStatus,
-          hasTaskmaster: taskMasterResult.hasTaskmaster,
-          hasEssentialFiles: taskMasterResult.hasEssentialFiles,
-          metadata: taskMasterResult.metadata
-        };
-      } catch (error) {
-        console.warn(`TaskMaster detection failed for manual project ${projectName}:`, error.message);
-        project.taskmaster = {
-          status: 'error',
-          hasTaskmaster: false,
-          hasEssentialFiles: false,
-          error: error.message
-        };
+        if (r.hasTaskmaster && r.hasEssentialFiles) taskMasterStatus = 'taskmaster-only';
+        project.taskmaster = { status: taskMasterStatus, hasTaskmaster: r.hasTaskmaster, hasEssentialFiles: r.hasEssentialFiles, metadata: r.metadata };
+      } else {
+        console.warn(`TaskMaster detection failed for manual project ${projectName}:`, taskMasterResult.reason?.message);
+        project.taskmaster = { status: 'error', hasTaskmaster: false, hasEssentialFiles: false, error: taskMasterResult.reason?.message };
       }
 
       projects.push(project);
     }
   }
 
-  // Emit completion after all projects (including manual) are processed
   if (progressCallback) {
-    progressCallback({
-      phase: 'complete',
-      current: totalProjects,
-      total: totalProjects
-    });
+    progressCallback({ phase: 'complete', current: totalProjects, total: totalProjects });
   }
 
   return projects;
@@ -1530,10 +1454,10 @@ async function getCodexSessions(projectPath, options = {}) {
     }
 
     if (indexRef && !indexRef.sessionsByProject) {
-      indexRef.sessionsByProject = await buildCodexSessionsIndex();
+      indexRef.sessionsByProject = await getCachedCodexIndex();
     }
 
-    const sessionsByProject = indexRef?.sessionsByProject || await buildCodexSessionsIndex();
+    const sessionsByProject = indexRef?.sessionsByProject || await getCachedCodexIndex();
     const sessions = sessionsByProject.get(normalizedProjectPath) || [];
 
     // Return limited sessions for performance (0 = unlimited for deletion)
@@ -1562,71 +1486,108 @@ function isVisibleCodexUserMessage(payload) {
   return true;
 }
 
-// Parse a Codex session JSONL file to extract metadata
-async function parseCodexSessionFile(filePath) {
-  try {
-    const fileStream = fsSync.createReadStream(filePath);
-    const rl = readline.createInterface({
-      input: fileStream,
-      crlfDelay: Infinity
+// Read session_meta from the first few lines of a Codex JSONL file, then stop.
+function readFirstCodexSessionMeta(filePath) {
+  return new Promise((resolve) => {
+    const stream = fsSync.createReadStream(filePath);
+    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+    let resolved = false;
+    let lineCount = 0;
+
+    function finish(result) {
+      if (resolved) return;
+      resolved = true;
+      rl.close();
+      stream.destroy();
+      resolve(result);
+    }
+
+    rl.on('line', (line) => {
+      if (resolved || !line.trim()) return;
+      lineCount++;
+      try {
+        const entry = JSON.parse(line);
+        if (entry.type === 'session_meta' && entry.payload) {
+          finish({
+            id: entry.payload.id,
+            cwd: entry.payload.cwd,
+            model: entry.payload.model || entry.payload.model_provider,
+            timestamp: entry.timestamp,
+            git: entry.payload.git
+          });
+        }
+      } catch {}
+      if (lineCount >= 20) finish(null);
     });
 
-    let sessionMeta = null;
-    let lastTimestamp = null;
-    let lastUserMessage = null;
-    let messageCount = 0;
+    rl.on('close', () => finish(null));
+    stream.on('error', () => finish(null));
+  });
+}
 
-    for await (const line of rl) {
-      if (line.trim()) {
-        try {
-          const entry = JSON.parse(line);
+// Read the last tailBytes of a Codex JSONL file to extract summary/timestamp.
+// Avoids scanning the full file for large sessions.
+async function readCodexTailSummary(filePath, tailBytes = 512 * 1024) {
+  let lastTimestamp = null;
+  let lastUserMessage = null;
+  let messageCount = 0;
 
-          // Track timestamp
-          if (entry.timestamp) {
-            lastTimestamp = entry.timestamp;
-          }
+  try {
+    const stat = await fs.stat(filePath);
+    const fileSize = stat.size;
+    if (fileSize === 0) return { lastTimestamp, lastUserMessage, messageCount };
 
-          // Extract session metadata
-          if (entry.type === 'session_meta' && entry.payload) {
-            sessionMeta = {
-              id: entry.payload.id,
-              cwd: entry.payload.cwd,
-              model: entry.payload.model || entry.payload.model_provider,
-              timestamp: entry.timestamp,
-              git: entry.payload.git
-            };
-          }
+    const readSize = Math.min(fileSize, tailBytes);
+    const buffer = Buffer.alloc(readSize);
+    const fd = await fs.open(filePath, 'r');
+    try {
+      await fd.read(buffer, 0, readSize, fileSize - readSize);
+    } finally {
+      await fd.close();
+    }
 
-          // Count visible user messages and extract summary from the latest plain user input.
-          if (entry.type === 'event_msg' && isVisibleCodexUserMessage(entry.payload)) {
-            messageCount++;
-            if (entry.payload.message) {
-              lastUserMessage = entry.payload.message;
-            }
-          }
+    const text = buffer.toString('utf8');
+    // Skip the potentially-truncated first line when reading a partial tail.
+    const firstNewline = readSize < fileSize ? text.indexOf('\n') : -1;
+    const safeText = firstNewline >= 0 ? text.slice(firstNewline + 1) : text;
 
-          if (entry.type === 'response_item' && entry.payload?.type === 'message' && entry.payload.role === 'assistant') {
-            messageCount++;
-          }
-
-        } catch (parseError) {
-          // Skip malformed lines
+    for (const line of safeText.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const entry = JSON.parse(line);
+        if (entry.timestamp) lastTimestamp = entry.timestamp;
+        if (entry.type === 'event_msg' && isVisibleCodexUserMessage(entry.payload)) {
+          messageCount++;
+          if (entry.payload.message) lastUserMessage = entry.payload.message;
         }
-      }
+        if (entry.type === 'response_item' && entry.payload?.type === 'message' && entry.payload.role === 'assistant') {
+          messageCount++;
+        }
+      } catch {}
     }
+  } catch {}
 
-    if (sessionMeta) {
-      return {
-        ...sessionMeta,
-        timestamp: lastTimestamp || sessionMeta.timestamp,
-        summary: lastUserMessage ?
-          (lastUserMessage.length > 50 ? lastUserMessage.substring(0, 50) + '...' : lastUserMessage) :
-          'Codex Session',
-        messageCount
-      };
-    }
+  return { lastTimestamp, lastUserMessage, messageCount };
+}
 
-    return null;
+// Parse a Codex session JSONL file to extract metadata.
+// Reads only the file head (for session_meta) and tail (for summary/timestamp)
+// instead of scanning the entire file.
+async function parseCodexSessionFile(filePath) {
+  try {
+    const sessionMeta = await readFirstCodexSessionMeta(filePath);
+    if (!sessionMeta) return null;
+
+    const { lastTimestamp, lastUserMessage, messageCount } = await readCodexTailSummary(filePath);
+
+    return {
+      ...sessionMeta,
+      timestamp: lastTimestamp || sessionMeta.timestamp,
+      summary: lastUserMessage ?
+        (lastUserMessage.length > 50 ? lastUserMessage.substring(0, 50) + '...' : lastUserMessage) :
+        'Codex Session',
+      messageCount
+    };
 
   } catch (error) {
     console.error('Error parsing Codex session file:', error);
