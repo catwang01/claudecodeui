@@ -357,12 +357,35 @@ export function useChatSessionState({
 
     const alreadyLoaded = lastLoadedSessionKeyRef.current === sessionKey;
     const hasData = sessionStore.has(selectedSession.id);
-    console.log('[mainEffect] triggered sessionKey=%s alreadyLoaded=%s hasData=%s',
-      sessionKey.slice(0, 24), alreadyLoaded, hasData);
+    const slot = sessionStore.getSessionSlot(selectedSession.id);
+    const hasMessages = (slot?.serverMessages.length ?? 0) > 0;
+    const isFetching = slot?.status === 'loading';
+    console.log('[mainEffect] triggered sessionKey=%s alreadyLoaded=%s hasData=%s hasMessages=%s isFetching=%s',
+      sessionKey.slice(0, 24), alreadyLoaded, hasData, hasMessages, isFetching);
 
     // Already loaded — skip. WS reconnect data sync is handled by handleWebSocketReconnect.
     if (alreadyLoaded && hasData) {
       console.log('[mainEffect] → skip (already loaded)');
+      return;
+    }
+
+    // A fetch is already in progress for this session (concurrent mainEffect re-triggers
+    // caused by project metadata updates racing with the fetch).  Update the key so the
+    // next check passes, and skip — the in-flight fetch will populate the store.
+    if (isFetching) {
+      lastLoadedSessionKeyRef.current = sessionKey;
+      console.log('[mainEffect] → skip (fetch in progress)');
+      return;
+    }
+
+    // Session already has messages but sessionKey changed (e.g. project metadata updated via
+    // projects_updated while the same session is open).  Update the key and skip — no need
+    // to re-fetch with a potentially different projectName that could return empty results.
+    // Only applies when the session ID itself hasn't changed (not a session switch).
+    const prevSessionId = lastLoadedSessionKeyRef.current?.split(':')[0] ?? null;
+    if (hasMessages && prevSessionId === selectedSession.id) {
+      lastLoadedSessionKeyRef.current = sessionKey;
+      console.log('[mainEffect] → skip (same session, project key updated)');
       return;
     }
 
