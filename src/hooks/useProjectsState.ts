@@ -394,6 +394,16 @@ export function useProjectsState({
 
   const handleSessionSelect = useCallback(
     (session: ProjectSession) => {
+      // If the session comes from a different project (e.g. Recent list), update
+      // selectedProject first so that the chat mainEffect fires with the correct
+      // project and doesn't request token-usage / messages for the wrong project.
+      if (session.__projectName && session.__projectName !== selectedProject?.name) {
+        const matchingProject = projects.find((p) => p.name === session.__projectName);
+        if (matchingProject) {
+          setSelectedProject(matchingProject);
+        }
+      }
+
       setSelectedSession(session);
 
       if (activeTab === 'tasks' || activeTab === 'preview') {
@@ -416,7 +426,7 @@ export function useProjectsState({
 
       navigate(`/session/${session.id}`);
     },
-    [activeTab, isMobile, navigate, selectedProject?.name],
+    [activeTab, isMobile, navigate, projects, selectedProject?.name],
   );
 
   const handleNewSession = useCallback(
