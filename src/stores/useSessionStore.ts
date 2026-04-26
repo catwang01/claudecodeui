@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SessionProvider } from '../types/app';
 import { authenticatedFetch } from '../utils/api';
+import { logger } from '../utils/logger';
 
 // ─── NormalizedMessage (mirrors server/adapters/types.js) ────────────────────
 
@@ -195,11 +196,11 @@ export function useSessionStore() {
     const prev = _debugPrevRef.current;
     if (prev && prev.server === slot.serverMessages && prev.realtime === slot.realtimeMessages && prev.merged === slot.merged) return;
     _debugPrevRef.current = { server: slot.serverMessages, realtime: slot.realtimeMessages, merged: slot.merged };
-    console.group(`[SessionStore] session=${sessionId.slice(0, 8)}`);
-    console.log('serverMessages  (%d):', slot.serverMessages.length, slot.serverMessages);
-    console.log('realtimeMessages(%d):', slot.realtimeMessages.length, slot.realtimeMessages);
-    console.log('merged          (%d):', slot.merged.length, slot.merged);
-    console.groupEnd();
+    logger.group(`[SessionStore] session=${sessionId.slice(0, 8)}`);
+    logger.log('serverMessages  (%d):', slot.serverMessages.length, slot.serverMessages);
+    logger.log('realtimeMessages(%d):', slot.realtimeMessages.length, slot.realtimeMessages);
+    logger.log('merged          (%d):', slot.merged.length, slot.merged);
+    logger.groupEnd();
   });
 
   const getSlot = useCallback((sessionId: string): SessionSlot => {
@@ -264,7 +265,7 @@ export function useSessionStore() {
       notify(sessionId);
       return slot;
     } catch (error) {
-      console.error(`[SessionStore] fetch failed for ${sessionId}:`, error);
+      logger.error(`[SessionStore] fetch failed for ${sessionId}:`, error);
       slot.status = 'error';
       notify(sessionId);
       return slot;
@@ -311,7 +312,7 @@ export function useSessionStore() {
       notify(sessionId);
       return slot;
     } catch (error) {
-      console.error(`[SessionStore] fetchMore failed for ${sessionId}:`, error);
+      logger.error(`[SessionStore] fetchMore failed for ${sessionId}:`, error);
       return slot;
     }
   }, [getSlot, notify]);
@@ -401,7 +402,7 @@ export function useSessionStore() {
       // Preserving the existing reference prevents spurious recomputeMerged
       // calls and avoids React re-renders when nothing visible changed.
       const changed = didRefreshChange(prevMessages, newMessages, prevRealtimeCount, newRealtime.length);
-      console.log(
+      logger.log(
         `[refreshFromServer] session=${sessionId.slice(0, 8)} changed=${changed}`,
         `prevServer=${prevMessages.length} newServer=${newMessages.length}`,
         `prevRealtime=${prevRealtimeCount} newRealtime=${newRealtime.length}`,
@@ -413,7 +414,7 @@ export function useSessionStore() {
         notify(sessionId);
       }
     } catch (error) {
-      console.error(`[SessionStore] refresh failed for ${sessionId}:`, error);
+      logger.error(`[SessionStore] refresh failed for ${sessionId}:`, error);
     }
   }, [getSlot, notify]);
 

@@ -18,6 +18,7 @@ import { copyTextToClipboard } from '../../../utils/clipboard';
 import { api } from '../../../utils/api';
 import { useTaskMaster } from '../context/TaskMasterContext';
 import type { TaskId, TaskMasterTask, TaskReference } from '../types';
+import { logger } from '../../../utils/logger';
 
 type TaskDetailModalProps = {
   task: TaskMasterTask | null;
@@ -118,7 +119,7 @@ export default function TaskDetailModal({
       await refreshTasks();
       onEdit?.(editableTask);
     } catch (error) {
-      console.error('Failed to save task changes:', error);
+      logger.error('Failed to save task changes:', error);
       alert(error instanceof Error ? error.message : 'Failed to update task');
     } finally {
       setIsSaving(false);
@@ -140,7 +141,7 @@ export default function TaskDetailModal({
       await refreshTasks();
       onStatusChange?.(task.id, nextStatus);
     } catch (error) {
-      console.error('Failed to update task status:', error);
+      logger.error('Failed to update task status:', error);
       alert(error instanceof Error ? error.message : 'Failed to update task status');
     }
   };

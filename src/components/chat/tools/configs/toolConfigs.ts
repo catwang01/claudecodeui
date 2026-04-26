@@ -1,3 +1,4 @@
+import { logger } from '../../../../utils/logger';
 /**
  * Centralized tool configuration registry
  * Defines display behavior for all tool types 
@@ -274,7 +275,7 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
           }
           return { todos, isResult: true };
         } catch (e) {
-          console.warn('Failed to parse todo list content:', e);
+          logger.warn('Failed to parse todo list content:', e);
           return { todos: [], isResult: true };
         }
       }
@@ -515,7 +516,7 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
             content: parsed.plan?.replace(/\\n/g, '\n') || parsed.plan
           };
         } catch (e) {
-          console.warn('Failed to parse plan content:', e);
+          logger.warn('Failed to parse plan content:', e);
           return { content: '' };
         }
       }
@@ -546,7 +547,7 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
             content: parsed.plan?.replace(/\\n/g, '\n') || parsed.plan
           };
         } catch (e) {
-          console.warn('Failed to parse plan content:', e);
+          logger.warn('Failed to parse plan content:', e);
           return { content: '' };
         }
       }

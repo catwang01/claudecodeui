@@ -4,6 +4,7 @@ import Fuse from 'fuse.js';
 import { authenticatedFetch } from '../../../utils/api';
 import { safeLocalStorage } from '../utils/chatStorage';
 import type { Project } from '../../../types/app';
+import { logger } from '../../../utils/logger';
 
 const COMMAND_QUERY_DEBOUNCE_MS = 150;
 
@@ -36,7 +37,7 @@ const readCommandHistory = (projectName: string): Record<string, number> => {
   try {
     return JSON.parse(history);
   } catch (error) {
-    console.error('Error parsing command history:', error);
+    logger.error('Error parsing command history:', error);
     return {};
   }
 };
@@ -123,7 +124,7 @@ export function useSlashCommands({
 
         setSlashCommands(sortedCommands);
       } catch (error) {
-        console.error('Error fetching slash commands:', error);
+        logger.error('Error fetching slash commands:', error);
         setSlashCommands([]);
       }
     };

@@ -19,6 +19,7 @@ import {
   readProjectSortOrder,
   sortProjects,
 } from '../utils/utils';
+import { logger } from '../../../utils/logger';
 
 type SnippetHighlight = {
   start: number;
@@ -384,10 +385,10 @@ export function useSidebarController({
             window.location.reload();
           }
         } else {
-          console.error('Failed to rename project');
+          logger.error('Failed to rename project');
         }
       } catch (error) {
-        console.error('Error renaming project:', error);
+        logger.error('Error renaming project:', error);
       } finally {
         setEditingProject(null);
         setEditingName('');
@@ -430,14 +431,14 @@ export function useSidebarController({
         onSessionDelete?.(sessionId);
       } else {
         const errorText = await response.text();
-        console.error('[Sidebar] Failed to delete session:', {
+        logger.error('[Sidebar] Failed to delete session:', {
           status: response.status,
           error: errorText,
         });
         alert(t('messages.deleteSessionFailed'));
       }
     } catch (error) {
-      console.error('[Sidebar] Error deleting session:', error);
+      logger.error('[Sidebar] Error deleting session:', error);
       alert(t('messages.deleteSessionError'));
     }
   }, [onSessionDelete, sessionDeleteConfirmation, t]);
@@ -456,7 +457,7 @@ export function useSidebarController({
           await onRefresh();
         }
       } catch (error) {
-        console.error('[Sidebar] Error forking session:', error);
+        logger.error('[Sidebar] Error forking session:', error);
       }
     },
     [onRefresh],
@@ -493,7 +494,7 @@ export function useSidebarController({
         alert(error.error || t('messages.deleteProjectFailed'));
       }
     } catch (error) {
-      console.error('Error deleting project:', error);
+      logger.error('Error deleting project:', error);
       alert(t('messages.deleteProjectError'));
     } finally {
       setDeletingProjects((prev) => {
@@ -539,7 +540,7 @@ export function useSidebarController({
           setProjectHasMoreOverrides((prev) => ({ ...prev, [project.name]: false }));
         }
       } catch (error) {
-        console.error('Error loading more sessions:', error);
+        logger.error('Error loading more sessions:', error);
       } finally {
         setLoadingSessions((prev) => ({ ...prev, [project.name]: false }));
       }
@@ -577,11 +578,11 @@ export function useSidebarController({
         if (response.ok) {
           await onRefresh();
         } else {
-          console.error('[Sidebar] Failed to rename session:', response.status);
+          logger.error('[Sidebar] Failed to rename session:', response.status);
           alert(t('messages.renameSessionFailed'));
         }
       } catch (error) {
-        console.error('[Sidebar] Error renaming session:', error);
+        logger.error('[Sidebar] Error renaming session:', error);
         alert(t('messages.renameSessionError'));
       } finally {
         setEditingSession(null);

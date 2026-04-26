@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../../../utils/api';
 import type { PrdFile } from '../types';
+import { logger } from '../../../utils/logger';
 
 type UseProjectPrdFilesOptions = {
   projectName?: string;
@@ -45,7 +46,7 @@ export function useProjectPrdFiles({ projectName }: UseProjectPrdFilesOptions) {
       const data = (await response.json()) as PrdResponse;
       setPrdFiles(normalizePrdResponse(data));
     } catch (error) {
-      console.error('Failed to load PRD files:', error);
+      logger.error('Failed to load PRD files:', error);
       setPrdFiles([]);
     } finally {
       setIsLoadingPrdFiles(false);

@@ -10,6 +10,7 @@ import GitPanelHeader from '../view/GitPanelHeader';
 import GitRepositoryErrorState from '../view/GitRepositoryErrorState';
 import GitViewTabs from '../view/GitViewTabs';
 import ConfirmActionModal from '../view/modals/ConfirmActionModal';
+import { logger } from '../../../utils/logger';
 
 export default function GitPanel({ selectedProject, isMobile = false, onFileOpen }: GitPanelProps) {
   const [activeView, setActiveView] = useState<GitPanelView>('changes');
@@ -69,7 +70,7 @@ export default function GitPanel({ selectedProject, isMobile = false, onFileOpen
     try {
       await actionToExecute.onConfirm();
     } catch (error) {
-      console.error('Error executing confirmation action:', error);
+      logger.error('Error executing confirmation action:', error);
     }
   }, [confirmAction]);
 

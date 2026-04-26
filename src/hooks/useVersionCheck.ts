@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { version } from '../../package.json';
 import { ReleaseInfo } from '../types/sharedTypes';
+import { logger } from '../utils/logger';
 
 /**
  * Compare two semantic version strings
@@ -71,7 +72,7 @@ export const useVersionCheck = (owner: string, repo: string) => {
           setReleaseInfo(null);
         }
       } catch (error) {
-        console.error('Version check failed:', error);
+        logger.error('Version check failed:', error);
         // On error, don't show update notification
         setUpdateAvailable(false);
         setLatestVersion(null);

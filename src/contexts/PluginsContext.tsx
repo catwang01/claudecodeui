@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { authenticatedFetch } from '../utils/api';
+import { logger } from '../utils/logger';
 
 export type Plugin = {
   name: string;
@@ -66,7 +67,7 @@ export function PluginsProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to fetch plugins';
       setPluginsError(message);
-      console.error('[Plugins] Failed to fetch plugins:', err);
+      logger.error('[Plugins] Failed to fetch plugins:', err);
     } finally {
       setLoading(false);
     }

@@ -12,6 +12,7 @@ import type {
   TaskMasterTask,
   TaskMasterWebSocketMessage,
 } from '../types';
+import { logger } from '../../../utils/logger';
 
 const TaskMasterContext = createContext<TaskMasterContextValue | null>(null);
 
@@ -84,7 +85,7 @@ export function TaskMasterProvider({ children }: { children: React.ReactNode }) 
   }, []);
 
   const handleError = useCallback((context: string, caughtError: unknown) => {
-    console.error(`TaskMaster ${context} error:`, caughtError);
+    logger.error(`TaskMaster ${context} error:`, caughtError);
     setError(createTaskMasterError(context, caughtError));
   }, []);
 

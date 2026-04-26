@@ -3,6 +3,7 @@ import { X } from 'lucide-react';
 import { Button } from '../../../shared/view/ui';
 import { authenticatedFetch } from '../../../utils/api';
 import type { FileTreeImageSelection } from '../types/types';
+import { logger } from '../../../utils/logger';
 
 type ImageViewerProps = {
   file: FileTreeImageSelection;
@@ -40,7 +41,7 @@ export default function ImageViewer({ file, onClose }: ImageViewerProps) {
         if (loadError instanceof Error && loadError.name === 'AbortError') {
           return;
         }
-        console.error('Error loading image:', loadError);
+        logger.error('Error loading image:', loadError);
         setError('Unable to load image');
       } finally {
         setLoading(false);

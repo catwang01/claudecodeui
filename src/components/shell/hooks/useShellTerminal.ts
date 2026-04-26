@@ -15,6 +15,7 @@ import { copyTextToClipboard } from '../../../utils/clipboard';
 import { isCodexLoginCommand } from '../utils/auth';
 import { sendSocketMessage } from '../utils/socket';
 import { ensureXtermFocusStyles } from '../utils/terminalStyles';
+import { logger } from '../../../utils/logger';
 
 type UseShellTerminalOptions = {
   terminalContainerRef: RefObject<HTMLDivElement>;
@@ -99,7 +100,7 @@ export function useShellTerminal({
     try {
       nextTerminal.loadAddon(new WebglAddon());
     } catch {
-      console.warn('[Shell] WebGL renderer unavailable, using Canvas fallback');
+      logger.warn('[Shell] WebGL renderer unavailable, using Canvas fallback');
     }
 
     nextTerminal.open(terminalContainerRef.current);

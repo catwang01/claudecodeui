@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { authenticatedFetch } from '../../../utils/api';
+import { logger } from '../../../utils/logger';
 
 type GitConfigResponse = {
   gitName?: string;
@@ -37,7 +38,7 @@ export function useGitSettings() {
       setGitName(data.gitName || '');
       setGitEmail(data.gitEmail || '');
     } catch (error) {
-      console.error('Error loading git config:', error);
+      logger.error('Error loading git config:', error);
     } finally {
       setIsLoading(false);
     }
@@ -62,10 +63,10 @@ export function useGitSettings() {
       }
 
       const data = await response.json() as GitConfigResponse;
-      console.error('Failed to save git config:', data.error);
+      logger.error('Failed to save git config:', data.error);
       setSaveStatus('error');
     } catch (error) {
-      console.error('Error saving git config:', error);
+      logger.error('Error saving git config:', error);
       setSaveStatus('error');
     } finally {
       setIsSaving(false);

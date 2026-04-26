@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '../../../utils/api';
 import type { CodeEditorFile } from '../types/types';
 import { isBinaryFile } from '../utils/binaryFile';
+import { logger } from '../../../utils/logger';
 
 type UseCodeEditorDocumentParams = {
   file: CodeEditorFile;
@@ -62,7 +63,7 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
         setContent(data.content);
       } catch (error) {
         const message = getErrorMessage(error);
-        console.error('Error loading file:', error);
+        logger.error('Error loading file:', error);
         setContent(`// Error loading file: ${message}\n// File: ${fileName}\n// Path: ${filePath}`);
       } finally {
         setLoading(false);
@@ -91,7 +92,7 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
         }
 
         const textError = await response.text();
-        console.error('Non-JSON error response:', textError);
+        logger.error('Non-JSON error response:', textError);
         throw new Error(`Save failed: ${response.status} ${response.statusText}`);
       }
 
@@ -101,7 +102,7 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
       setTimeout(() => setSaveSuccess(false), 2000);
     } catch (error) {
       const message = getErrorMessage(error);
-      console.error('Error saving file:', error);
+      logger.error('Error saving file:', error);
       setSaveError(message);
     } finally {
       setSaving(false);

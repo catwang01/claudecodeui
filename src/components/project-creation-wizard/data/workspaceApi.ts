@@ -9,6 +9,7 @@ import type {
   FolderSuggestion,
   TokenMode,
 } from '../types';
+import { logger } from '../../../utils/logger';
 
 type CloneWorkspaceParams = {
   workspacePath: string;
@@ -140,7 +141,7 @@ export const cloneWorkspaceWithProgress = (
           settle(() => reject(new Error(payload.message || 'Failed to clone repository')));
         }
       } catch (error) {
-        console.error('Error parsing clone progress event:', error);
+        logger.error('Error parsing clone progress event:', error);
       }
     };
 

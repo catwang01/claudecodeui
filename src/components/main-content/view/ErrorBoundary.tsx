@@ -3,6 +3,7 @@ import {
   ErrorBoundary as ReactErrorBoundary,
   type FallbackProps,
 } from 'react-error-boundary';
+import { logger } from '../../../utils/logger';
 
 type ErrorFallbackProps = FallbackProps & {
   showDetails: boolean;
@@ -79,7 +80,7 @@ function ErrorBoundary({
   const [componentStack, setComponentStack] = useState<string | null>(null);
 
   const handleError = useCallback((error: Error, errorInfo: ErrorInfo) => {
-    console.error('ErrorBoundary caught an error:', error, errorInfo);
+    logger.error('ErrorBoundary caught an error:', error, errorInfo);
     // Keep component stack for optional debug rendering in fallback UI.
     setComponentStack(errorInfo?.componentStack ?? null);
   }, []);

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../../../utils/api';
 import type { ExistingPrdFile, PrdListResponse } from '../types';
+import { logger } from '../../../utils/logger';
 
 type UsePrdRegistryArgs = {
   projectName?: string;
@@ -34,7 +35,7 @@ export function usePrdRegistry({ projectName }: UsePrdRegistryArgs): UsePrdRegis
       const data = (await response.json()) as PrdListResponse;
       setExistingPrds(getPrdFiles(data));
     } catch (error) {
-      console.error('Failed to fetch existing PRDs:', error);
+      logger.error('Failed to fetch existing PRDs:', error);
       setExistingPrds([]);
     }
   }, [projectName]);

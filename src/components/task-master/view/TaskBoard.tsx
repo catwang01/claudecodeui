@@ -10,6 +10,7 @@ import TaskEmptyState from './TaskEmptyState';
 import CreateTaskModal from './modals/CreateTaskModal';
 import TaskHelpModal from './modals/TaskHelpModal';
 import TaskMasterSetupModal from './modals/TaskMasterSetupModal';
+import { logger } from '../../../utils/logger';
 
 type TaskBoardProps = {
   tasks?: TaskMasterTask[];
@@ -92,7 +93,7 @@ export default function TaskBoard({
         isExisting: true,
       });
     } catch (error) {
-      console.error('Failed to open PRD in editor:', error);
+      logger.error('Failed to open PRD in editor:', error);
     }
   };
 

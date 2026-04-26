@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../components/auth/context/AuthContext';
 import { IS_PLATFORM } from '../constants/config';
+import { logger } from '../utils/logger';
 
 type WebSocketContextType = {
   ws: WebSocket | null;
@@ -56,7 +57,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
       // Construct WebSocket URL
       const wsUrl = buildWebSocketUrl(token);
 
-      if (!wsUrl) return console.warn('No authentication token found for WebSocket connection');
+      if (!wsUrl) return logger.warn('No authentication token found for WebSocket connection');
       
       const websocket = new WebSocket(wsUrl);
       // Set immediately so onclose guards can detect stale events from replaced sockets
@@ -67,10 +68,10 @@ const useWebSocketProviderState = (): WebSocketContextType => {
         setIsConnected(true);
         if (hasConnectedRef.current) {
           // This is a reconnect — signal so components can catch up on missed messages
-          console.log('[WS] Reconnected at', new Date().toISOString());
+          logger.log('[WS] Reconnected at', new Date().toISOString());
           setLatestMessage({ type: 'websocket-reconnected', timestamp: Date.now() });
         } else {
-          console.log('[WS] Connected (first time) at', new Date().toISOString());
+          logger.log('[WS] Connected (first time) at', new Date().toISOString());
         }
         hasConnectedRef.current = true;
       };
@@ -80,11 +81,11 @@ const useWebSocketProviderState = (): WebSocketContextType => {
         try {
           const data = JSON.parse(event.data);
           if (data.type !== 'loading_progress') {
-            console.log('[WS] message kind=%s type=%s', data.kind ?? '-', data.type ?? '-', data);
+            logger.log('[WS] message kind=%s type=%s', data.kind ?? '-', data.type ?? '-', data);
           }
           setLatestMessage(data);
         } catch (error) {
-          console.error('Error parsing WebSocket message:', error);
+          logger.error('Error parsing WebSocket message:', error);
         }
       };
 
@@ -101,11 +102,11 @@ const useWebSocketProviderState = (): WebSocketContextType => {
       };
 
       websocket.onerror = (error) => {
-        console.error('WebSocket error:', error);
+        logger.error('WebSocket error:', error);
       };
 
     } catch (error) {
-      console.error('Error creating WebSocket connection:', error);
+      logger.error('Error creating WebSocket connection:', error);
     }
   }, [token]); // everytime token changes, we reconnect
 
@@ -114,7 +115,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify(message));
     } else {
-      console.warn('WebSocket not connected');
+      logger.warn('WebSocket not connected');
     }
   }, []);
 

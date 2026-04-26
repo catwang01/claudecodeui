@@ -5,6 +5,7 @@ import { browseFilesystemFolders } from '../data/workspaceApi';
 import { getSuggestionRootPath } from '../utils/pathUtils';
 import type { FolderSuggestion, WorkspaceType } from '../types';
 import FolderBrowserModal from './FolderBrowserModal';
+import { logger } from '../../../utils/logger';
 
 type WorkspacePathFieldProps = {
   workspaceType: WorkspaceType;
@@ -52,7 +53,7 @@ export default function WorkspacePathField({
         setPathSuggestions(matchingSuggestions);
         setShowPathDropdown(matchingSuggestions.length > 0);
       } catch (error) {
-        console.error('Failed to load path suggestions:', error);
+        logger.error('Failed to load path suggestions:', error);
       }
     }, 200);
 

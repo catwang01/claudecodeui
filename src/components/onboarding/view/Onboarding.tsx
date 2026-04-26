@@ -13,6 +13,7 @@ import {
   readErrorMessageFromResponse,
   selectedProject,
 } from './utils';
+import { logger } from '../../../utils/logger';
 
 type OnboardingProps = {
   onComplete?: () => void | Promise<void>;
@@ -61,7 +62,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
         },
       }));
     } catch (caughtError) {
-      console.error(`Error checking ${provider} auth status:`, caughtError);
+      logger.error(`Error checking ${provider} auth status:`, caughtError);
       setProviderStatuses((previous) => ({
         ...previous,
         [provider]: {
@@ -93,7 +94,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
         setGitEmail(payload.gitEmail);
       }
     } catch (caughtError) {
-      console.error('Error loading git config:', caughtError);
+      logger.error('Error loading git config:', caughtError);
     }
   }, []);
 

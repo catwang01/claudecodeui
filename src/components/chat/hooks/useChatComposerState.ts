@@ -23,6 +23,7 @@ import type { Project, ProjectSession, SessionProvider } from '../../../types/ap
 import { escapeRegExp } from '../utils/chatFormatting';
 import { useFileMentions } from './useFileMentions';
 import { type SlashCommand, useSlashCommands } from './useSlashCommands';
+import { logger } from '../../../utils/logger';
 
 type PendingViewSession = {
   sessionId: string | null;
@@ -231,7 +232,7 @@ export function useChatComposerState({
           break;
 
         default:
-          console.warn('Unknown built-in command action:', action);
+          logger.warn('Unknown built-in command action:', action);
       }
     },
     [onFileOpen, onShowSettings, addMessage, clearMessages, rewindMessages],
@@ -321,7 +322,7 @@ export function useChatComposerState({
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
-        console.error('Error executing command:', error);
+        logger.error('Error executing command:', error);
         addMessage({
           type: 'assistant',
           content: `Error executing command: ${message}`,
@@ -393,7 +394,7 @@ export function useChatComposerState({
     const validFiles = files.filter((file) => {
       try {
         if (!file || typeof file !== 'object') {
-          console.warn('Invalid file object:', file);
+          logger.warn('Invalid file object:', file);
           return false;
         }
 
@@ -413,7 +414,7 @@ export function useChatComposerState({
 
         return true;
       } catch (error) {
-        console.error('Error validating file:', error, file);
+        logger.error('Error validating file:', error, file);
         return false;
       }
     });
@@ -519,7 +520,7 @@ export function useChatComposerState({
           uploadedImages = result.images;
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Unknown error';
-          console.error('Image upload failed:', error);
+          logger.error('Image upload failed:', error);
           addMessage({
             type: 'error',
             content: `Failed to upload images: ${message}`,
@@ -581,7 +582,7 @@ export function useChatComposerState({
             return JSON.parse(savedSettings);
           }
         } catch (error) {
-          console.error('Error loading tools settings:', error);
+          logger.error('Error loading tools settings:', error);
         }
 
         return {
@@ -872,7 +873,7 @@ export function useChatComposerState({
       candidateSessionIds.find((sessionId) => Boolean(sessionId) && !isTemporarySessionId(sessionId)) || null;
 
     if (!targetSessionId) {
-      console.warn('Abort requested but no concrete session ID is available yet.');
+      logger.warn('Abort requested but no concrete session ID is available yet.');
       return;
     }
 

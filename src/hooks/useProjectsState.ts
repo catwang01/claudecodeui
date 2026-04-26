@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { NavigateFunction } from 'react-router-dom';
 import { api } from '../utils/api';
+import { logger } from '../utils/logger';
 import type {
   AppSocketMessage,
   AppTab,
@@ -174,7 +175,7 @@ export function useProjectsState({
           : prevProjects;
       });
     } catch (error) {
-      console.error('Error fetching projects:', error);
+      logger.error('Error fetching projects:', error);
     } finally {
       if (showLoadingState) {
         setIsLoadingProjects(false);
@@ -240,17 +241,17 @@ export function useProjectsState({
         const filename = changedFileParts[changedFileParts.length - 1];
         const changedSessionId = filename.replace('.jsonl', '');
 
-        console.log('[projects_updated] changedFile=%s changedSessionId=%s currentSession=%s match=%s',
+        logger.log('[projects_updated] changedFile=%s changedSessionId=%s currentSession=%s match=%s',
           filename, changedSessionId.slice(0, 8), selectedSession.id.slice(0, 8), changedSessionId === selectedSession.id);
 
         if (changedSessionId === selectedSession.id) {
           const isSessionActive = activeSessions.has(selectedSession.id);
 
           if (!isSessionActive) {
-            console.log('[projects_updated] → setExternalMessageUpdate (session file changed, not active)');
+            logger.log('[projects_updated] → setExternalMessageUpdate (session file changed, not active)');
             setExternalMessageUpdate((prev) => prev + 1);
           } else {
-            console.log('[projects_updated] → skip setExternalMessageUpdate (session is active/streaming)');
+            logger.log('[projects_updated] → skip setExternalMessageUpdate (session is active/streaming)');
           }
         }
       }
@@ -284,7 +285,7 @@ export function useProjectsState({
     }
 
     if (serialize(updatedSelectedProject) !== serialize(selectedProject)) {
-      console.log('[projects_updated] → setSelectedProject changed fields:', {
+      logger.log('[projects_updated] → setSelectedProject changed fields:', {
         name: updatedSelectedProject.name !== selectedProject.name ? `${selectedProject.name}→${updatedSelectedProject.name}` : 'same',
         sessions: updatedSelectedProject.sessions?.length !== selectedProject.sessions?.length
           ? `${selectedProject.sessions?.length}→${updatedSelectedProject.sessions?.length}`
@@ -293,7 +294,7 @@ export function useProjectsState({
       });
       setSelectedProject(updatedSelectedProject);
     } else {
-      console.log('[projects_updated] → skip setSelectedProject (no change)');
+      logger.log('[projects_updated] → skip setSelectedProject (no change)');
     }
 
     // Do NOT update or clear selectedSession from projects_updated —
@@ -506,7 +507,7 @@ export function useProjectsState({
         }
       }
     } catch (error) {
-      console.error('Error refreshing sidebar:', error);
+      logger.error('Error refreshing sidebar:', error);
     }
   }, [selectedProject, selectedSession]);
 

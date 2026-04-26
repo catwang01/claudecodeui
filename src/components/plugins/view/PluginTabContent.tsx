@@ -3,6 +3,7 @@ import { useTheme } from '../../../contexts/ThemeContext';
 import { authenticatedFetch } from '../../../utils/api';
 import { usePlugins } from '../../../contexts/PluginsContext';
 import type { Project, ProjectSession } from '../../../types/app';
+import { logger } from '../../../utils/logger';
 
 type PluginTabContentProps = {
   pluginName: string;
@@ -119,7 +120,7 @@ export default function PluginTabContent({
         }
       } catch (err) {
         if (!active) return;
-        console.error(`[Plugin:${pluginName}] Failed to load:`, err);
+        logger.error(`[Plugin:${pluginName}] Failed to load:`, err);
         if (containerRef.current) {
           const errDiv = document.createElement('div');
           errDiv.style.cssText = 'padding:16px;font-size:13px;color:#dc2626';

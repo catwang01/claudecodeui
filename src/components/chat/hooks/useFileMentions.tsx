@@ -3,6 +3,7 @@ import type { Dispatch, KeyboardEvent, RefObject, SetStateAction } from 'react';
 import { api } from '../../../utils/api';
 import { escapeRegExp } from '../utils/chatFormatting';
 import type { Project } from '../../../types/app';
+import { logger } from '../../../utils/logger';
 
 interface ProjectFileNode {
   name: string;
@@ -110,7 +111,7 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
         })
         .catch((error) => {
           if ((error as { name?: string })?.name === 'AbortError') return;
-          console.error('Error fetching files:', error);
+          logger.error('Error fetching files:', error);
           fileListProjectRef.current = undefined; // allow retry on next @
         });
     }

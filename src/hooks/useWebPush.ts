@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { authenticatedFetch } from '../utils/api';
+import { logger } from '../utils/logger';
 
 type WebPushState = {
   permission: NotificationPermission | 'unsupported';
@@ -72,7 +73,7 @@ export function useWebPush(): WebPushState {
 
       setIsSubscribed(true);
     } catch (err) {
-      console.error('Push subscribe failed:', err);
+      logger.error('Push subscribe failed:', err);
     } finally {
       setIsLoading(false);
     }
@@ -93,7 +94,7 @@ export function useWebPush(): WebPushState {
       }
       setIsSubscribed(false);
     } catch (err) {
-      console.error('Push unsubscribe failed:', err);
+      logger.error('Push unsubscribe failed:', err);
     } finally {
       setIsLoading(false);
     }

@@ -1,6 +1,7 @@
 import { useCallback, useState, useRef } from 'react';
 import type { Project } from '../../../types/app';
 import { api } from '../../../utils/api';
+import { logger } from '../../../utils/logger';
 
 type UseFileTreeUploadOptions = {
   selectedProject: Project | null;
@@ -169,7 +170,7 @@ export const useFileTreeUpload = ({
       );
       onRefresh();
     } catch (err) {
-      console.error('Upload error:', err);
+      logger.error('Upload error:', err);
       showToast(err instanceof Error ? err.message : 'Upload failed', 'error');
     } finally {
       setOperationLoading(false);

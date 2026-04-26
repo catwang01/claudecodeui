@@ -6,6 +6,7 @@ import type { Project, ProjectSession, SessionProvider } from '../../../types/ap
 import { createCachedDiffCalculator, type DiffCalculator } from '../utils/messageTransforms';
 import { normalizedToChatMessages } from './useChatMessages';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
+import { logger } from '../../../utils/logger';
 
 const MESSAGES_PER_PAGE = 20;
 const INITIAL_VISIBLE_MESSAGES = 100;
@@ -360,12 +361,12 @@ export function useChatSessionState({
     const slot = sessionStore.getSessionSlot(selectedSession.id);
     const hasMessages = (slot?.serverMessages.length ?? 0) > 0;
     const isFetching = slot?.status === 'loading';
-    console.log('[mainEffect] triggered sessionKey=%s alreadyLoaded=%s hasData=%s hasMessages=%s isFetching=%s',
+    logger.log('[mainEffect] triggered sessionKey=%s alreadyLoaded=%s hasData=%s hasMessages=%s isFetching=%s',
       sessionKey.slice(0, 24), alreadyLoaded, hasData, hasMessages, isFetching);
 
     // Already loaded — skip. WS reconnect data sync is handled by handleWebSocketReconnect.
     if (alreadyLoaded && hasData) {
-      console.log('[mainEffect] → skip (already loaded)');
+      logger.log('[mainEffect] → skip (already loaded)');
       return;
     }
 
@@ -374,7 +375,7 @@ export function useChatSessionState({
     // next check passes, and skip — the in-flight fetch will populate the store.
     if (isFetching) {
       lastLoadedSessionKeyRef.current = sessionKey;
-      console.log('[mainEffect] → skip (fetch in progress)');
+      logger.log('[mainEffect] → skip (fetch in progress)');
       return;
     }
 
@@ -385,7 +386,7 @@ export function useChatSessionState({
     const prevSessionId = lastLoadedSessionKeyRef.current?.split(':')[0] ?? null;
     if (hasMessages && prevSessionId === selectedSession.id) {
       lastLoadedSessionKeyRef.current = sessionKey;
-      console.log('[mainEffect] → skip (same session, project key updated)');
+      logger.log('[mainEffect] → skip (same session, project key updated)');
       return;
     }
 
@@ -464,7 +465,7 @@ export function useChatSessionState({
     const selectedProject = selectedProjectRef.current;
     if (!selectedSession || !selectedProject) return;
 
-    console.log('[DBG:externalUpdate] triggered externalMessageUpdate=%d sessionId=%s',
+    logger.log('[DBG:externalUpdate] triggered externalMessageUpdate=%d sessionId=%s',
       externalMessageUpdate, selectedSession.id.slice(0, 8));
 
     const reloadExternalMessages = async () => {
@@ -475,7 +476,7 @@ export function useChatSessionState({
         if (!isLoadingRef.current) {
           const currentSlot = sessionStore.getSessionSlot(selectedSession.id);
           const currentCount = currentSlot?.serverMessages.length ?? 0;
-          console.log('[DBG:externalUpdate] calling refreshFromServer currentCount=%d', currentCount);
+          logger.log('[DBG:externalUpdate] calling refreshFromServer currentCount=%d', currentCount);
           await sessionStore.refreshFromServer(selectedSession.id, {
             provider: (selectedSession.__provider || provider) as SessionProvider,
             projectName: selectedProject.name,
@@ -488,7 +489,7 @@ export function useChatSessionState({
           }
         }
       } catch (error) {
-        console.error('Error reloading messages from external update:', error);
+        logger.error('Error reloading messages from external update:', error);
       }
     };
 
@@ -630,7 +631,7 @@ export function useChatSessionState({
           setTokenBudget(null);
         }
       } catch (error) {
-        console.error('Failed to fetch initial token usage:', error);
+        logger.error('Failed to fetch initial token usage:', error);
       }
     };
     fetchInitialTokenUsage();
@@ -755,7 +756,7 @@ export function useChatSessionState({
         setShowLoadAllOverlay(false);
       }
     } catch (error) {
-      console.error('Error loading all messages:', error);
+      logger.error('Error loading all messages:', error);
       allMessagesLoadedRef.current = false;
       setShowLoadAllOverlay(false);
     } finally {

@@ -18,6 +18,7 @@ import type {
 } from '../types/types';
 import { getAllChangedFiles } from '../utils/gitPanelUtils';
 import { useSelectedProvider } from './useSelectedProvider';
+import { logger } from '../../../utils/logger';
 
 // ! use authenticatedFetch directly. fetchWithAuth is redundant 
 const fetchWithAuth = authenticatedFetch as (url: string, options?: RequestInit) => Promise<Response>;
@@ -105,7 +106,7 @@ export function useGitPanelController({
           return;
         }
 
-        console.error('Error fetching file diff:', error);
+        logger.error('Error fetching file diff:', error);
       }
     },
     [selectedProject],
@@ -131,7 +132,7 @@ export function useGitPanelController({
       }
 
       if (data.error) {
-        console.error('Git status error:', data.error);
+        logger.error('Git status error:', data.error);
         setGitStatus({ error: data.error, details: data.details });
         setCurrentBranch('');
         return;
@@ -155,7 +156,7 @@ export function useGitPanelController({
         return;
       }
 
-      console.error('Error fetching git status:', error);
+      logger.error('Error fetching git status:', error);
       setGitStatus({ error: 'Git operation failed', details: String(error) });
       setCurrentBranch('');
     } finally {
@@ -183,7 +184,7 @@ export function useGitPanelController({
       setLocalBranches([]);
       setRemoteBranches([]);
     } catch (error) {
-      console.error('Error fetching branches:', error);
+      logger.error('Error fetching branches:', error);
       setBranches([]);
       setLocalBranches([]);
       setRemoteBranches([]);
@@ -206,7 +207,7 @@ export function useGitPanelController({
 
       setRemoteStatus(null);
     } catch (error) {
-      console.error('Error fetching remote status:', error);
+      logger.error('Error fetching remote status:', error);
       setRemoteStatus(null);
     }
   }, [selectedProject]);
@@ -229,7 +230,7 @@ export function useGitPanelController({
 
         const data = await readJson<GitOperationResponse>(response);
         if (!data.success) {
-          console.error('Failed to switch branch:', data.error);
+          logger.error('Failed to switch branch:', data.error);
           return false;
         }
 
@@ -237,7 +238,7 @@ export function useGitPanelController({
         void fetchGitStatus();
         return true;
       } catch (error) {
-        console.error('Error switching branch:', error);
+        logger.error('Error switching branch:', error);
         return false;
       }
     },
@@ -264,7 +265,7 @@ export function useGitPanelController({
 
         const data = await readJson<GitOperationResponse>(response);
         if (!data.success) {
-          console.error('Failed to create branch:', data.error);
+          logger.error('Failed to create branch:', data.error);
           return false;
         }
 
@@ -273,7 +274,7 @@ export function useGitPanelController({
         void fetchGitStatus();
         return true;
       } catch (error) {
-        console.error('Error creating branch:', error);
+        logger.error('Error creating branch:', error);
         return false;
       } finally {
         setIsCreatingBranch(false);
@@ -423,9 +424,9 @@ export function useGitPanelController({
         return;
       }
 
-      console.error('Publish failed:', data.error);
+      logger.error('Publish failed:', data.error);
     } catch (error) {
-      console.error('Error publishing branch:', error);
+      logger.error('Error publishing branch:', error);
     } finally {
       setIsPublishing(false);
     }
@@ -453,9 +454,9 @@ export function useGitPanelController({
           return;
         }
 
-        console.error('Discard failed:', data.error);
+        logger.error('Discard failed:', data.error);
       } catch (error) {
-        console.error('Error discarding changes:', error);
+        logger.error('Error discarding changes:', error);
       }
     },
     [fetchGitStatus, selectedProject],
@@ -483,9 +484,9 @@ export function useGitPanelController({
           return;
         }
 
-        console.error('Delete failed:', data.error);
+        logger.error('Delete failed:', data.error);
       } catch (error) {
-        console.error('Error deleting untracked file:', error);
+        logger.error('Error deleting untracked file:', error);
       }
     },
     [fetchGitStatus, selectedProject],
@@ -506,7 +507,7 @@ export function useGitPanelController({
         setRecentCommits(data.commits);
       }
     } catch (error) {
-      console.error('Error fetching commits:', error);
+      logger.error('Error fetching commits:', error);
     }
   }, [selectedProject]);
 
@@ -529,7 +530,7 @@ export function useGitPanelController({
           }));
         }
       } catch (error) {
-        console.error('Error fetching commit diff:', error);
+        logger.error('Error fetching commit diff:', error);
       }
     },
     [selectedProject],
@@ -557,10 +558,10 @@ export function useGitPanelController({
           return data.message;
         }
 
-        console.error('Failed to generate commit message:', data.error);
+        logger.error('Failed to generate commit message:', data.error);
         return null;
       } catch (error) {
-        console.error('Error generating commit message:', error);
+        logger.error('Error generating commit message:', error);
         return null;
       }
     },
@@ -591,10 +592,10 @@ export function useGitPanelController({
           return true;
         }
 
-        console.error('Commit failed:', data.error);
+        logger.error('Commit failed:', data.error);
         return false;
       } catch (error) {
-        console.error('Error committing changes:', error);
+        logger.error('Error committing changes:', error);
         return false;
       }
     },
@@ -625,7 +626,7 @@ export function useGitPanelController({
 
       throw new Error(data.error || 'Failed to create initial commit');
     } catch (error) {
-      console.error('Error creating initial commit:', error);
+      logger.error('Error creating initial commit:', error);
       throw error;
     } finally {
       setIsCreatingInitialCommit(false);
@@ -650,7 +651,7 @@ export function useGitPanelController({
         const data = await readJson<GitFileWithDiffResponse>(response);
 
         if (data.error) {
-          console.error('Error fetching file with diff:', data.error);
+          logger.error('Error fetching file with diff:', data.error);
           onFileOpen(filePath);
           return;
         }
@@ -660,7 +661,7 @@ export function useGitPanelController({
           new_string: data.currentContent || '',
         });
       } catch (error) {
-        console.error('Error opening file:', error);
+        logger.error('Error opening file:', error);
         onFileOpen(filePath);
       }
     },

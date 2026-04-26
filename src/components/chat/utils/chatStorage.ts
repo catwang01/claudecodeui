@@ -1,4 +1,5 @@
 import type { ClaudeSettings } from '../types/types';
+import { logger } from '../../../utils/logger';
 
 export const CLAUDE_SETTINGS_KEY = 'claude-settings';
 
@@ -8,7 +9,7 @@ export const safeLocalStorage = {
       localStorage.setItem(key, value);
     } catch (error: any) {
       if (error?.name === 'QuotaExceededError') {
-        console.warn('localStorage quota exceeded, clearing old data');
+        logger.warn('localStorage quota exceeded, clearing old data');
 
         const keys = Object.keys(localStorage);
         const draftKeys = keys.filter((k) => k.startsWith('draft_input_'));
@@ -19,10 +20,10 @@ export const safeLocalStorage = {
         try {
           localStorage.setItem(key, value);
         } catch (retryError) {
-          console.error('Failed to save to localStorage even after cleanup:', retryError);
+          logger.error('Failed to save to localStorage even after cleanup:', retryError);
         }
       } else {
-        console.error('localStorage error:', error);
+        logger.error('localStorage error:', error);
       }
     }
   },
@@ -30,7 +31,7 @@ export const safeLocalStorage = {
     try {
       return localStorage.getItem(key);
     } catch (error) {
-      console.error('localStorage getItem error:', error);
+      logger.error('localStorage getItem error:', error);
       return null;
     }
   },
@@ -38,7 +39,7 @@ export const safeLocalStorage = {
     try {
       localStorage.removeItem(key);
     } catch (error) {
-      console.error('localStorage removeItem error:', error);
+      logger.error('localStorage removeItem error:', error);
     }
   },
 };

@@ -2,6 +2,7 @@ import { AlertCircle, Check, ChevronDown, Download, GitBranch, Plus, RefreshCw, 
 import { useEffect, useRef, useState } from 'react';
 import type { ConfirmationRequest, GitRemoteStatus } from '../types/types';
 import NewBranchModal from './modals/NewBranchModal';
+import { logger } from '../../../utils/logger';
 
 type GitPanelHeaderProps = {
   isMobile: boolean;
@@ -109,7 +110,7 @@ export default function GitPanelHeader({
       const success = await onSwitchBranch(branchName);
       if (success) setShowBranchDropdown(false);
     } catch (error) {
-      console.error('[GitPanelHeader] Failed to switch branch:', error);
+      logger.error('[GitPanelHeader] Failed to switch branch:', error);
     }
   };
 
