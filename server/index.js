@@ -266,9 +266,9 @@ async function setupProjectsWatcher() {
 
             // Set up event listeners
             watcher
-                .on('add', (filePath) => { resolveLocalIdIfPending(filePath); debouncedUpdate('add', filePath, provider, rootPath); })
-                .on('change', (filePath) => { resolveLocalIdIfPending(filePath); debouncedUpdate('change', filePath, provider, rootPath); })
-                .on('unlink', (filePath) => debouncedUpdate('unlink', filePath, provider, rootPath))
+                .on('add', (filePath) => { resolveLocalIdIfPending(filePath); if (filePath.endsWith('.jsonl')) debouncedUpdate('add', filePath, provider, rootPath); })
+                .on('change', (filePath) => { resolveLocalIdIfPending(filePath); if (filePath.endsWith('.jsonl')) debouncedUpdate('change', filePath, provider, rootPath); })
+                .on('unlink', (filePath) => { if (filePath.endsWith('.jsonl')) debouncedUpdate('unlink', filePath, provider, rootPath); })
                 .on('addDir', (dirPath) => debouncedUpdate('addDir', dirPath, provider, rootPath))
                 .on('unlinkDir', (dirPath) => debouncedUpdate('unlinkDir', dirPath, provider, rootPath))
                 .on('error', (error) => {

@@ -304,9 +304,16 @@ export function useProjectsState({
       (session) => session.id === selectedSession.id,
     );
 
-    if (!updatedSelectedSession) {
-      setSelectedSession(null);
+    if (updatedSelectedSession) {
+      // Update the selected session metadata if it changed (e.g. name, status).
+      if (serialize(updatedSelectedSession) !== serialize(selectedSession)) {
+        setSelectedSession(updatedSelectedSession);
+      }
     }
+    // Do NOT clear selectedSession when the session is missing from the updated list —
+    // the sessions list in projects_updated is paginated and may not include the
+    // currently-viewed session.  Clearing it triggers a cascade: URL-effect re-runs →
+    // may pick a different project → mainEffect re-fetches with wrong projectName → data clears.
   }, [latestMessage, selectedProject, selectedSession, activeSessions, projects]);
 
   useEffect(() => {
