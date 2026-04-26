@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, KeyboardEvent, RefObject, SetStateAction } from 'react';
 import { api } from '../../../utils/api';
 import { escapeRegExp } from '../utils/chatFormatting';
@@ -55,40 +55,22 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
   const [cursorPosition, setCursorPosition] = useState(0);
   const [atSymbolPosition, setAtSymbolPosition] = useState(-1);
 
+  const fileListProjectRef = useRef<string | undefined>(undefined);
+  const fetchAbortRef = useRef<AbortController | null>(null);
+
+  // Reset file list when project changes
   useEffect(() => {
-    const abortController = new AbortController();
-
-    const fetchProjectFiles = async () => {
-      const projectName = selectedProject?.name;
-      setFileList([]);
-      setFilteredFiles([]);
-      if (!projectName) {
-        return;
-      }
-
-
-      try {
-        const response = await api.getFiles(projectName, { depth: 10, signal: abortController.signal });
-        if (!response.ok) {
-          return;
-        }
-
-        const files = (await response.json()) as ProjectFileNode[];
-        setFileList(flattenFileTree(files));
-      } catch (error) {
-        // Ignore aborts from rapid project switches; we only care about the latest request.
-        if ((error as { name?: string })?.name === 'AbortError') {
-          return;
-        }
-        console.error('Error fetching files:', error);
-      }
-    };
-
-    fetchProjectFiles();
-    return () => {
-      abortController.abort();
-    };
+    setFileList([]);
+    fileListProjectRef.current = undefined;
+    fetchAbortRef.current?.abort();
   }, [selectedProject?.name]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      fetchAbortRef.current?.abort();
+    };
+  }, []);
 
   useEffect(() => {
     const textBeforeCursor = input.slice(0, cursorPosition);
@@ -111,6 +93,28 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
     setShowFileDropdown(true);
     setSelectedFileIndex(-1);
 
+    // Lazy fetch: load files on first @ use for this project
+    const projectName = selectedProject?.name;
+    if (projectName && fileListProjectRef.current !== projectName) {
+      fileListProjectRef.current = projectName;
+      fetchAbortRef.current?.abort();
+      const abortController = new AbortController();
+      fetchAbortRef.current = abortController;
+
+      api
+        .getFiles(projectName, { depth: 3, signal: abortController.signal })
+        .then(async (response) => {
+          if (!response.ok) return;
+          const files = (await response.json()) as ProjectFileNode[];
+          setFileList(flattenFileTree(files));
+        })
+        .catch((error) => {
+          if ((error as { name?: string })?.name === 'AbortError') return;
+          console.error('Error fetching files:', error);
+          fileListProjectRef.current = undefined; // allow retry on next @
+        });
+    }
+
     const matchingFiles = fileList
       .filter(
         (file) =>
@@ -120,7 +124,7 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
       .slice(0, 10);
 
     setFilteredFiles(matchingFiles);
-  }, [input, cursorPosition, fileList]);
+  }, [input, cursorPosition, fileList, selectedProject?.name]);
 
   const activeFileMentions = useMemo(() => {
     if (!input || fileMentions.length === 0) {

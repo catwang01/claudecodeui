@@ -10,10 +10,13 @@ type UseFileTreeDataResult = {
   loadChildren: (dirPath: string) => void;
 };
 
-/** Mark all directory nodes with childrenStatus: 'unloaded' (depth=1 response has empty children) */
+/** Recursively mark directory nodes with appropriate childrenStatus based on fetched children */
 function markDirectoriesUnloaded(nodes: FileTreeNode[]): FileTreeNode[] {
   return nodes.map((node) => {
     if (node.type === 'directory') {
+      if (node.children && node.children.length > 0) {
+        return { ...node, children: markDirectoriesUnloaded(node.children), childrenStatus: 'loaded' as const };
+      }
       return { ...node, children: [], childrenStatus: 'unloaded' as const };
     }
     return node;
@@ -72,7 +75,7 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
       }
       try {
         const response = await api.getFiles(projectName, {
-          depth: 1,
+          depth: 3,
           signal: abortControllerRef.current!.signal,
         });
 
