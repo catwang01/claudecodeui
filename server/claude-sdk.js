@@ -821,6 +821,9 @@ function getPendingApprovalsForSession(sessionId) {
 function reconnectSessionWriter(sessionId, newRawWs) {
   const session = getSession(sessionId);
   if (!session?.writer?.updateWebSocket) return false;
+  // Only swap writer if the WebSocket has actually changed (e.g. page refresh),
+  // not on routine heartbeat check-session-status polls.
+  if (session.writer.ws === newRawWs) return false;
   session.writer.updateWebSocket(newRawWs);
   console.log(`[RECONNECT] Writer swapped for session ${sessionId}`);
   return true;
