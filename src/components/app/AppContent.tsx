@@ -123,16 +123,15 @@ export default function AppContent() {
     }
   }, [isConnected, selectedSession?.id, sendMessage]);
 
-  // Poll backend every 15s for any session stuck in isProcessing state
+  // Poll backend every 5s for any session stuck in isProcessing state
   useEffect(() => {
     if (processingSessionsMap.size === 0) return;
 
     const interval = setInterval(() => {
       if (ws?.readyState !== WebSocket.OPEN) return;
-      processingSessionsMap.forEach((provider, sessionId) => {
-        sendMessage({ type: 'check-session-status', sessionId, provider });
-      });
-    }, 15_000);
+      const sessions = Array.from(processingSessionsMap.entries()).map(([sessionId, provider]) => ({ sessionId, provider }));
+      sendMessage({ type: 'check-sessions-status', sessions });
+    }, 5_000);
 
     return () => clearInterval(interval);
   }, [processingSessionsMap, sendMessage, ws]);

@@ -1672,6 +1672,26 @@ function handleChatConnection(ws, request) {
                 console.log('[DEBUG] Abort Cursor session:', data.sessionId);
                 const success = abortCursorSession(data.sessionId);
                 writer.send(createNormalizedMessage({ kind: 'complete', exitCode: success ? 0 : 1, aborted: true, success, sessionId: data.sessionId, provider: 'cursor' }));
+            } else if (data.type === 'check-sessions-status') {
+                // Batch check multiple sessions at once
+                const sessions = data.sessions || [];
+                for (const { sessionId, provider: p } of sessions) {
+                    const prov = p || 'claude';
+                    let isActive;
+                    if (prov === 'cursor') {
+                        isActive = isCursorSessionActive(sessionId);
+                    } else if (prov === 'codex') {
+                        isActive = isCodexSessionActive(sessionId);
+                    } else if (prov === 'gemini') {
+                        isActive = isGeminiSessionActive(sessionId);
+                    } else {
+                        isActive = isClaudeSDKSessionActive(sessionId);
+                        if (isActive) {
+                            reconnectSessionWriter(sessionId, ws);
+                        }
+                    }
+                    writer.send({ type: 'session-status', sessionId, provider: prov, isProcessing: isActive });
+                }
             } else if (data.type === 'check-session-status') {
                 // Check if a specific session is currently processing
                 const provider = data.provider || 'claude';
