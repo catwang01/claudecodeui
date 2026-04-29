@@ -3,11 +3,15 @@
  *
  * Holds per-session state in a Map keyed by sessionId.
  * Session switch = change activeSessionId pointer. No clearing. Old data stays.
- * WebSocket handler = store.appendRealtime(msg.sessionId, msg). One line.
- * No localStorage for messages. Backend JSONL is the source of truth.
+ * WebSocket handler = store.appendWsMessage(msg.sessionId, msg). One line.
+ * No localStorage for messages. Backend is the source of truth (REST + local JSONL merged).
+ *
+ * Single messages array: server messages and realtime messages are merged on the backend.
+ * REST calls (fetchFromServer / refreshFromServer) replace the array.
+ * WebSocket calls (appendWsMessage) dedup-append to the array.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import type { SessionProvider } from '../types/app';
 import { authenticatedFetch } from '../utils/api';
 import { logger } from '../utils/logger';
@@ -61,6 +65,7 @@ export interface NormalizedMessage {
   parentToolUseId?: string;
   subagentTools?: unknown[];
   isFinal?: boolean;
+  isMeta?: boolean;
   // Cursor-specific ordering
   sequence?: number;
   rowid?: number;
@@ -73,12 +78,8 @@ export interface NormalizedMessage {
 export type SessionStatus = 'idle' | 'loading' | 'streaming' | 'error';
 
 export interface SessionSlot {
-  serverMessages: NormalizedMessage[];
-  realtimeMessages: NormalizedMessage[];
-  merged: NormalizedMessage[];
-  /** @internal Cache-invalidation refs for computeMerged */
-  _lastServerRef: NormalizedMessage[];
-  _lastRealtimeRef: NormalizedMessage[];
+  /** Single merged array: server history + unconfirmed realtime messages, deduped. */
+  messages: NormalizedMessage[];
   status: SessionStatus;
   fetchedAt: number;
   total: number;
@@ -91,11 +92,7 @@ const EMPTY: NormalizedMessage[] = [];
 
 function createEmptySlot(): SessionSlot {
   return {
-    serverMessages: EMPTY,
-    realtimeMessages: EMPTY,
-    merged: EMPTY,
-    _lastServerRef: EMPTY,
-    _lastRealtimeRef: EMPTY,
+    messages: EMPTY,
     status: 'idle',
     fetchedAt: 0,
     total: 0,
@@ -105,68 +102,34 @@ function createEmptySlot(): SessionSlot {
   };
 }
 
-
-/**
- * Compute merged messages: server + realtime, deduped.
- *
- * Server messages are the source of truth. Realtime messages are the
- * in-flight streaming window. Dedup uses two signals:
- *  1. ID equality: realtime message id already in server → skip
- *  2. localMessageId: server message has localMessageId == realtime message id
- *     (the backend tagged the server-persisted copy of an optimistic local_ message) → skip
- */
-/** @internal exported for testing */
-export function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[]): NormalizedMessage[] {
-  if (realtime.length === 0) return server;
-  if (server.length === 0) return realtime;
-
-  const serverIds = new Set(server.map(m => m.id));
-  const mappedLocalIds = new Set(
-    server.filter(m => m.localMessageId).map(m => m.localMessageId!)
-  );
-
-  const extra = realtime.filter(m => !serverIds.has(m.id) && !mappedLocalIds.has(m.id));
-  if (extra.length === 0) return server;
-  return [...server, ...extra];
-}
-
-/**
- * Recompute slot.merged only when the input arrays have actually changed
- * (by reference). Returns true if merged was recomputed.
- */
-function recomputeMergedIfNeeded(slot: SessionSlot): boolean {
-  if (slot.serverMessages === slot._lastServerRef && slot.realtimeMessages === slot._lastRealtimeRef) {
-    return false;
-  }
-  slot._lastServerRef = slot.serverMessages;
-  slot._lastRealtimeRef = slot.realtimeMessages;
-  slot.merged = computeMerged(slot.serverMessages, slot.realtimeMessages);
-  return true;
-}
-
 // ─── Stale threshold ─────────────────────────────────────────────────────────
 
 const STALE_THRESHOLD_MS = 30_000;
 
-const MAX_REALTIME_MESSAGES = 500;
-
 /**
  * Pure helper: determine whether a refresh actually changed anything worth re-rendering.
- * Compares all message IDs so insertions/deletions anywhere in the list are detected.
- * Exported for unit testing.
+ * @internal exported for testing
  */
-export function didRefreshChange(
-  prevMessages: NormalizedMessage[],
-  newMessages: NormalizedMessage[],
-  prevRealtimeCount: number,
-  newRealtimeCount: number,
-): boolean {
-  if (prevMessages.length !== newMessages.length) return true;
-  if (prevRealtimeCount !== newRealtimeCount) return true;
-  for (let i = 0; i < prevMessages.length; i++) {
-    if (prevMessages[i].id !== newMessages[i].id) return true;
+export function didMessagesChange(prev: NormalizedMessage[], next: NormalizedMessage[]): boolean {
+  if (prev.length !== next.length) return true;
+  for (let i = 0; i < prev.length; i++) {
+    if (prev[i].id !== next[i].id) return true;
   }
   return false;
+}
+
+/**
+ * Filter `incoming` messages to only those not already present in `existing`,
+ * deduplicating by both `id` and `localMessageId`.
+ * @internal exported for testing
+ */
+export function dedupeMessages(
+  existing: NormalizedMessage[],
+  incoming: NormalizedMessage[],
+): NormalizedMessage[] {
+  const ids = new Set(existing.map(m => m.id));
+  const localIds = new Set(existing.filter(m => m.localMessageId).map(m => m.localMessageId!));
+  return incoming.filter(m => !ids.has(m.id) && !localIds.has(m.id));
 }
 
 // ─── Hook ────────────────────────────────────────────────────────────────────
@@ -186,23 +149,6 @@ export function useSessionStore() {
     activeSessionIdRef.current = sessionId;
   }, []);
 
-  // Debug: log only when serverMessages / realtimeMessages / merged actually change
-  const _debugPrevRef = useRef<{ server: NormalizedMessage[]; realtime: NormalizedMessage[]; merged: NormalizedMessage[] } | null>(null);
-  useEffect(() => {
-    const sessionId = activeSessionIdRef.current;
-    if (!sessionId) return;
-    const slot = storeRef.current.get(sessionId);
-    if (!slot) return;
-    const prev = _debugPrevRef.current;
-    if (prev && prev.server === slot.serverMessages && prev.realtime === slot.realtimeMessages && prev.merged === slot.merged) return;
-    _debugPrevRef.current = { server: slot.serverMessages, realtime: slot.realtimeMessages, merged: slot.merged };
-    logger.group(`[SessionStore] session=${sessionId.slice(0, 8)}`);
-    logger.log('serverMessages  (%d):', slot.serverMessages.length, slot.serverMessages);
-    logger.log('realtimeMessages(%d):', slot.realtimeMessages.length, slot.realtimeMessages);
-    logger.log('merged          (%d):', slot.merged.length, slot.merged);
-    logger.groupEnd();
-  });
-
   const getSlot = useCallback((sessionId: string): SessionSlot => {
     const store = storeRef.current;
     if (!store.has(sessionId)) {
@@ -214,7 +160,7 @@ export function useSessionStore() {
   const has = useCallback((sessionId: string) => storeRef.current.has(sessionId), []);
 
   /**
-   * Fetch messages from the unified endpoint and populate serverMessages.
+   * Fetch messages from the unified endpoint (server + local realtime merged by backend).
    */
   const fetchFromServer = useCallback(async (
     sessionId: string,
@@ -249,15 +195,14 @@ export function useSessionStore() {
       }
 
       const data = await response.json();
-      const messages: NormalizedMessage[] = data.messages || [];
+      const newMessages: NormalizedMessage[] = data.messages || [];
 
-      slot.serverMessages = messages;
-      slot.total = data.total ?? messages.length;
+      slot.messages = newMessages;
+      slot.total = data.total ?? newMessages.length;
       slot.hasMore = Boolean(data.hasMore);
-      slot.offset = (opts.offset ?? 0) + messages.length;
+      slot.offset = (opts.offset ?? 0) + newMessages.length;
       slot.fetchedAt = Date.now();
       slot.status = 'idle';
-      recomputeMergedIfNeeded(slot);
       if (data.tokenUsage) {
         slot.tokenUsage = data.tokenUsage;
       }
@@ -273,7 +218,7 @@ export function useSessionStore() {
   }, [getSlot, notify]);
 
   /**
-   * Load older (paginated) messages and prepend to serverMessages.
+   * Load older (paginated) messages and prepend to messages.
    */
   const fetchMore = useCallback(async (
     sessionId: string,
@@ -305,10 +250,9 @@ export function useSessionStore() {
       const olderMessages: NormalizedMessage[] = data.messages || [];
 
       // Prepend older messages (they're earlier in the conversation)
-      slot.serverMessages = [...olderMessages, ...slot.serverMessages];
+      slot.messages = [...olderMessages, ...slot.messages];
       slot.hasMore = Boolean(data.hasMore);
       slot.offset = slot.offset + olderMessages.length;
-      recomputeMergedIfNeeded(slot);
       notify(sessionId);
       return slot;
     } catch (error) {
@@ -318,37 +262,31 @@ export function useSessionStore() {
   }, [getSlot, notify]);
 
   /**
-   * Append a realtime (WebSocket) message to the correct session slot.
-   * This works regardless of which session is actively viewed.
+   * Append a WebSocket message to the correct session slot.
+   * Deduplicates by id and localMessageId before appending.
    */
-  const appendRealtime = useCallback((sessionId: string, msg: NormalizedMessage) => {
+  const appendWsMessage = useCallback((sessionId: string, msg: NormalizedMessage) => {
     const slot = getSlot(sessionId);
-    let updated = [...slot.realtimeMessages, msg];
-    if (updated.length > MAX_REALTIME_MESSAGES) {
-      updated = updated.slice(-MAX_REALTIME_MESSAGES);
-    }
-    slot.realtimeMessages = updated;
-    recomputeMergedIfNeeded(slot);
+    if (dedupeMessages(slot.messages, [msg]).length === 0) return;
+    slot.messages = [...slot.messages, msg];
     notify(sessionId);
   }, [getSlot, notify]);
 
   /**
-   * Append multiple realtime messages at once (batch).
+   * Append multiple WebSocket messages at once (batch), deduped.
    */
-  const appendRealtimeBatch = useCallback((sessionId: string, msgs: NormalizedMessage[]) => {
+  const appendWsMessageBatch = useCallback((sessionId: string, msgs: NormalizedMessage[]) => {
     if (msgs.length === 0) return;
     const slot = getSlot(sessionId);
-    let updated = [...slot.realtimeMessages, ...msgs];
-    if (updated.length > MAX_REALTIME_MESSAGES) {
-      updated = updated.slice(-MAX_REALTIME_MESSAGES);
-    }
-    slot.realtimeMessages = updated;
-    recomputeMergedIfNeeded(slot);
+    const extra = dedupeMessages(slot.messages, msgs);
+    if (extra.length === 0) return;
+    slot.messages = [...slot.messages, ...extra];
     notify(sessionId);
   }, [getSlot, notify]);
 
   /**
-   * Re-fetch serverMessages from the unified endpoint (e.g., on projects_updated).
+   * Re-fetch messages from the backend (server + local realtime merged).
+   * Replaces the current messages array if content changed.
    */
   const refreshFromServer = useCallback(async (
     sessionId: string,
@@ -361,7 +299,6 @@ export function useSessionStore() {
     } = {},
   ) => {
     const slot = getSlot(sessionId);
-    console.trace(`[DBG:refreshFromServer] session=${sessionId.slice(0, 8)}`);
     try {
       const params = new URLSearchParams();
       if (opts.provider) params.append('provider', opts.provider);
@@ -378,39 +315,20 @@ export function useSessionStore() {
 
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
-
-      const prevMessages = slot.serverMessages;
-      const prevRealtimeCount = slot.realtimeMessages.length;
-
       const newMessages: NormalizedMessage[] = data.messages || [];
-
-      // Drop realtime messages confirmed in new server data.
-      const serverIds = new Set(newMessages.map(m => m.id));
-      const mappedLocalIds = new Set(
-        newMessages.filter(m => m.localMessageId).map(m => m.localMessageId!)
-      );
-      const newRealtime = slot.realtimeMessages.filter(
-        m => !serverIds.has(m.id) && !mappedLocalIds.has(m.id)
-      );
 
       // Always update metadata so isStale doesn't keep re-triggering.
       slot.fetchedAt = Date.now();
       slot.total = data.total ?? newMessages.length;
       slot.hasMore = Boolean(data.hasMore);
 
-      // Only replace arrays and notify when content actually changed.
-      // Preserving the existing reference prevents spurious recomputeMerged
-      // calls and avoids React re-renders when nothing visible changed.
-      const changed = didRefreshChange(prevMessages, newMessages, prevRealtimeCount, newRealtime.length);
+      const changed = didMessagesChange(slot.messages, newMessages);
       logger.log(
         `[refreshFromServer] session=${sessionId.slice(0, 8)} changed=${changed}`,
-        `prevServer=${prevMessages.length} newServer=${newMessages.length}`,
-        `prevRealtime=${prevRealtimeCount} newRealtime=${newRealtime.length}`,
+        `prev=${slot.messages.length} new=${newMessages.length}`,
       );
       if (changed) {
-        slot.serverMessages = newMessages;
-        slot.realtimeMessages = newRealtime;
-        recomputeMergedIfNeeded(slot);
+        slot.messages = newMessages;
         notify(sessionId);
       }
     } catch (error) {
@@ -451,57 +369,49 @@ export function useSessionStore() {
       kind: 'stream_delta',
       content: accumulatedText,
     };
-    const idx = slot.realtimeMessages.findIndex(m => m.id === streamId);
+    const idx = slot.messages.findIndex(m => m.id === streamId);
     if (idx >= 0) {
-      slot.realtimeMessages = [...slot.realtimeMessages];
-      slot.realtimeMessages[idx] = msg;
+      slot.messages = [...slot.messages];
+      slot.messages[idx] = msg;
     } else {
-      slot.realtimeMessages = [...slot.realtimeMessages, msg];
+      slot.messages = [...slot.messages, msg];
     }
-    recomputeMergedIfNeeded(slot);
     notify(sessionId);
   }, [getSlot, notify]);
 
   /**
    * Finalize streaming: convert the streaming message to a regular text message.
-   * The well-known streaming ID is replaced with a unique text message ID.
    */
   const finalizeStreaming = useCallback((sessionId: string) => {
     const slot = storeRef.current.get(sessionId);
     if (!slot) return;
     const streamId = `__streaming_${sessionId}`;
-    const idx = slot.realtimeMessages.findIndex(m => m.id === streamId);
+    const idx = slot.messages.findIndex(m => m.id === streamId);
     if (idx >= 0) {
-      const stream = slot.realtimeMessages[idx];
-      slot.realtimeMessages = [...slot.realtimeMessages];
-      slot.realtimeMessages[idx] = {
+      const stream = slot.messages[idx];
+      slot.messages = [...slot.messages];
+      slot.messages[idx] = {
         ...stream,
         id: `text_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         kind: 'text',
         role: 'assistant',
       };
-      recomputeMergedIfNeeded(slot);
       notify(sessionId);
     }
   }, [notify]);
 
   /**
-   * Clear realtime messages for a session (e.g., after stream completes and server fetch catches up).
+   * No-op: kept for API compatibility. refreshFromServer now replaces messages entirely.
    */
-  const clearRealtime = useCallback((sessionId: string) => {
-    const slot = storeRef.current.get(sessionId);
-    if (slot) {
-      slot.realtimeMessages = [];
-      recomputeMergedIfNeeded(slot);
-      notify(sessionId);
-    }
-  }, [notify]);
+  const clearRealtime = useCallback((_sessionId: string) => {
+    // No-op: the backend merges server + local, so refreshFromServer replaces everything.
+  }, []);
 
   /**
-   * Get merged messages for a session (for rendering).
+   * Get messages for a session (for rendering).
    */
   const getMessages = useCallback((sessionId: string): NormalizedMessage[] => {
-    return storeRef.current.get(sessionId)?.merged ?? [];
+    return storeRef.current.get(sessionId)?.messages ?? [];
   }, []);
 
   /**
@@ -516,8 +426,8 @@ export function useSessionStore() {
     has,
     fetchFromServer,
     fetchMore,
-    appendRealtime,
-    appendRealtimeBatch,
+    appendWsMessage,
+    appendWsMessageBatch,
     refreshFromServer,
     setActiveSession,
     setStatus,
@@ -529,7 +439,7 @@ export function useSessionStore() {
     getSessionSlot,
   }), [
     getSlot, has, fetchFromServer, fetchMore,
-    appendRealtime, appendRealtimeBatch, refreshFromServer,
+    appendWsMessage, appendWsMessageBatch, refreshFromServer,
     setActiveSession, setStatus, isStale, updateStreaming, finalizeStreaming,
     clearRealtime, getMessages, getSessionSlot,
   ]);

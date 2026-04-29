@@ -65,6 +65,7 @@ interface UseChatRealtimeHandlersArgs {
   onSessionInactive?: (sessionId?: string | null) => void;
   onSessionProcessing?: (sessionId?: string | null, provider?: string) => void;
   onSessionNotProcessing?: (sessionId?: string | null) => void;
+  onPreSessionCreated?: (newSessionId: string) => void;
   onReplaceTemporarySession?: (sessionId?: string | null) => void;
   onNavigateToSession?: (sessionId: string) => void;
   onWebSocketReconnect?: () => void;
@@ -94,6 +95,7 @@ export function useChatRealtimeHandlers({
   onSessionInactive,
   onSessionProcessing,
   onSessionNotProcessing,
+  onPreSessionCreated,
   onReplaceTemporarySession,
   onNavigateToSession,
   onWebSocketReconnect,
@@ -196,7 +198,7 @@ export function useChatRealtimeHandlers({
       }
       // Also route to store for non-active sessions
       if (sid && sid !== activeViewSessionId) {
-        sessionStore.appendRealtime(sid, msg as NormalizedMessage);
+        sessionStore.appendWsMessage(sid, msg as NormalizedMessage);
       }
       return;
     }
@@ -220,7 +222,7 @@ export function useChatRealtimeHandlers({
     // --- All other messages: route to store (skip control-only events) ---
     const CONTROL_KINDS = new Set(['complete', 'status', 'permission_request', 'permission_cancelled', 'session_created']);
     if (sid && !CONTROL_KINDS.has(msg.kind)) {
-      sessionStore.appendRealtime(sid, msg as NormalizedMessage);
+      sessionStore.appendWsMessage(sid, msg as NormalizedMessage);
     }
 
     // --- UI side effects for specific kinds ---
@@ -235,6 +237,7 @@ export function useChatRealtimeHandlers({
             pendingViewSessionRef.current.sessionId = newSessionId;
           }
           setCurrentSessionId(newSessionId);
+          onPreSessionCreated?.(newSessionId);
           onReplaceTemporarySession?.(newSessionId);
           setPendingPermissionRequests((prev) =>
             prev.map((r) => (r.sessionId ? r : { ...r, sessionId: newSessionId })),
@@ -263,17 +266,6 @@ export function useChatRealtimeHandlers({
         setPendingPermissionRequests([]);
         onSessionInactive?.(sid);
         onSessionNotProcessing?.(sid);
-
-        // Refresh server messages after completion to clear realtimeMessages,
-        // regardless of projects_updated ordering
-        const completeSessionId = sid || currentSessionId;
-        if (completeSessionId && selectedProject && selectedSession) {
-          sessionStore.refreshFromServer(completeSessionId, {
-            provider: (selectedSession.__provider || provider) as SessionProvider,
-            projectName: selectedProject.name,
-            projectPath: selectedProject.fullPath || selectedProject.path || '',
-          });
-        }
 
         // Handle aborted case
         if (msg.aborted) {
@@ -373,6 +365,7 @@ export function useChatRealtimeHandlers({
     onSessionInactive,
     onSessionProcessing,
     onSessionNotProcessing,
+    onPreSessionCreated,
     onReplaceTemporarySession,
     onNavigateToSession,
     onWebSocketReconnect,

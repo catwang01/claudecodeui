@@ -151,20 +151,15 @@ export function useChatSessionState({
 
   // When a real session ID arrives and we have a pending user message, flush it to the store.
   // Must be a useEffect (not a render-time side effect) so it only runs once after commit —
-  // calling appendRealtime during render can fire multiple times in React 18 concurrent mode,
+  // calling appendWsMessage during render can fire multiple times in React 18 concurrent mode,
   // which is what caused the message to be duplicated across sessions on every switch.
   useEffect(() => {
     if (!activeSessionId || !pendingUserMessage) return;
-    // Guard: only flush to the session that was created for this pending message.
-    // pendingViewSessionRef.current is set (non-null) while a new session is being created.
-    // Its .sessionId is null until session_created fires, then set to the real session ID.
-    // If it's non-null but .sessionId doesn't match activeSessionId, the user navigated
-    // to a different session before session_created fired — don't misattribute the message.
     if (pendingViewSessionRef.current !== null && pendingViewSessionRef.current.sessionId !== activeSessionId) return;
     const prov = (localStorage.getItem('selected-provider') as SessionProvider) || 'claude';
     const normalized = chatMessageToNormalized(pendingUserMessage, activeSessionId, prov);
     if (normalized) {
-      sessionStore.appendRealtime(activeSessionId, normalized);
+      sessionStore.appendWsMessage(activeSessionId, normalized);
     }
     setPendingUserMessage(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -202,7 +197,7 @@ export function useChatSessionState({
     const prov = (localStorage.getItem('selected-provider') as SessionProvider) || 'claude';
     const normalized = chatMessageToNormalized(msg, activeSessionId, prov);
     if (normalized) {
-      sessionStore.appendRealtime(activeSessionId, normalized);
+      sessionStore.appendWsMessage(activeSessionId, normalized);
     }
   }, [activeSessionId, sessionStore]);
 
@@ -210,6 +205,21 @@ export function useChatSessionState({
     if (!activeSessionId) return;
     sessionStore.clearRealtime(activeSessionId);
   }, [activeSessionId, sessionStore]);
+
+  /**
+   * Pre-populate the new session's slot with the pending user message BEFORE
+   * navigation fires. Called from session_created handler so the slot is
+   * already filled when selectedSession changes, preventing a blank flash.
+   */
+  const flushPendingMessageToSession = useCallback((sessionId: string) => {
+    if (!pendingUserMessage) return;
+    const prov = (localStorage.getItem('selected-provider') as SessionProvider) || 'claude';
+    const normalized = chatMessageToNormalized(pendingUserMessage, sessionId, prov);
+    if (normalized) {
+      sessionStore.appendWsMessage(sessionId, normalized);
+    }
+    setPendingUserMessage(null);
+  }, [pendingUserMessage, sessionStore]);
 
   const rewindMessages = useCallback((count: number) => setViewHiddenCount(count), []);
 
@@ -255,7 +265,7 @@ export function useChatSessionState({
           projectPath: selectedProject.fullPath || selectedProject.path || '',
           limit: MESSAGES_PER_PAGE,
         });
-        if (!slot || slot.serverMessages.length === 0) return false;
+        if (!slot || slot.messages.length === 0) return false;
 
         pendingScrollRestoreRef.current = { height: previousScrollHeight, top: previousScrollTop };
         setHasMoreMessages(slot.hasMore);
@@ -359,7 +369,7 @@ export function useChatSessionState({
     const alreadyLoaded = lastLoadedSessionKeyRef.current === sessionKey;
     const hasData = sessionStore.has(selectedSession.id);
     const slot = sessionStore.getSessionSlot(selectedSession.id);
-    const hasMessages = (slot?.serverMessages.length ?? 0) > 0;
+    const hasMessages = (slot?.messages.length ?? 0) > 0;
     const isFetching = slot?.status === 'loading';
     logger.log('[mainEffect] triggered sessionKey=%s alreadyLoaded=%s hasData=%s hasMessages=%s isFetching=%s',
       sessionKey.slice(0, 24), alreadyLoaded, hasData, hasMessages, isFetching);
@@ -475,7 +485,7 @@ export function useChatSessionState({
         // Skip store refresh during active streaming
         if (!isLoadingRef.current) {
           const currentSlot = sessionStore.getSessionSlot(selectedSession.id);
-          const currentCount = currentSlot?.serverMessages.length ?? 0;
+          const currentCount = currentSlot?.messages.length ?? 0;
           logger.log('[DBG:externalUpdate] calling refreshFromServer currentCount=%d', currentCount);
           await sessionStore.refreshFromServer(selectedSession.id, {
             provider: (selectedSession.__provider || provider) as SessionProvider,
@@ -804,5 +814,6 @@ export function useChatSessionState({
     scrollToBottomAndReset,
     isNearBottom,
     handleScroll,
+    flushPendingMessageToSession,
   };
 }

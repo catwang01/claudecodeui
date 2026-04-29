@@ -26,6 +26,7 @@ import {
 } from './services/notification-orchestrator.js';
 import { claudeAdapter } from './providers/claude/adapter.js';
 import { createNormalizedMessage } from './providers/types.js';
+import { appendMessage, appendMessageAsync } from './utils/localMessageWriter.js';
 
 const activeSessions = new Map();
 const pendingToolApprovals = new Map();
@@ -485,6 +486,18 @@ async function queryClaudeSDK(command, options = {}, ws) {
   let sessionCreatedSent = false;
   let tempImagePaths = [];
   let tempDir = null;
+  let userMessageWritten = false;
+
+  // Write Point A: resume session — session ID already known.
+  // Skip if no localMessageId: a message without a stable ID can't be deduped later.
+  if (capturedSessionId && command && options.localMessageId) {
+    appendMessage(capturedSessionId, createNormalizedMessage({
+      kind: 'text', role: 'user', content: command,
+      sessionId: capturedSessionId, provider: 'claude',
+      id: options.localMessageId,
+    }));
+    userMessageWritten = true;
+  }
 
   const emitNotification = (event) => {
     notifyUserIfEnabled({
@@ -653,6 +666,18 @@ async function queryClaudeSDK(command, options = {}, ws) {
           ws.setSessionId(capturedSessionId);
         }
 
+        // Write Point B: new session — await the write BEFORE notifying frontend,
+        // so fetchFromServer triggered by session_created always finds it in local JSONL.
+        // Skip if no localMessageId: a message without a stable ID can't be deduped later.
+        if (command && !userMessageWritten && options.localMessageId) {
+          await appendMessageAsync(capturedSessionId, createNormalizedMessage({
+            kind: 'text', role: 'user', content: command,
+            sessionId: capturedSessionId, provider: 'claude',
+            id: options.localMessageId,
+          }));
+          userMessageWritten = true;
+        }
+
         // Send session-created event only once for new sessions
         if (!sessionId && !sessionCreatedSent) {
           sessionCreatedSent = true;
@@ -674,6 +699,8 @@ async function queryClaudeSDK(command, options = {}, ws) {
           msg.parentToolUseId = transformedMessage.parentToolUseId;
         }
         ws.send(msg);
+        // Persist each stream message to local JSONL as history
+        appendMessage(capturedSessionId || sessionId || null, msg);
       }
 
       // Extract and send token budget updates from result messages

@@ -116,6 +116,7 @@ function ChatInterface({
     scrollToBottom,
     scrollToBottomAndReset,
     handleScroll,
+    flushPendingMessageToSession,
   } = useChatSessionState({
     selectedProject,
     selectedSession,
@@ -212,7 +213,7 @@ function ChatInterface({
     if (!selectedProject || !selectedSession) return;
     const providerVal = (selectedSession.__provider || (localStorage.getItem('selected-provider') as SessionProvider)) || 'claude';
     const currentSlot = sessionStore.getSessionSlot(selectedSession.id);
-    const currentCount = currentSlot?.serverMessages.length ?? 0;
+    const currentCount = currentSlot?.messages.length ?? 0;
     await sessionStore.refreshFromServer(selectedSession.id, {
       provider: providerVal as SessionProvider,
       projectName: selectedProject.name,
@@ -250,6 +251,7 @@ function ChatInterface({
     onSessionInactive,
     onSessionProcessing,
     onSessionNotProcessing,
+    onPreSessionCreated: flushPendingMessageToSession,
     onReplaceTemporarySession,
     onNavigateToSession,
     onWebSocketReconnect: handleWebSocketReconnect,
@@ -352,6 +354,7 @@ function ChatInterface({
           showRawParameters={showRawParameters}
           showThinking={showThinking}
           showMetaMessages={showMetaMessages}
+          selectedProject={selectedProject}
         />
 
         <ChatComposer
