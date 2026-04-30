@@ -319,7 +319,9 @@ export function useChatSessionState({
   // Initial scroll to bottom
   useEffect(() => {
     if (!pendingInitialScrollRef.current || !scrollContainerRef.current || isLoadingSessionMessages) return;
-    if (chatMessages.length === 0) { pendingInitialScrollRef.current = false; return; }
+    // Don't clear pendingInitialScrollRef here — messages may not have loaded yet
+    // (on initial mount, isLoadingSessionMessages is false before loading begins)
+    if (chatMessages.length === 0) return;
     pendingInitialScrollRef.current = false;
     if (!searchScrollActiveRef.current) setTimeout(() => scrollToBottom(), 200);
   }, [chatMessages.length, isLoadingSessionMessages, scrollToBottom]);
