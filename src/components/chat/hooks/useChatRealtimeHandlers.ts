@@ -69,6 +69,7 @@ interface UseChatRealtimeHandlersArgs {
   onReplaceTemporarySession?: (sessionId?: string | null) => void;
   onNavigateToSession?: (sessionId: string) => void;
   onWebSocketReconnect?: () => void;
+  onAssistantSpeech?: (text: string) => void;
   sessionStore: SessionStore;
 }
 
@@ -99,6 +100,7 @@ export function useChatRealtimeHandlers({
   onReplaceTemporarySession,
   onNavigateToSession,
   onWebSocketReconnect,
+  onAssistantSpeech,
   sessionStore,
 }: UseChatRealtimeHandlersArgs) {
   const lastProcessedMessageRef = useRef<LatestChatMessage | null>(null);
@@ -226,6 +228,10 @@ export function useChatRealtimeHandlers({
           sessionStore.updateStreaming(sid, accumulatedStreamRef.current, provider);
         }
         sessionStore.finalizeStreaming(sid);
+      }
+      // Speak the full streamed response
+      if (accumulatedStreamRef.current) {
+        onAssistantSpeech?.(accumulatedStreamRef.current);
       }
       accumulatedStreamRef.current = '';
       streamBufferRef.current = '';
@@ -357,6 +363,10 @@ export function useChatRealtimeHandlers({
       // text, tool_use, tool_result, thinking, interactive_prompt, task_notification
       // → already routed to store above, no UI side effects needed
       default:
+        // Speak non-streaming assistant text messages
+        if (msg.kind === 'text' && msg.role !== 'user' && msg.content) {
+          onAssistantSpeech?.(msg.content);
+        }
         break;
     }
   }, [
@@ -382,6 +392,7 @@ export function useChatRealtimeHandlers({
     onReplaceTemporarySession,
     onNavigateToSession,
     onWebSocketReconnect,
+    onAssistantSpeech,
     sessionStore,
   ]);
 }

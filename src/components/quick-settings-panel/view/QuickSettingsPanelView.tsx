@@ -4,6 +4,7 @@ import { useDeviceSettings } from '../../../hooks/useDeviceSettings';
 import { useUiPreferences } from '../../../hooks/useUiPreferences';
 import { useTheme } from '../../../contexts/ThemeContext';
 import { useQuickSettingsDrag } from '../hooks/useQuickSettingsDrag';
+import { useTTS } from '../../../hooks/useTTS';
 import type { PreferenceToggleKey, QuickSettingsPreferences } from '../types';
 import QuickSettingsContent from './QuickSettingsContent';
 import QuickSettingsHandle from './QuickSettingsHandle';
@@ -14,6 +15,7 @@ export default function QuickSettingsPanelView() {
   const { isMobile } = useDeviceSettings({ trackPWA: false });
   const { isDarkMode } = useTheme();
   const { preferences, setPreference } = useUiPreferences();
+  const tts = useTTS();
   const {
     isDragging,
     handleStyle,
@@ -77,6 +79,9 @@ export default function QuickSettingsPanelView() {
             isDarkMode={isDarkMode}
             preferences={quickSettingsPreferences}
             onPreferenceChange={handlePreferenceChange}
+            ttsEnabled={tts.enabled}
+            ttsSupported={tts.supported}
+            onTtsToggle={tts.toggle}
           />
         </div>
       </div>
