@@ -49,7 +49,7 @@ interface ChatMessagesPaneProps {
   autoExpandTools?: boolean;
   showRawParameters?: boolean;
   showThinking?: boolean;
-  showMetaMessages?: boolean;
+  showSubAgentInput?: boolean;
   selectedProject: Project;
 }
 
@@ -95,7 +95,7 @@ export default function ChatMessagesPane({
   autoExpandTools,
   showRawParameters,
   showThinking,
-  showMetaMessages,
+  showSubAgentInput,
   selectedProject,
 }: ChatMessagesPaneProps) {
   const { t } = useTranslation('chat');
@@ -253,7 +253,7 @@ export default function ChatMessagesPane({
                 autoExpandTools={autoExpandTools}
                 showRawParameters={showRawParameters}
                 showThinking={showThinking}
-                showMetaMessages={showMetaMessages}
+                showSubAgentInput={showSubAgentInput}
                 selectedProject={selectedProject}
                 provider={provider}
               />

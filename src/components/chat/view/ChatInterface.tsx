@@ -38,7 +38,7 @@ function ChatInterface({
   autoExpandTools,
   showRawParameters,
   showThinking,
-  showMetaMessages,
+  showSubAgentInput,
   autoScrollToBottom,
   sendByCtrlEnter,
   externalMessageUpdate,
@@ -353,7 +353,7 @@ function ChatInterface({
           autoExpandTools={autoExpandTools}
           showRawParameters={showRawParameters}
           showThinking={showThinking}
-          showMetaMessages={showMetaMessages}
+          showSubAgentInput={showSubAgentInput}
           selectedProject={selectedProject}
         />
 

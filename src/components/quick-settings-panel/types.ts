@@ -5,7 +5,7 @@ export type PreferenceToggleKey =
   | 'autoExpandTools'
   | 'showRawParameters'
   | 'showThinking'
-  | 'showMetaMessages'
+  | 'showSubAgentInput'
   | 'autoScrollToBottom'
   | 'sendByCtrlEnter';
 

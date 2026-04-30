@@ -25,7 +25,7 @@ export default function QuickSettingsPanelView() {
     autoExpandTools: preferences.autoExpandTools,
     showRawParameters: preferences.showRawParameters,
     showThinking: preferences.showThinking,
-    showMetaMessages: preferences.showMetaMessages,
+    showSubAgentInput: preferences.showSubAgentInput,
     autoScrollToBottom: preferences.autoScrollToBottom,
     sendByCtrlEnter: preferences.sendByCtrlEnter,
   }), [
@@ -34,7 +34,7 @@ export default function QuickSettingsPanelView() {
     preferences.sendByCtrlEnter,
     preferences.showRawParameters,
     preferences.showThinking,
-    preferences.showMetaMessages,
+    preferences.showSubAgentInput,
   ]);
 
   const handlePreferenceChange = useCallback(

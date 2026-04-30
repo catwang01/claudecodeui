@@ -40,8 +40,8 @@ export const TOOL_DISPLAY_TOGGLES: PreferenceToggleItem[] = [
     icon: Brain,
   },
   {
-    key: 'showMetaMessages',
-    labelKey: 'quickSettings.showMetaMessages',
+    key: 'showSubAgentInput',
+    labelKey: 'quickSettings.showSubAgentInput',
     icon: MessageSquareDashed,
   },
 ];

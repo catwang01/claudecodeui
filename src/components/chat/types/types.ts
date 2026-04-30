@@ -32,7 +32,7 @@ export interface ChatMessage {
   images?: ChatImage[];
   reasoning?: string;
   isThinking?: boolean;
-  isMeta?: boolean;
+  isSubAgentInput?: boolean;
   isStreaming?: boolean;
   isInteractivePrompt?: boolean;
   isToolUse?: boolean;
@@ -111,7 +111,7 @@ export interface ChatInterfaceProps {
   autoExpandTools?: boolean;
   showRawParameters?: boolean;
   showThinking?: boolean;
-  showMetaMessages?: boolean;
+  showSubAgentInput?: boolean;
   autoScrollToBottom?: boolean;
   sendByCtrlEnter?: boolean;
   externalMessageUpdate?: number;
