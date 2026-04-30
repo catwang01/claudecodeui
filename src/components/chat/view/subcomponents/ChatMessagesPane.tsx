@@ -308,10 +308,16 @@ export default function ChatMessagesPane({
                       disabled={isForking}
                       title={t('session.fork.buttonTitle')}
                     >
-                      <svg className="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="6" cy="6" r="2" /><circle cx="18" cy="6" r="2" /><circle cx="12" cy="18" r="2" />
-                        <path d="M6 8v2a4 4 0 0 0 4 4h4a4 4 0 0 0 4-4V8" /><line x1="12" y1="14" x2="12" y2="16" />
-                      </svg>
+                      {isForking ? (
+                        <svg className="h-[18px] w-[18px] animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                        </svg>
+                      ) : (
+                        <svg className="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                          <circle cx="6" cy="6" r="2" /><circle cx="18" cy="6" r="2" /><circle cx="12" cy="18" r="2" />
+                          <path d="M6 8v2a4 4 0 0 0 4 4h4a4 4 0 0 0 4-4V8" /><line x1="12" y1="14" x2="12" y2="16" />
+                        </svg>
+                      )}
                       {t('session.fork.button')}
                     </button>
                     <div className="h-px flex-grow bg-gray-200/60 dark:bg-gray-700/40" />

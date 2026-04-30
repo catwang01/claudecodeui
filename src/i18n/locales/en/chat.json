@@ -136,7 +136,8 @@
     "clickToChangeMode": "Click to change permission mode (or press Tab in input)",
     "showAllCommands": "Show all commands",
     "clearInput": "Clear input",
-    "scrollToBottom": "Scroll to bottom"
+    "scrollToBottom": "Scroll to bottom",
+    "wsDisconnected": "Reconnecting..."
   },
   "thinkingMode": {
     "selector": {
@@ -214,6 +215,7 @@
     "fork": {
       "button": "fork",
       "buttonTitle": "Fork session at this point",
+      "forking": "Forking session...",
       "error": "Failed to fork session. Please try again."
     }
   },

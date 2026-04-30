@@ -116,7 +116,8 @@
     "clickToChangeMode": "클릭하여 권한 모드 변경 (또는 입력창에서 Tab)",
     "showAllCommands": "모든 명령어 보기",
     "clearInput": "입력 지우기",
-    "scrollToBottom": "맨 아래로 스크롤"
+    "scrollToBottom": "맨 아래로 스크롤",
+    "wsDisconnected": "재연결 중..."
   },
   "thinkingMode": {
     "selector": {
@@ -194,6 +195,7 @@
     "fork": {
       "button": "포크",
       "buttonTitle": "이 시점에서 세션 포크",
+      "forking": "세션 포크 중...",
       "error": "세션 포크에 실패했습니다. 다시 시도해 주세요."
     }
   },

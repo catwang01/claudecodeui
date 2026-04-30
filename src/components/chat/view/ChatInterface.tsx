@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
 import { QuickSettingsPanel } from '../../quick-settings-panel';
@@ -12,6 +12,7 @@ import { useSessionStore } from '../../../stores/useSessionStore';
 import { useWebSocket } from '../../../contexts/WebSocketContext';
 import { api } from '../../../utils/api';
 import { useTTS } from '../../../hooks/useTTS';
+import { useVoiceConversation } from '../../../contexts/VoiceConversationContext';
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
 
@@ -51,6 +52,7 @@ function ChatInterface({
 
   const sessionStore = useSessionStore();
   const { speak } = useTTS();
+  const { registerSubmitCallback, notifyLoadingChange, status: voiceStatus, transcript: voiceTranscript, toggle: toggleVoice, isActive: isVoiceActive, supported: isVoiceSupported } = useVoiceConversation();
   const streamBufferRef = useRef('');
   const streamTimerRef = useRef<number | null>(null);
   const accumulatedStreamRef = useRef('');
@@ -64,6 +66,8 @@ function ChatInterface({
     streamBufferRef.current = '';
     accumulatedStreamRef.current = '';
   }, []);
+
+  const [isForkingSession, setIsForkingSession] = useState(false);
 
   const {
     provider,
@@ -174,6 +178,7 @@ function ChatInterface({
     handleGrantToolPermission,
     handleInputFocusChange,
     isInputFocused,
+    submitVoiceInput,
   } = useChatComposerState({
     selectedProject,
     selectedSession,
@@ -235,11 +240,16 @@ function ChatInterface({
 
   const handleForkAtMessage = useCallback(async (timestamp: string) => {
     if (!selectedProject || !selectedSession) return;
-    const result = await api.forkSession(selectedProject.name, selectedSession.id, timestamp);
-    if (result.newSessionId) {
-      // Refresh the sidebar session list so the fork appears
-      window.refreshProjects?.();
-      onNavigateToSession?.(result.newSessionId);
+    setIsForkingSession(true);
+    try {
+      const result = await api.forkSession(selectedProject.name, selectedSession.id, timestamp);
+      if (result.newSessionId) {
+        // Refresh the sidebar session list so the fork appears
+        window.refreshProjects?.();
+        onNavigateToSession?.(result.newSessionId);
+      }
+    } finally {
+      setIsForkingSession(false);
     }
   }, [selectedProject, selectedSession, onNavigateToSession]);
 
@@ -269,6 +279,23 @@ function ChatInterface({
     onAssistantSpeech: speak,
     sessionStore,
   });
+
+  // Register voice submit callback
+  useEffect(() => {
+    registerSubmitCallback(submitVoiceInput);
+  }, [registerSubmitCallback, submitVoiceInput]);
+
+  // Notify voice context of loading state changes
+  useEffect(() => {
+    notifyLoadingChange(isLoading);
+  }, [isLoading, notifyLoadingChange]);
+
+  // Show interim voice transcript in the textarea while listening
+  useEffect(() => {
+    if (voiceStatus === 'listening') {
+      setInput(voiceTranscript);
+    }
+  }, [voiceStatus, voiceTranscript, setInput]);
 
   useEffect(() => {
     if (!isLoading || !canAbortSession) {
@@ -439,10 +466,26 @@ function ChatInterface({
           })}
           isTextareaExpanded={isTextareaExpanded}
           sendByCtrlEnter={sendByCtrlEnter}
+          voiceStatus={voiceStatus}
+          isVoiceActive={isVoiceActive}
+          isVoiceSupported={isVoiceSupported}
+          onVoiceToggle={toggleVoice}
         />
       </div>
 
       <QuickSettingsPanel />
+
+      {isForkingSession && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" />
+          <div className="relative flex flex-col items-center gap-4 rounded-xl border border-border bg-card px-10 py-8 shadow-2xl">
+            <svg className="h-8 w-8 animate-spin text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+            </svg>
+            <p className="text-sm font-medium text-foreground">{t('session.fork.forking')}</p>
+          </div>
+        </div>
+      )}
     </>
   );
 }

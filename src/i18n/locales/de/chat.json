@@ -134,7 +134,8 @@
     "clickToChangeMode": "Klicken, um den Berechtigungsmodus zu ändern (oder Tab in der Eingabe drücken)",
     "showAllCommands": "Alle Befehle anzeigen",
     "clearInput": "Eingabe leeren",
-    "scrollToBottom": "Nach unten scrollen"
+    "scrollToBottom": "Nach unten scrollen",
+    "wsDisconnected": "Verbindung wird wiederhergestellt..."
   },
   "thinkingMode": {
     "selector": {
@@ -212,6 +213,7 @@
     "fork": {
       "button": "Fork",
       "buttonTitle": "Sitzung an diesem Punkt verzweigen",
+      "forking": "Sitzung wird geforkt...",
       "error": "Sitzung konnte nicht geforkt werden. Bitte erneut versuchen."
     }
   },
