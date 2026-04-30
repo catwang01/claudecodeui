@@ -114,7 +114,6 @@ export interface ChatInterfaceProps {
   showSubAgentInput?: boolean;
   autoScrollToBottom?: boolean;
   sendByCtrlEnter?: boolean;
-  externalMessageUpdate?: number;
   onTaskClick?: (...args: unknown[]) => void;
   onShowAllTasks?: (() => void) | null;
 }

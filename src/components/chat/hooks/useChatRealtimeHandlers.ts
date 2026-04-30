@@ -170,6 +170,19 @@ export function useChatRealtimeHandlers({
           return;
         }
 
+        case 'projects_updated': {
+          // If the server included a message delta, append it to the affected session's store.
+          // This replaces the old externalMessageUpdate → refreshFromServer REST round-trip.
+          const { changedSessionId, newMessages: deltaMessages } = msg as {
+            changedSessionId?: string;
+            newMessages?: import('../../../stores/useSessionStore').NormalizedMessage[];
+          };
+          if (changedSessionId && Array.isArray(deltaMessages) && deltaMessages.length > 0) {
+            sessionStore.appendWsMessageBatch(changedSessionId, deltaMessages);
+          }
+          return;
+        }
+
         default:
           // Unknown legacy message type — ignore
           return;

@@ -68,6 +68,7 @@ import geminiRoutes from './routes/gemini.js';
 import pluginsRoutes from './routes/plugins.js';
 import messagesRoutes from './routes/messages.js';
 import { createNormalizedMessage } from './providers/types.js';
+import { getProvider } from './providers/registry.js';
 import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
 import { initializeDatabase, sessionNamesDb, applyCustomSessionNames } from './database/db.js';
 import { configureWebPush } from './services/vapid-keys.js';
@@ -97,6 +98,9 @@ const WATCHER_IGNORED_PATTERNS = [
 const WATCHER_DEBOUNCE_MS = 300;
 let projectsWatchers = [];
 let projectsWatcherDebounceTimer = null;
+// Persists across watcher restarts so we never re-send already-seen messages as deltas.
+// Key: sessionId, Value: number of messages seen on last projects_updated broadcast.
+const sessionMessageCount = new Map();
 const connectedClients = new Set();
 let isGetProjectsRunning = false; // Flag to prevent reentrant calls
 
@@ -221,6 +225,32 @@ async function setupProjectsWatcher() {
                 // Get updated projects list
                 const updatedProjects = await getProjects(broadcastProgress);
 
+                // Compute message delta for .jsonl session file changes
+                let newMessages = [];
+                let changedSessionId = null;
+                if (filePath.endsWith('.jsonl') && (eventType === 'change' || eventType === 'add')) {
+                    try {
+                        changedSessionId = path.basename(filePath, '.jsonl');
+                        const adapter = getProvider(provider);
+                        if (adapter) {
+                            const opts = { limit: null, offset: 0 };
+                            // claude provider needs projectName derived from the parent directory
+                            if (provider === 'claude') {
+                                opts.projectName = path.basename(path.dirname(filePath));
+                            } else if (provider === 'cursor') {
+                                opts.projectPath = path.dirname(filePath);
+                            }
+                            const result = await adapter.fetchHistory(changedSessionId, opts);
+                            const allMessages = result.messages || [];
+                            const lastCount = sessionMessageCount.get(changedSessionId) ?? allMessages.length;
+                            newMessages = allMessages.slice(lastCount);
+                            sessionMessageCount.set(changedSessionId, allMessages.length);
+                        }
+                    } catch (err) {
+                        console.error('[WARN] Failed to fetch message delta for', changedSessionId, err.message);
+                    }
+                }
+
                 // Notify all connected clients about the project changes
                 const updateMessage = JSON.stringify({
                     type: 'projects_updated',
@@ -228,7 +258,8 @@ async function setupProjectsWatcher() {
                     timestamp: new Date().toISOString(),
                     changeType: eventType,
                     changedFile: path.relative(rootPath, filePath),
-                    watchProvider: provider
+                    watchProvider: provider,
+                    ...(newMessages.length > 0 && { newMessages, changedSessionId }),
                 });
 
                 connectedClients.forEach(client => {

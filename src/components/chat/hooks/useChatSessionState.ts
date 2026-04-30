@@ -22,7 +22,6 @@ interface UseChatSessionStateArgs {
   ws: WebSocket | null;
   sendMessage: (message: unknown) => void;
   autoScrollToBottom?: boolean;
-  externalMessageUpdate?: number;
   processingSessions?: Set<string>;
   resetStreamingState: () => void;
   pendingViewSessionRef: MutableRefObject<PendingViewSession | null>;
@@ -95,7 +94,6 @@ export function useChatSessionState({
   ws,
   sendMessage,
   autoScrollToBottom,
-  externalMessageUpdate,
   processingSessions,
   resetStreamingState,
   pendingViewSessionRef,
@@ -465,51 +463,6 @@ export function useChatSessionState({
     selectedSession?.id,
     sendMessage,
     ws,
-    sessionStore,
-  ]);
-
-  // External message update (e.g. WebSocket reconnect, background refresh)
-  useEffect(() => {
-    if (!externalMessageUpdate) return;
-    const selectedSession = selectedSessionRef.current;
-    const selectedProject = selectedProjectRef.current;
-    if (!selectedSession || !selectedProject) return;
-
-    logger.log('[DBG:externalUpdate] triggered externalMessageUpdate=%d sessionId=%s',
-      externalMessageUpdate, selectedSession.id.slice(0, 8));
-
-    const reloadExternalMessages = async () => {
-      try {
-        const provider = (localStorage.getItem('selected-provider') as Provider) || 'claude';
-
-        // Skip store refresh during active streaming
-        if (!isLoadingRef.current) {
-          const currentSlot = sessionStore.getSessionSlot(selectedSession.id);
-          const currentCount = currentSlot?.messages.length ?? 0;
-          logger.log('[DBG:externalUpdate] calling refreshFromServer currentCount=%d', currentCount);
-          await sessionStore.refreshFromServer(selectedSession.id, {
-            provider: (selectedSession.__provider || provider) as SessionProvider,
-            projectName: selectedProject.name,
-            projectPath: selectedProject.fullPath || selectedProject.path || '',
-            limit: currentCount > 0 ? Math.max(MESSAGES_PER_PAGE, currentCount) : undefined,
-          });
-
-          if (Boolean(autoScrollToBottom) && isNearBottom()) {
-            setTimeout(() => scrollToBottom(), 200);
-          }
-        }
-      } catch (error) {
-        logger.error('Error reloading messages from external update:', error);
-      }
-    };
-
-    reloadExternalMessages();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    autoScrollToBottom,
-    externalMessageUpdate,
-    isNearBottom,
-    scrollToBottom,
     sessionStore,
   ]);
 

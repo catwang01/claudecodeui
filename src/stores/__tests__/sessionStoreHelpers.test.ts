@@ -59,6 +59,19 @@ describe('dedupeMessages', () => {
       expect(dedupeMessages(existing, incoming).map(m => m.id)).toEqual(['r1']);
     });
 
+    it('filters server-confirmed message whose localMessageId matches an existing optimistic id', () => {
+      // Optimistic local message added before server response
+      const existing = [
+        msg('s1'),
+        userMsg('local_123', 'hello'), // optimistic, no localMessageId field
+      ];
+      const incoming = [
+        userMsg('real-uuid', 'hello', { localMessageId: 'local_123' }), // server confirmation
+        msg('r1'),
+      ];
+      expect(dedupeMessages(existing, incoming).map(m => m.id)).toEqual(['r1']);
+    });
+
     it('keeps incoming message when localMessageId has not been confirmed yet', () => {
       const existing = [msg('s1'), msg('s2')];
       const incoming = [userMsg('local_456', 'pending')];

@@ -153,7 +153,6 @@ export function useProjectsState({
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState('agents');
-  const [externalMessageUpdate, setExternalMessageUpdate] = useState(0);
 
   const loadingProgressTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -246,13 +245,10 @@ export function useProjectsState({
 
         if (changedSessionId === selectedSession.id) {
           const isSessionActive = activeSessions.has(selectedSession.id);
-
-          if (!isSessionActive) {
-            logger.log('[projects_updated] → setExternalMessageUpdate (session file changed, not active)');
-            setExternalMessageUpdate((prev) => prev + 1);
-          } else {
-            logger.log('[projects_updated] → skip setExternalMessageUpdate (session is active/streaming)');
+          if (isSessionActive) {
+            logger.log('[projects_updated] → skip (session is active/streaming, WS handles it)');
           }
+          // New messages (if any) are delivered via projects_updated.newMessages → useChatRealtimeHandlers
         }
       }
     }
@@ -572,7 +568,6 @@ export function useProjectsState({
     isInputFocused,
     showSettings,
     settingsInitialTab,
-    externalMessageUpdate,
     setActiveTab,
     setSidebarOpen,
     setIsInputFocused,

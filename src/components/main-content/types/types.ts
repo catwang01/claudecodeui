@@ -53,7 +53,6 @@ export type MainContentProps = {
   onReplaceTemporarySession: SessionLifecycleHandler;
   onNavigateToSession: (targetSessionId: string) => void;
   onShowSettings: () => void;
-  externalMessageUpdate: number;
 };
 
 export type MainContentHeaderProps = {

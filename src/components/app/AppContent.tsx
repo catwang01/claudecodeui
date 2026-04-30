@@ -33,7 +33,6 @@ export default function AppContent() {
     activeTab,
     sidebarOpen,
     isLoadingProjects,
-    externalMessageUpdate,
     setActiveTab,
     setSidebarOpen,
     setIsInputFocused,
@@ -192,7 +191,6 @@ export default function AppContent() {
           onReplaceTemporarySession={replaceTemporarySession}
           onNavigateToSession={(targetSessionId: string) => navigate(`/session/${targetSessionId}`)}
           onShowSettings={() => setShowSettings(true)}
-          externalMessageUpdate={externalMessageUpdate}
         />
       </div>
 

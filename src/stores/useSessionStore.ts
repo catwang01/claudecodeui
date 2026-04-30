@@ -129,7 +129,11 @@ export function dedupeMessages(
 ): NormalizedMessage[] {
   const ids = new Set(existing.map(m => m.id));
   const localIds = new Set(existing.filter(m => m.localMessageId).map(m => m.localMessageId!));
-  return incoming.filter(m => !ids.has(m.id) && !localIds.has(m.id));
+  return incoming.filter(m =>
+    !ids.has(m.id) &&
+    !localIds.has(m.id) &&
+    !(m.localMessageId && ids.has(m.localMessageId)),
+  );
 }
 
 // ─── Hook ────────────────────────────────────────────────────────────────────

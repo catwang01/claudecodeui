@@ -47,7 +47,6 @@ function MainContent({
   onReplaceTemporarySession,
   onNavigateToSession,
   onShowSettings,
-  externalMessageUpdate,
 }: MainContentProps) {
   const { preferences } = useUiPreferences();
   const { autoExpandTools, showRawParameters, showThinking, showSubAgentInput, autoScrollToBottom, sendByCtrlEnter } = preferences;
@@ -133,7 +132,6 @@ function MainContent({
                 showSubAgentInput={showSubAgentInput}
                 autoScrollToBottom={autoScrollToBottom}
                 sendByCtrlEnter={sendByCtrlEnter}
-                externalMessageUpdate={externalMessageUpdate}
                 onShowAllTasks={tasksEnabled ? () => setActiveTab('tasks') : null}
               />
             </ErrorBoundary>
