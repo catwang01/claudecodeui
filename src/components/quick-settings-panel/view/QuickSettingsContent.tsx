@@ -1,4 +1,4 @@
-import { Moon, Sun } from 'lucide-react';
+import { Moon, Sun, Volume2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { DarkModeToggle } from '../../../shared/view/ui';
 import LanguageSelector from '../../../shared/view/ui/LanguageSelector';
@@ -20,12 +20,18 @@ type QuickSettingsContentProps = {
   isDarkMode: boolean;
   preferences: QuickSettingsPreferences;
   onPreferenceChange: (key: PreferenceToggleKey, value: boolean) => void;
+  ttsEnabled: boolean;
+  ttsSupported: boolean;
+  onTtsToggle: () => void;
 };
 
 export default function QuickSettingsContent({
   isDarkMode,
   preferences,
   onPreferenceChange,
+  ttsEnabled,
+  ttsSupported,
+  onTtsToggle,
 }: QuickSettingsContentProps) {
   const { t } = useTranslation('settings');
 
@@ -56,6 +62,14 @@ export default function QuickSettingsContent({
           <DarkModeToggle />
         </div>
         <LanguageSelector compact />
+        {ttsSupported && (
+          <QuickSettingsToggleRow
+            label={t('quickSettings.tts', 'Text to Speech')}
+            icon={Volume2}
+            checked={ttsEnabled}
+            onCheckedChange={() => onTtsToggle()}
+          />
+        )}
       </QuickSettingsSection>
 
       <QuickSettingsSection title={t('quickSettings.sections.toolDisplay')}>
