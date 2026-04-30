@@ -135,7 +135,14 @@
     "showAllCommands": "Показать все команды",
     "clearInput": "Очистить ввод",
     "scrollToBottom": "Прокрутить вниз",
-    "wsDisconnected": "Повторное подключение..."
+    "wsDisconnected": "Повторное подключение...",
+    "voiceButton": {
+      "start": "Начать голосовой диалог",
+      "listening": "Слушаю… (нажмите для остановки)",
+      "processing": "Ожидание ответа…",
+      "speaking": "ИИ говорит…",
+      "stop": "Остановить голосовой диалог"
+    }
   },
   "thinkingMode": {
     "selector": {

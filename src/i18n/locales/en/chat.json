@@ -137,7 +137,14 @@
     "showAllCommands": "Show all commands",
     "clearInput": "Clear input",
     "scrollToBottom": "Scroll to bottom",
-    "wsDisconnected": "Reconnecting..."
+    "wsDisconnected": "Reconnecting...",
+    "voiceButton": {
+      "start": "Start voice conversation",
+      "listening": "Listening… (click to stop)",
+      "processing": "Waiting for response…",
+      "speaking": "AI is speaking…",
+      "stop": "Stop voice conversation"
+    }
   },
   "thinkingMode": {
     "selector": {

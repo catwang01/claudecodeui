@@ -1,6 +1,7 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import type { PermissionMode, Provider } from '../../types/types';
+import type { VoiceStatus } from '../../../../contexts/VoiceConversationContext';
 import ThinkingModeSelector from './ThinkingModeSelector';
 import TokenUsagePie from './TokenUsagePie';
 
@@ -18,6 +19,10 @@ interface ChatInputControlsProps {
   isUserScrolledUp: boolean;
   hasMessages: boolean;
   onScrollToBottom: () => void;
+  voiceStatus: VoiceStatus;
+  isVoiceActive: boolean;
+  isVoiceSupported: boolean;
+  onVoiceToggle: () => void;
 }
 
 export default function ChatInputControls({
@@ -34,6 +39,10 @@ export default function ChatInputControls({
   isUserScrolledUp,
   hasMessages,
   onScrollToBottom,
+  voiceStatus,
+  isVoiceActive,
+  isVoiceSupported,
+  onVoiceToggle,
 }: ChatInputControlsProps) {
   const { t } = useTranslation('chat');
 
@@ -130,6 +139,61 @@ export default function ChatInputControls({
           <svg className="h-3.5 w-3.5 sm:h-4 sm:w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
           </svg>
+        </button>
+      )}
+
+      {isVoiceSupported && (
+        <button
+          type="button"
+          onClick={onVoiceToggle}
+          className={`relative flex h-7 w-7 items-center justify-center rounded-lg transition-all duration-200 sm:h-8 sm:w-8 ${
+            !isVoiceActive
+              ? 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
+              : voiceStatus === 'listening'
+                ? 'bg-red-500/15 text-red-500 hover:bg-red-500/25'
+                : voiceStatus === 'processing'
+                  ? 'bg-amber-500/15 text-amber-500 hover:bg-amber-500/25'
+                  : voiceStatus === 'speaking'
+                    ? 'bg-blue-500/15 text-blue-500 hover:bg-blue-500/25'
+                    : 'bg-primary/10 text-primary hover:bg-primary/20'
+          }`}
+          title={
+            !isVoiceActive
+              ? t('input.voiceButton.start')
+              : voiceStatus === 'listening'
+                ? t('input.voiceButton.listening')
+                : voiceStatus === 'processing'
+                  ? t('input.voiceButton.processing')
+                  : voiceStatus === 'speaking'
+                    ? t('input.voiceButton.speaking')
+                    : t('input.voiceButton.stop')
+          }
+        >
+          {voiceStatus === 'listening' ? (
+            // Pulsing mic
+            <>
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-lg bg-red-400 opacity-30" />
+              <svg className="h-4 w-4 sm:h-5 sm:w-5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 14 0h-2zm-5 9a7 7 0 0 1-7-7H3a9 9 0 0 0 18 0h-2a7 7 0 0 1-7 7z" />
+              </svg>
+            </>
+          ) : voiceStatus === 'processing' ? (
+            // Spinner
+            <svg className="h-4 w-4 animate-spin sm:h-5 sm:w-5" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+          ) : voiceStatus === 'speaking' ? (
+            // Sound wave icon
+            <svg className="h-4 w-4 sm:h-5 sm:w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072M12 6a7 7 0 010 12M6 10a3 3 0 000 4" />
+            </svg>
+          ) : (
+            // Default mic
+            <svg className="h-4 w-4 sm:h-5 sm:w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 016 0v6a3 3 0 01-3 3z" />
+            </svg>
+          )}
         </button>
       )}
     </div>

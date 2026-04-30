@@ -20,6 +20,7 @@ interface UseChatSessionStateArgs {
   selectedProject: Project | null;
   selectedSession: ProjectSession | null;
   ws: WebSocket | null;
+  isConnected?: boolean;
   sendMessage: (message: unknown) => void;
   autoScrollToBottom?: boolean;
   processingSessions?: Set<string>;
@@ -92,6 +93,7 @@ export function useChatSessionState({
   selectedProject,
   selectedSession,
   ws,
+  isConnected,
   sendMessage,
   autoScrollToBottom,
   processingSessions,
@@ -648,6 +650,15 @@ export function useChatSessionState({
       setCanAbortSession(true);
     }
   }, [currentSessionId, isLoading, processingSessions, selectedSession?.id]);
+
+  // When the WebSocket disconnects, clear canAbortSession so the user can't trigger
+  // an abort against a stale session ID. The correct state is restored once the
+  // connection is re-established and check-session-status responds.
+  useEffect(() => {
+    if (isConnected === false) {
+      setCanAbortSession(false);
+    }
+  }, [isConnected]);
 
   // "Load all" overlay
   const prevLoadingRef = useRef(false);

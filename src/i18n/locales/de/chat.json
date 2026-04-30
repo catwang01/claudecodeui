@@ -135,7 +135,14 @@
     "showAllCommands": "Alle Befehle anzeigen",
     "clearInput": "Eingabe leeren",
     "scrollToBottom": "Nach unten scrollen",
-    "wsDisconnected": "Verbindung wird wiederhergestellt..."
+    "wsDisconnected": "Verbindung wird wiederhergestellt...",
+    "voiceButton": {
+      "start": "Sprachgespräch starten",
+      "listening": "Hört zu… (klicken zum Beenden)",
+      "processing": "Warte auf Antwort…",
+      "speaking": "KI spricht…",
+      "stop": "Sprachgespräch beenden"
+    }
   },
   "thinkingMode": {
     "selector": {

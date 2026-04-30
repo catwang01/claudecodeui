@@ -127,6 +127,7 @@ function ChatInterface({
     selectedProject,
     selectedSession,
     ws,
+    isConnected,
     sendMessage,
     autoScrollToBottom,
     processingSessions,

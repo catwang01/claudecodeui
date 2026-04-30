@@ -63,6 +63,7 @@
     "showThinking": "思考を表示",
     "showSubAgentInput": "Show Subagent Input",
     "autoScrollToBottom": "自動スクロール",
+    "voiceLang": "音声言語",
     "sendByCtrlEnter": "Ctrl+Enterで送信",
     "sendByCtrlEnterDescription": "有効にすると、Enterではなく Ctrl+Enter でメッセージを送信します。IMEユーザーの誤送信防止に便利です。",
     "dragHandle": {
@@ -71,7 +72,8 @@
       "openPanel": "設定パネルを開く",
       "draggingStatus": "ドラッグ中...",
       "toggleAndMove": "クリックで切替、ドラッグで移動"
-    }
+    },
+    "tts": "テキスト読み上げ"
   },
   "terminalShortcuts": {
     "title": "ターミナルショートカット",

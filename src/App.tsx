@@ -6,6 +6,8 @@ import { TaskMasterProvider } from './contexts/TaskMasterContext';
 import { TasksSettingsProvider } from './contexts/TasksSettingsContext';
 import { WebSocketProvider } from './contexts/WebSocketContext';
 import { PluginsProvider } from './contexts/PluginsContext';
+import { TTSProvider } from './contexts/TTSContext';
+import { VoiceConversationProvider } from './contexts/VoiceConversationContext';
 import AppContent from './components/app/AppContent';
 import i18n from './i18n/config.js';
 
@@ -18,14 +20,18 @@ export default function App() {
             <PluginsProvider>
               <TasksSettingsProvider>
                 <TaskMasterProvider>
-                <ProtectedRoute>
-                  <Router basename={window.__ROUTER_BASENAME__ || ''}>
-                    <Routes>
-                      <Route path="/" element={<AppContent />} />
-                      <Route path="/session/:sessionId" element={<AppContent />} />
-                    </Routes>
-                  </Router>
-                </ProtectedRoute>
+                  <TTSProvider>
+                    <VoiceConversationProvider>
+                      <ProtectedRoute>
+                        <Router basename={window.__ROUTER_BASENAME__ || ''}>
+                          <Routes>
+                            <Route path="/" element={<AppContent />} />
+                            <Route path="/session/:sessionId" element={<AppContent />} />
+                          </Routes>
+                        </Router>
+                      </ProtectedRoute>
+                    </VoiceConversationProvider>
+                  </TTSProvider>
                 </TaskMasterProvider>
               </TasksSettingsProvider>
             </PluginsProvider>

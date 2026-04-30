@@ -114,7 +114,14 @@
     },
     "clickToChangeMode": "クリックで権限モードを変更（または入力欄でTab）",
     "showAllCommands": "すべてのコマンドを表示",
-    "wsDisconnected": "再接続中..."
+    "wsDisconnected": "再接続中...",
+    "voiceButton": {
+      "start": "音声会話を開始",
+      "listening": "聴き取り中…（クリックで停止）",
+      "processing": "応答待ち…",
+      "speaking": "AI が読み上げ中…",
+      "stop": "音声会話を停止"
+    }
   },
   "thinkingMode": {
     "selector": {

@@ -117,7 +117,14 @@
     "showAllCommands": "모든 명령어 보기",
     "clearInput": "입력 지우기",
     "scrollToBottom": "맨 아래로 스크롤",
-    "wsDisconnected": "재연결 중..."
+    "wsDisconnected": "재연결 중...",
+    "voiceButton": {
+      "start": "음성 대화 시작",
+      "listening": "듣는 중… (클릭하여 중지)",
+      "processing": "응답 대기 중…",
+      "speaking": "AI가 말하는 중…",
+      "stop": "음성 대화 중지"
+    }
   },
   "thinkingMode": {
     "selector": {

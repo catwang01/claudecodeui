@@ -63,6 +63,7 @@
     "showThinking": "Denken anzeigen",
     "showSubAgentInput": "Show Subagent Input",
     "autoScrollToBottom": "Automatisch nach unten scrollen",
+    "voiceLang": "Spracheingabe-Sprache",
     "sendByCtrlEnter": "Mit Strg+Enter senden",
     "sendByCtrlEnterDescription": "Wenn aktiviert, sendet Strg+Enter die Nachricht anstelle von Enter. Dies ist nützlich für IME-Benutzer:innen, um versehentliches Senden zu vermeiden.",
     "dragHandle": {
@@ -71,7 +72,8 @@
       "openPanel": "Einstellungspanel öffnen",
       "draggingStatus": "Wird gezogen...",
       "toggleAndMove": "Klicken zum Umschalten, ziehen zum Verschieben"
-    }
+    },
+    "tts": "Text-zu-Sprache"
   },
   "terminalShortcuts": {
     "title": "Terminal-Tastenkürzel",

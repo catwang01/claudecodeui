@@ -117,7 +117,14 @@
     "showAllCommands": "显示所有命令",
     "clearInput": "清空输入",
     "scrollToBottom": "滚动到底部",
-    "wsDisconnected": "重新连接中..."
+    "wsDisconnected": "重新连接中...",
+    "voiceButton": {
+      "start": "开启语音对话",
+      "listening": "正在聆听…（点击关闭）",
+      "processing": "等待响应…",
+      "speaking": "AI 正在朗读…",
+      "stop": "关闭语音对话"
+    }
   },
   "thinkingMode": {
     "selector": {

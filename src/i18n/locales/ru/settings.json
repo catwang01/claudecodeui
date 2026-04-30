@@ -63,6 +63,7 @@
     "showThinking": "Показывать размышления",
     "showSubAgentInput": "Show Subagent Input",
     "autoScrollToBottom": "Автопрокрутка вниз",
+    "voiceLang": "Язык голоса",
     "sendByCtrlEnter": "Отправка по Ctrl+Enter",
     "sendByCtrlEnterDescription": "Когда включено, нажатие Ctrl+Enter будет отправлять сообщение вместо просто Enter. Это полезно для пользователей IME, чтобы избежать случайной отправки.",
     "dragHandle": {
@@ -71,7 +72,8 @@
       "openPanel": "Открыть панель настроек",
       "draggingStatus": "Перетаскивание...",
       "toggleAndMove": "Нажмите для переключения, перетащите для перемещения"
-    }
+    },
+    "tts": "Синтез речи"
   },
   "terminalShortcuts": {
     "title": "Горячие клавиши терминала",

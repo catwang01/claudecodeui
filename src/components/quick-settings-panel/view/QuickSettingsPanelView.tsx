@@ -5,6 +5,7 @@ import { useUiPreferences } from '../../../hooks/useUiPreferences';
 import { useTheme } from '../../../contexts/ThemeContext';
 import { useQuickSettingsDrag } from '../hooks/useQuickSettingsDrag';
 import { useTTS } from '../../../hooks/useTTS';
+import { useVoiceConversation } from '../../../contexts/VoiceConversationContext';
 import type { PreferenceToggleKey, QuickSettingsPreferences } from '../types';
 import QuickSettingsContent from './QuickSettingsContent';
 import QuickSettingsHandle from './QuickSettingsHandle';
@@ -16,6 +17,7 @@ export default function QuickSettingsPanelView() {
   const { isDarkMode } = useTheme();
   const { preferences, setPreference } = useUiPreferences();
   const tts = useTTS();
+  const { supported: isVoiceSupported, voiceLang, setVoiceLang } = useVoiceConversation();
   const {
     isDragging,
     handleStyle,
@@ -82,6 +84,9 @@ export default function QuickSettingsPanelView() {
             ttsEnabled={tts.enabled}
             ttsSupported={tts.supported}
             onTtsToggle={tts.toggle}
+            isVoiceSupported={isVoiceSupported}
+            voiceLang={voiceLang}
+            onVoiceLangChange={setVoiceLang}
           />
         </div>
       </div>

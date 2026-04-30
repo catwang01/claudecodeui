@@ -12,6 +12,7 @@ import type {
   TouchEvent,
 } from 'react';
 import type { PendingPermissionRequest, PermissionMode, Provider } from '../../types/types';
+import type { VoiceStatus } from '../../../../contexts/VoiceConversationContext';
 import CommandMenu from './CommandMenu';
 import ClaudeStatus from './ClaudeStatus';
 import ImageAttachment from './ImageAttachment';
@@ -91,6 +92,10 @@ interface ChatComposerProps {
   placeholder: string;
   isTextareaExpanded: boolean;
   sendByCtrlEnter?: boolean;
+  voiceStatus: VoiceStatus;
+  isVoiceActive: boolean;
+  isVoiceSupported: boolean;
+  onVoiceToggle: () => void;
 }
 
 export default function ChatComposer({
@@ -148,6 +153,10 @@ export default function ChatComposer({
   placeholder,
   isTextareaExpanded,
   sendByCtrlEnter,
+  voiceStatus,
+  isVoiceActive,
+  isVoiceSupported,
+  onVoiceToggle,
 }: ChatComposerProps) {
   const { t } = useTranslation('chat');
   const textareaRect = textareaRef.current?.getBoundingClientRect();
@@ -201,6 +210,10 @@ export default function ChatComposer({
           isUserScrolledUp={isUserScrolledUp}
           hasMessages={hasMessages}
           onScrollToBottom={onScrollToBottom}
+          voiceStatus={voiceStatus}
+          isVoiceActive={isVoiceActive}
+          isVoiceSupported={isVoiceSupported}
+          onVoiceToggle={onVoiceToggle}
         />}
       </div>
 

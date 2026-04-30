@@ -840,6 +840,15 @@ export function useChatComposerState({
     [setCursorPosition, syncInputOverlayScroll],
   );
 
+  const submitVoiceInput = useCallback(
+    (text: string) => {
+      inputValueRef.current = text;
+      setInput(text);
+      handleSubmitRef.current?.(createFakeSubmitEvent());
+    },
+    [],
+  );
+
   const handleClearInput = useCallback(() => {
     setInput('');
     inputValueRef.current = '';
@@ -980,5 +989,6 @@ export function useChatComposerState({
     handleGrantToolPermission,
     handleInputFocusChange,
     isInputFocused,
+    submitVoiceInput,
   };
 }
