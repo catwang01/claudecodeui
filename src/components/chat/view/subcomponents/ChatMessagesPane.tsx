@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { useCallback, useRef } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { Dispatch, RefObject, SetStateAction } from 'react';
 import type { ChatMessage } from '../../types/types';
 import type { Project, ProjectSession, SessionProvider } from '../../../../types/app';
@@ -51,6 +51,8 @@ interface ChatMessagesPaneProps {
   showThinking?: boolean;
   showSubAgentInput?: boolean;
   selectedProject: Project;
+  isLoading?: boolean;
+  onForkAtMessage?: (timestamp: string) => void;
 }
 
 export default function ChatMessagesPane({
@@ -97,11 +99,27 @@ export default function ChatMessagesPane({
   showThinking,
   showSubAgentInput,
   selectedProject,
+  isLoading,
+  onForkAtMessage,
 }: ChatMessagesPaneProps) {
   const { t } = useTranslation('chat');
   const messageKeyMapRef = useRef<WeakMap<ChatMessage, string>>(new WeakMap());
   const allocatedKeysRef = useRef<Set<string>>(new Set());
   const generatedMessageKeyCounterRef = useRef(0);
+  const [isForking, setIsForking] = useState(false);
+  const [forkError, setForkError] = useState<string | null>(null);
+
+  const handleForkClick = useCallback(async (ts: string) => {
+    setIsForking(true);
+    setForkError(null);
+    try {
+      await onForkAtMessage?.(ts);
+    } catch {
+      setForkError(t('session.fork.error'));
+    } finally {
+      setIsForking(false);
+    }
+  }, [onForkAtMessage, t]);
 
   // Keep keys stable across prepends so existing MessageComponent instances retain local state.
   const getMessageKey = useCallback((message: ChatMessage) => {
@@ -239,24 +257,67 @@ export default function ChatMessagesPane({
             </div>
           )}
 
+          {forkError && (
+            <div className="mx-3 mb-2 flex items-center justify-between rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600 dark:border-red-800 dark:bg-red-950/30 dark:text-red-400 sm:mx-0">
+              <span>{forkError}</span>
+              <button onClick={() => setForkError(null)} className="ml-2 text-red-400 hover:text-red-600 dark:text-red-500 dark:hover:text-red-300">✕</button>
+            </div>
+          )}
+
           {visibleMessages.map((message, index) => {
             const prevMessage = index > 0 ? visibleMessages[index - 1] : null;
+            const nextMessage = visibleMessages[index + 1];
+            const isLastMessage = index === visibleMessages.length - 1;
+
+            // Show a fork separator after a completed agent turn:
+            // - current message is an assistant text response (not tool/user/error)
+            // - next message is a user message (start of new turn), OR it's the last message and agent is not loading
+            const showForkSeparator = onForkAtMessage &&
+              message.type === 'assistant' &&
+              !message.isStreaming &&
+              (nextMessage?.type === 'user' || (isLastMessage && !isLoading));
+
+            const ts = showForkSeparator
+              ? (message.timestamp instanceof Date
+                  ? message.timestamp.toISOString()
+                  : String(message.timestamp))
+              : null;
+
             return (
-              <MessageComponent
-                key={getMessageKey(message)}
-                message={message}
-                prevMessage={prevMessage}
-                createDiff={createDiff}
-                onFileOpen={onFileOpen}
-                onShowSettings={onShowSettings}
-                onGrantToolPermission={onGrantToolPermission}
-                autoExpandTools={autoExpandTools}
-                showRawParameters={showRawParameters}
-                showThinking={showThinking}
-                showSubAgentInput={showSubAgentInput}
-                selectedProject={selectedProject}
-                provider={provider}
-              />
+              <div key={getMessageKey(message)}>
+                <MessageComponent
+                  message={message}
+                  prevMessage={prevMessage}
+                  createDiff={createDiff}
+                  onFileOpen={onFileOpen}
+                  onShowSettings={onShowSettings}
+                  onGrantToolPermission={onGrantToolPermission}
+                  autoExpandTools={autoExpandTools}
+                  showRawParameters={showRawParameters}
+                  showThinking={showThinking}
+                  showSubAgentInput={showSubAgentInput}
+                  selectedProject={selectedProject}
+                  provider={provider}
+                />
+                {showForkSeparator && ts && (
+                  <div className="relative my-1 flex items-center px-3 sm:px-0">
+                    <div className="h-px flex-grow bg-gray-200/60 dark:bg-gray-700/40" />
+                    <button
+                      className="mx-2 flex items-center gap-1 rounded-full border border-gray-200 px-2 py-0.5 text-[11px] text-gray-400 transition-colors hover:border-gray-300 hover:bg-gray-50 hover:text-gray-600 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:text-gray-500 dark:hover:border-gray-600 dark:hover:bg-gray-800/50 dark:hover:text-gray-400"
+                      onClick={() => handleForkClick(ts)}
+                      disabled={isForking}
+                      title={t('session.fork.buttonTitle')}
+                    >
+                      <svg className="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="6" cy="6" r="2" /><circle cx="18" cy="6" r="2" /><circle cx="12" cy="18" r="2" />
+                        <path d="M6 8v2a4 4 0 0 0 4 4h4a4 4 0 0 0 4-4V8" /><line x1="12" y1="14" x2="12" y2="16" />
+                      </svg>
+                      {t('session.fork.button')}
+                    </button>
+                    <div className="h-px flex-grow bg-gray-200/60 dark:bg-gray-700/40" />
+                  </div>
+                )}
+              </div>
             );
           })}
         </>

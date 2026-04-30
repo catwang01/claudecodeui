@@ -210,6 +210,11 @@
       "loadingAll": "Loading all messages...",
       "allLoaded": "All messages loaded",
       "perfWarning": "All messages loaded — scrolling may be slower. Click \"Scroll to bottom\" to restore performance."
+    },
+    "fork": {
+      "button": "fork",
+      "buttonTitle": "Fork session at this point",
+      "error": "Failed to fork session. Please try again."
     }
   },
   "shell": {

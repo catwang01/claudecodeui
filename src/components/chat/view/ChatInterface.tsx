@@ -10,6 +10,7 @@ import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
 import { useSessionStore } from '../../../stores/useSessionStore';
 import { useWebSocket } from '../../../contexts/WebSocketContext';
+import { api } from '../../../utils/api';
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
 
@@ -230,6 +231,16 @@ function ChatInterface({
     }
   }, [selectedProject, selectedSession, sessionStore, onSessionNotProcessing, setIsLoading, setCanAbortSession, setClaudeStatus, ws, sendMessage]);
 
+  const handleForkAtMessage = useCallback(async (timestamp: string) => {
+    if (!selectedProject || !selectedSession) return;
+    const result = await api.forkSession(selectedProject.name, selectedSession.id, timestamp);
+    if (result.newSessionId) {
+      // Refresh the sidebar session list so the fork appears
+      window.refreshProjects?.();
+      onNavigateToSession?.(result.newSessionId);
+    }
+  }, [selectedProject, selectedSession, onNavigateToSession]);
+
   useChatRealtimeHandlers({
     latestMessage,
     provider,
@@ -353,6 +364,8 @@ function ChatInterface({
           showThinking={showThinking}
           showSubAgentInput={showSubAgentInput}
           selectedProject={selectedProject}
+          isLoading={isLoading}
+          onForkAtMessage={handleForkAtMessage}
         />
 
         <ChatComposer

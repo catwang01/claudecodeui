@@ -181,6 +181,11 @@
       "scrollToLoad": "上にスクロールしてさらに読み込む",
       "showingLast": "最新{{count}}件を表示（全{{total}}件）",
       "loadEarlier": "過去のメッセージを読み込む"
+    },
+    "fork": {
+      "button": "フォーク",
+      "buttonTitle": "この時点でセッションをフォーク",
+      "error": "セッションのフォークに失敗しました。もう一度お試しください。"
     }
   },
   "shell": {

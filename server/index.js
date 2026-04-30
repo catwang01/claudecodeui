@@ -644,8 +644,14 @@ app.delete('/api/projects/:projectName/sessions/:sessionId', authenticateToken, 
 app.post('/api/projects/:projectName/sessions/:sessionId/fork', authenticateToken, async (req, res) => {
     try {
         const { projectName, sessionId } = req.params;
-        console.log(`[API] Forking session: ${sessionId} in project: ${projectName}`);
-        const newSessionId = await forkSession(projectName, sessionId);
+        const { forkAfterTimestamp } = req.body || {};
+        if (forkAfterTimestamp !== undefined) {
+            if (typeof forkAfterTimestamp !== 'string' || isNaN(new Date(forkAfterTimestamp).getTime())) {
+                return res.status(400).json({ error: 'Invalid forkAfterTimestamp' });
+            }
+        }
+        console.log(`[API] Forking session: ${sessionId} in project: ${projectName}${forkAfterTimestamp ? ` at ${forkAfterTimestamp}` : ''}`);
+        const newSessionId = await forkSession(projectName, sessionId, forkAfterTimestamp || null);
         console.log(`[API] Session ${sessionId} forked as ${newSessionId}`);
         res.json({ success: true, newSessionId });
     } catch (error) {

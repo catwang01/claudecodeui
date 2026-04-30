@@ -208,6 +208,11 @@
       "loadingAll": "Alle Nachrichten werden geladen...",
       "allLoaded": "Alle Nachrichten geladen",
       "perfWarning": "Alle Nachrichten geladen – Scrollen kann langsamer sein. Klick auf 'Nach unten scrollen', um die Leistung wiederherzustellen."
+    },
+    "fork": {
+      "button": "Fork",
+      "buttonTitle": "Sitzung an diesem Punkt verzweigen",
+      "error": "Sitzung konnte nicht geforkt werden. Bitte erneut versuchen."
     }
   },
   "shell": {

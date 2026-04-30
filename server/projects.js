@@ -1026,7 +1026,7 @@ async function renameProject(projectName, newDisplayName) {
 }
 
 // Delete a session from a project
-async function forkSession(projectName, sessionId) {
+async function forkSession(projectName, sessionId, forkAfterTimestamp = null) {
   const { randomUUID } = await import('crypto');
   const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
 
@@ -1038,11 +1038,32 @@ async function forkSession(projectName, sessionId) {
     const content = await fs.readFile(jsonlFile, 'utf8');
     const lines = content.split('\n').filter(line => line.trim());
 
-    const sessionLines = lines.filter(line => {
-      try { return JSON.parse(line).sessionId === sessionId; } catch { return false; }
-    });
+    // Parse each line once and filter to this session in a single pass.
+    const sessionEntries = [];
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line);
+        if (entry.sessionId === sessionId) sessionEntries.push({ line, entry });
+      } catch { /* skip malformed */ }
+    }
 
-    if (sessionLines.length === 0) continue;
+    if (sessionEntries.length === 0) continue;
+
+    // If forkAfterTimestamp is provided, truncate history at that point.
+    // Include all entries whose timestamp <= forkAfterTimestamp.
+    if (forkAfterTimestamp) {
+      const cutoffTime = new Date(forkAfterTimestamp).getTime();
+      let last = -1;
+      for (let i = 0; i < sessionEntries.length; i++) {
+        const { timestamp } = sessionEntries[i].entry;
+        if (timestamp && new Date(timestamp).getTime() <= cutoffTime) {
+          last = i;
+        }
+      }
+      if (last >= 0) sessionEntries.splice(last + 1);
+    }
+
+    let sessionLines = sessionEntries.map(e => e.line);
 
     const newSessionId = randomUUID();
     const now = new Date().toISOString();
