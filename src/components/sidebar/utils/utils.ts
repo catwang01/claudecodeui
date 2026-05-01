@@ -233,3 +233,31 @@ export const normalizeProjectForSettings = (project: Project): SettingsProject =
         : fallbackPath,
   };
 };
+
+export type ProjectColor = {
+  dot: string;
+  bg: string;
+  border: string;
+  text: string;
+};
+
+const PROJECT_COLOR_PALETTE: ProjectColor[] = [
+  { dot: '#f43f5e', bg: 'rgba(244,63,94,0.07)',   border: 'rgba(244,63,94,0.25)',   text: '#fb7185' },  // rose
+  { dot: '#f97316', bg: 'rgba(249,115,22,0.07)',  border: 'rgba(249,115,22,0.25)',  text: '#fb923c' },  // orange
+  { dot: '#eab308', bg: 'rgba(234,179,8,0.07)',   border: 'rgba(234,179,8,0.25)',   text: '#fbbf24' },  // yellow
+  { dot: '#84cc16', bg: 'rgba(132,204,22,0.07)',  border: 'rgba(132,204,22,0.25)',  text: '#a3e635' },  // lime
+  { dot: '#10b981', bg: 'rgba(16,185,129,0.07)',  border: 'rgba(16,185,129,0.25)',  text: '#34d399' },  // emerald
+  { dot: '#06b6d4', bg: 'rgba(6,182,212,0.07)',   border: 'rgba(6,182,212,0.25)',   text: '#22d3ee' },  // cyan
+  { dot: '#3b82f6', bg: 'rgba(59,130,246,0.07)',  border: 'rgba(59,130,246,0.25)',  text: '#60a5fa' },  // blue
+  { dot: '#8b5cf6', bg: 'rgba(139,92,246,0.07)',  border: 'rgba(139,92,246,0.25)',  text: '#a78bfa' },  // violet
+  { dot: '#d946ef', bg: 'rgba(217,70,239,0.07)',  border: 'rgba(217,70,239,0.25)',  text: '#e879f9' },  // fuchsia
+  { dot: '#ec4899', bg: 'rgba(236,72,153,0.07)',  border: 'rgba(236,72,153,0.25)',  text: '#f472b6' },  // pink
+];
+
+export function getProjectColor(projectName: string): ProjectColor {
+  let hash = 0;
+  for (let i = 0; i < projectName.length; i++) {
+    hash = (hash * 31 + projectName.charCodeAt(i)) & 0xffffffff;
+  }
+  return PROJECT_COLOR_PALETTE[Math.abs(hash) % PROJECT_COLOR_PALETTE.length];
+}

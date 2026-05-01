@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from 'react';
+import { useMemo, useState, useEffect, type ReactNode } from 'react';
 import { Clock, Folder, MessageSquare, Search } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { ScrollArea } from '../../../../shared/view/ui';
@@ -10,7 +10,7 @@ import SidebarHeader from './SidebarHeader';
 import SidebarProjectList, { type SidebarProjectListProps } from './SidebarProjectList';
 import { formatTimeAgo } from '../../../../utils/dateUtils';
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
-import { getSessionName } from '../../utils/utils';
+import { getSessionName, getProjectColor } from '../../utils/utils';
 
 type SearchMode = 'projects' | 'conversations' | 'recent';
 
@@ -115,6 +115,32 @@ export default function SidebarContent({
       .slice(0, 10);
   }, [searchMode, projectListProps]);
 
+  const [selectedProjectFilter, setSelectedProjectFilter] = useState<string | null>(null);
+
+  const projectBadges = useMemo(() => {
+    const counts = new Map<string, { project: Project; count: number }>();
+    for (const { project } of recentSessions) {
+      const existing = counts.get(project.name);
+      if (existing) {
+        existing.count++;
+      } else {
+        counts.set(project.name, { project, count: 1 });
+      }
+    }
+    return Array.from(counts.values()).sort((a, b) => b.count - a.count);
+  }, [recentSessions]);
+
+  useEffect(() => {
+    if (selectedProjectFilter && !projectBadges.some(b => b.project.name === selectedProjectFilter)) {
+      setSelectedProjectFilter(null);
+    }
+  }, [projectBadges, selectedProjectFilter]);
+
+  const filteredRecentSessions = useMemo(() => {
+    if (!selectedProjectFilter) return recentSessions;
+    return recentSessions.filter(({ project }) => project.name === selectedProjectFilter);
+  }, [recentSessions, selectedProjectFilter]);
+
   return (
     <div
       className="flex h-full flex-col bg-background/80 backdrop-blur-sm md:w-72 md:select-none"
@@ -140,17 +166,53 @@ export default function SidebarContent({
       <ScrollArea className="flex-1 overflow-y-auto overscroll-contain md:px-1.5 md:py-2">
         {searchMode === 'recent' && !showConversationSearch ? (
           <div className="space-y-1 px-2 py-1">
-            {recentSessions.length === 0 ? (
+            {/* Project filter badges */}
+            {projectBadges.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 pb-2 pt-1">
+                {projectBadges.map(({ project, count }) => {
+                  const color = getProjectColor(project.name);
+                  const isSelected = selectedProjectFilter === project.name;
+                  return (
+                    <button
+                      key={project.name}
+                      type="button"
+                      aria-pressed={isSelected}
+                      onClick={() =>
+                        setSelectedProjectFilter(isSelected ? null : project.name)
+                      }
+                      className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium transition-all"
+                      style={{
+                        background: isSelected ? color.dot : color.bg,
+                        border: `1px solid ${isSelected ? color.dot : color.border}`,
+                        color: isSelected ? '#ffffff' : color.text,
+                      }}
+                    >
+                      <span className="max-w-[80px] truncate">{project.displayName || project.name}</span>
+                      <span style={{ opacity: isSelected ? 0.85 : 0.7 }}>{count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {filteredRecentSessions.length === 0 ? (
               <div className="px-4 py-12 text-center">
                 <Clock className="mx-auto mb-3 h-8 w-8 text-muted-foreground/40" />
-                <p className="text-sm text-muted-foreground">No recent sessions</p>
+                <p className="text-sm text-muted-foreground">
+                  {selectedProjectFilter ? 'No recent sessions for this project' : 'No recent sessions'}
+                </p>
               </div>
-            ) : recentSessions.map(({ session, project }) => {
+            ) : filteredRecentSessions.map(({ session, project }) => {
+              const color = getProjectColor(project.name);
               const isProcessing = projectListProps.processingSessions?.has(session.id) ?? false;
               const sessionDate = new Date(session.lastActivity || session.createdAt || 0);
               const isActive = (projectListProps.currentTime.getTime() - sessionDate.getTime()) / 60000 < 10;
               return (
               <div key={`${project.name}-${session.id}`} className="relative">
+                {/* Project color bookmark */}
+                <div
+                  className="absolute left-2 top-1 bottom-1 w-[3px] rounded-full"
+                  style={{ background: color.dot }}
+                />
                 {isProcessing && (
                   <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2">
                     <div className="h-2 w-2 animate-spin rounded-full border border-yellow-400 border-t-transparent" />
@@ -162,7 +224,7 @@ export default function SidebarContent({
                   </div>
                 )}
                 <button
-                  className="w-full rounded-md px-2 py-2 text-left transition-colors hover:bg-accent/50"
+                  className="w-full rounded-md pr-2 py-2 pl-5 text-left transition-colors hover:bg-accent/50"
                   onClick={() => projectListProps.onSessionSelect(session, project.name)}
                 >
                   <div className="flex items-center gap-2 min-w-0">
