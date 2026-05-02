@@ -693,6 +693,15 @@ async function getSessions(projectName, limit = 5, offset = 0) {
   }
 }
 
+/**
+ * Returns true if a JSONL entry is a subagent-injected user message.
+ * Mirrors the frontend logic in useChatMessages.ts:
+ *   isSubAgentInput: Boolean(msg.parentToolUseId || msg.isMeta)
+ */
+function isSubAgentEntry(entry) {
+  return Boolean(entry.parentToolUseId || entry.isMeta);
+}
+
 async function parseJsonlSessions(filePath) {
   const sessions = new Map();
   const entries = [];
@@ -765,7 +774,7 @@ async function parseJsonlSessions(filePath) {
                 textContent === 'Warmup' // Explicitly filter out "Warmup"
               );
 
-              if (typeof textContent === 'string' && textContent.length > 0 && !isSystemMessage) {
+              if (typeof textContent === 'string' && textContent.length > 0 && !isSystemMessage && !isSubAgentEntry(entry)) {
                 session.lastUserMessage = textContent;
               }
             } else if (entry.message?.role === 'assistant' && entry.message?.content) {
@@ -2068,7 +2077,7 @@ async function searchConversations(query, limit = 50, onProjectResult = null, si
               const role = entry.message.role;
               if (role === 'user' || role === 'assistant') {
                 const text = extractText(entry.message.content);
-                if (text && !isSystemMessage(text)) {
+                if (text && !isSystemMessage(text) && !(role === 'user' && isSubAgentEntry(entry))) {
                   if (!sessionLastMessages.has(currentSessionId)) {
                     sessionLastMessages.set(currentSessionId, {});
                   }
