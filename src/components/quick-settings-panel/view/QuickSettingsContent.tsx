@@ -77,7 +77,7 @@ export default function QuickSettingsContent({
             onCheckedChange={() => onTtsToggle()}
           />
         )}
-        {isVoiceSupported && (
+        {(isVoiceSupported || ttsSupported) && (
           <div className={SETTING_ROW_CLASS}>
             <span className="flex items-center gap-2 text-sm text-gray-900 dark:text-white">
               <Mic className="h-4 w-4 text-gray-600 dark:text-gray-400" />

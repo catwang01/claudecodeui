@@ -20,18 +20,18 @@ export default function App() {
             <PluginsProvider>
               <TasksSettingsProvider>
                 <TaskMasterProvider>
-                  <TTSProvider>
-                    <VoiceConversationProvider>
-                      <ProtectedRoute>
+                  <ProtectedRoute>
+                    <TTSProvider>
+                      <VoiceConversationProvider>
                         <Router basename={window.__ROUTER_BASENAME__ || ''}>
                           <Routes>
                             <Route path="/" element={<AppContent />} />
                             <Route path="/session/:sessionId" element={<AppContent />} />
                           </Routes>
                         </Router>
-                      </ProtectedRoute>
-                    </VoiceConversationProvider>
-                  </TTSProvider>
+                      </VoiceConversationProvider>
+                    </TTSProvider>
+                  </ProtectedRoute>
                 </TaskMasterProvider>
               </TasksSettingsProvider>
             </PluginsProvider>
