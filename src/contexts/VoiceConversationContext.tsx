@@ -1,12 +1,20 @@
+import { MicVAD } from '@ricky0123/vad-web';
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useTTS } from './TTSContext';
+import { float32ToWav } from '../utils/wav';
+import { authenticatedFetch } from '../utils/api.js';
+import { logger } from '../utils/logger';
 
 export type VoiceStatus = 'idle' | 'listening' | 'processing' | 'speaking';
 export type VoiceLang = 'zh-CN' | 'en-US' | 'auto';
 
 const VOICE_LANG_KEY = 'voice-lang';
-const SILENCE_MS = 2000;
+const PARTIAL_INTERVAL_MS = 3000;
+
+// VAD speech probability thresholds
+const THRESHOLD_LISTENING = 0.7;  // normal sensitivity when waiting for user
+const THRESHOLD_SPEAKING  = 0.92; // strict threshold during TTS to suppress echo
 
 type VoiceConversationContextValue = {
   supported: boolean;
@@ -22,39 +30,28 @@ type VoiceConversationContextValue = {
 
 const VoiceConversationContext = createContext<VoiceConversationContextValue | null>(null);
 
-// Minimal SpeechRecognition interfaces (not always present in all TS DOM lib versions)
-interface ISpeechRecognitionResult {
-  readonly isFinal: boolean;
-  [index: number]: { transcript: string };
-}
-interface ISpeechRecognitionEvent {
-  readonly resultIndex: number;
-  readonly results: ISpeechRecognitionResult[];
-}
-interface ISpeechRecognition extends EventTarget {
-  lang: string;
-  continuous: boolean;
-  interimResults: boolean;
-  maxAlternatives: number;
-  start(): void;
-  stop(): void;
-  abort(): void;
-  onresult: ((event: ISpeechRecognitionEvent) => void) | null;
-  onend: (() => void) | null;
-  onerror: ((event: { error: string }) => void) | null;
-}
-
-function getSpeechRecognitionClass(): (new () => ISpeechRecognition) | null {
-  if (typeof window === 'undefined') return null;
-  const w = window as unknown as Record<string, unknown>;
-  return (w['SpeechRecognition'] ?? w['webkitSpeechRecognition'] ?? null) as (new () => ISpeechRecognition) | null;
+async function transcribeWav(wav: Blob, lang: VoiceLang): Promise<string> {
+  const form = new FormData();
+  form.append('file', wav, 'audio.wav');
+  if (lang !== 'auto') {
+    form.append('language', lang === 'zh-CN' ? 'zh' : 'en');
+  }
+  try {
+    const res = await authenticatedFetch('/api/stt/transcribe', { method: 'POST', body: form });
+    if (!res.ok) return '';
+    const data = await res.json();
+    return (data.text ?? '').trim();
+  } catch {
+    return '';
+  }
 }
 
 export function VoiceConversationProvider({ children }: { children: ReactNode }) {
-  const { isSpeaking } = useTTS();
-  const [isActive, setIsActive] = useState(false);
-  const [status, setStatus] = useState<VoiceStatus>('idle');
-  const [transcript, setTranscript] = useState('');
+  const { isSpeaking, stop: ttsStop } = useTTS();
+
+  const [isActive, setIsActive]        = useState(false);
+  const [status, setStatus]            = useState<VoiceStatus>('idle');
+  const [transcript, setTranscript]    = useState('');
   const [voiceLang, setVoiceLangState] = useState<VoiceLang>(() => {
     try {
       const saved = localStorage.getItem(VOICE_LANG_KEY);
@@ -63,20 +60,26 @@ export function VoiceConversationProvider({ children }: { children: ReactNode })
     return 'zh-CN';
   });
 
+  const supported = typeof window !== 'undefined' &&
+    typeof AudioContext !== 'undefined' &&
+    typeof navigator?.mediaDevices?.getUserMedia === 'function';
+
   const submitCallbackRef = useRef<((text: string) => void) | null>(null);
-  const recognitionRef = useRef<ISpeechRecognition | null>(null);
-  const finalTranscriptRef = useRef('');
-  const isActiveRef = useRef(false);
-  const statusRef = useRef<VoiceStatus>('idle');
-  const prevLoadingRef = useRef(false);
-  const isSpeakingRef = useRef(isSpeaking);
-  const voiceLangRef = useRef(voiceLang);
-  const silenceTimerRef = useRef<number | null>(null);
+  const statusRef         = useRef<VoiceStatus>('idle');
+  const isActiveRef       = useRef(false);
+  const voiceLangRef      = useRef(voiceLang);
+  const isSpeakingRef     = useRef(isSpeaking);
+  const ttsStopRef        = useRef(ttsStop);
+  const prevLoadingRef    = useRef(false);
+  const vadRef            = useRef<MicVAD | null>(null);
+  const speechFramesRef   = useRef<Float32Array[]>([]);
+  const speechStartedRef  = useRef(false);
+  const partialTimerRef   = useRef<number | null>(null);
 
-  const supported = Boolean(getSpeechRecognitionClass());
+  // Sync update in render body so VAD callbacks always see current values.
+  ttsStopRef.current = ttsStop;
 
-  useEffect(() => { isActiveRef.current = isActive; }, [isActive]);
-  useEffect(() => { statusRef.current = status; }, [status]);
+  useEffect(() => { statusRef.current = status; },     [status]);
   useEffect(() => { voiceLangRef.current = voiceLang; }, [voiceLang]);
 
   const setVoiceLang = useCallback((lang: VoiceLang) => {
@@ -85,165 +88,203 @@ export function VoiceConversationProvider({ children }: { children: ReactNode })
     try { localStorage.setItem(VOICE_LANG_KEY, lang); } catch { /* ignore */ }
   }, []);
 
-  const startListening = useCallback(() => {
-    const SR = getSpeechRecognitionClass();
-    if (!SR || !isActiveRef.current) return;
+  // ── Partial STT (preview while speaking) ─────────────────────────────────
 
-    recognitionRef.current?.abort();
-    recognitionRef.current = null;
+  const sendPartialNow = useCallback(async () => {
+    const frames = speechFramesRef.current;
+    if (frames.length < 80) return;
 
-    const recognition = new SR();
-    recognition.lang = voiceLangRef.current === 'auto' ? '' : voiceLangRef.current;
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.maxAlternatives = 1;
+    speechFramesRef.current = [];
+    const total = frames.reduce((sum, f) => sum + f.length, 0);
+    const combined = new Float32Array(total);
+    let offset = 0;
+    for (const f of frames) { combined.set(f, offset); offset += f.length; }
 
-    finalTranscriptRef.current = '';
-
-    recognition.onresult = (event) => {
-      // Reset silence timer on every new result
-      if (silenceTimerRef.current !== null) {
-        window.clearTimeout(silenceTimerRef.current);
-        silenceTimerRef.current = null;
-      }
-
-      let interim = '';
-      let final = '';
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const result = event.results[i];
-        if (result.isFinal) {
-          final += result[0].transcript;
-        } else {
-          interim += result[0].transcript;
-        }
-      }
-      if (final) {
-        finalTranscriptRef.current += final;
-      }
-      setTranscript(finalTranscriptRef.current + interim);
-
-      // Start silence timer once we have confirmed speech
-      if (finalTranscriptRef.current.trim()) {
-        silenceTimerRef.current = window.setTimeout(() => {
-          silenceTimerRef.current = null;
-          recognitionRef.current?.stop();
-        }, SILENCE_MS);
-      }
-    };
-
-    recognition.onend = () => {
-      if (silenceTimerRef.current !== null) {
-        window.clearTimeout(silenceTimerRef.current);
-        silenceTimerRef.current = null;
-      }
-
-      if (!isActiveRef.current) return;
-
-      const text = finalTranscriptRef.current.trim();
-      if (text && submitCallbackRef.current) {
-        submitCallbackRef.current(text);
-        setTranscript('');
-        setStatus('processing');
-        statusRef.current = 'processing';
-      } else {
-        // No speech detected — restart listening
-        setTranscript('');
-        if (statusRef.current === 'listening') {
-          startListening();
-        }
-      }
-    };
-
-    recognition.onerror = (event) => {
-      if (!isActiveRef.current) return;
-      if (event.error === 'aborted') return;
-      // Restart on any transient error
-      setTimeout(() => {
-        if (isActiveRef.current && statusRef.current === 'listening') {
-          startListening();
-        }
-      }, 500);
-    };
-
-    setStatus('listening');
-    statusRef.current = 'listening';
-    recognitionRef.current = recognition;
-    recognition.start();
+    const wav = float32ToWav(combined, 16000);
+    const text = await transcribeWav(wav, voiceLangRef.current);
+    if (text && speechStartedRef.current) {
+      setTranscript(text);
+    }
   }, []);
 
-  // TTS state transitions
+  const schedulePartial = useCallback(() => {
+    partialTimerRef.current = window.setTimeout(async () => {
+      if (!speechStartedRef.current) return;
+      await sendPartialNow();
+      if (speechStartedRef.current) schedulePartial();
+    }, PARTIAL_INTERVAL_MS);
+  }, [sendPartialNow]);
+
+  const cancelPartialTimer = useCallback(() => {
+    if (partialTimerRef.current !== null) {
+      clearTimeout(partialTimerRef.current);
+      partialTimerRef.current = null;
+    }
+  }, []);
+
+  // ── VAD lifecycle ─────────────────────────────────────────────────────────
+
+  const startVAD = useCallback(async () => {
+    if (vadRef.current) return;
+
+    try {
+      const vad = await MicVAD.new({
+        baseAssetPath: '/',
+        onnxWASMBasePath: '/',
+        // AEC removes speaker output from mic signal before VAD sees it.
+        // Combined with dynamic threshold below, this suppresses echo on mobile.
+        getStream: () => navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: false,
+          },
+        }),
+        positiveSpeechThreshold: THRESHOLD_LISTENING,
+        negativeSpeechThreshold: THRESHOLD_LISTENING - 0.15,
+        redemptionMs: 2000,
+        minSpeechMs: 600,
+        onSpeechStart: () => {
+          if (!isActiveRef.current) return;
+          cancelPartialTimer();
+          speechStartedRef.current = true;
+          speechFramesRef.current = [];
+          schedulePartial();
+          // Barge-in: user speaks while TTS is playing → stop TTS, start listening
+          if (statusRef.current === 'speaking') {
+            logger.log('[Voice] barge-in');
+            ttsStopRef.current();
+            setStatus('listening');
+            statusRef.current = 'listening';
+          }
+        },
+        onFrameProcessed: (_probs: any, frame: Float32Array) => {
+          if (speechStartedRef.current) {
+            speechFramesRef.current.push(new Float32Array(frame));
+          }
+        },
+        onSpeechEnd: async (audio: Float32Array) => {
+          if (!isActiveRef.current) return;
+          if (statusRef.current !== 'listening') return;
+
+          cancelPartialTimer();
+          speechStartedRef.current = false;
+          speechFramesRef.current = [];
+
+          logger.log(`[Voice] speech end, samples=${audio.length}`);
+          setStatus('processing');
+          statusRef.current = 'processing';
+          setTranscript('');
+
+          const wav = float32ToWav(audio, 16000);
+          const text = await transcribeWav(wav, voiceLangRef.current);
+          logger.log(`[Voice] STT result: "${text}"`);
+
+          if (!isActiveRef.current) return;
+
+          if (text) {
+            submitCallbackRef.current?.(text);
+          } else {
+            setStatus('listening');
+            statusRef.current = 'listening';
+          }
+        },
+        onVADMisfire: () => {
+          cancelPartialTimer();
+          speechStartedRef.current = false;
+          speechFramesRef.current = [];
+          logger.log('[Voice] VAD misfire');
+        },
+      });
+
+      vadRef.current = vad;
+      await vad.start();
+      logger.log('[Voice] VAD started');
+    } catch (err) {
+      logger.error('[Voice] VAD init failed', err);
+      setIsActive(false);
+      isActiveRef.current = false;
+      setStatus('idle');
+      statusRef.current = 'idle';
+    }
+  }, [cancelPartialTimer, schedulePartial]);
+
+  const stopVAD = useCallback(async () => {
+    const vad = vadRef.current;
+    vadRef.current = null;
+    if (vad) {
+      try { await vad.destroy(); } catch { /* ignore */ }
+      logger.log('[Voice] VAD destroyed');
+    }
+  }, []);
+
+  // ── TTS interlock ─────────────────────────────────────────────────────────
+  // During TTS playback: raise threshold to 0.92 so TTS echo can't trigger
+  // barge-in. Real intentional speech (user speaking loudly) still exceeds 0.92.
+  // When TTS ends: restore normal threshold.
+
   useEffect(() => {
     const prevSpeaking = isSpeakingRef.current;
     isSpeakingRef.current = isSpeaking;
-
     if (!isActiveRef.current) return;
 
     if (isSpeaking && !prevSpeaking) {
-      // TTS just started — stop recognition and enter speaking state
-      if (statusRef.current !== 'speaking') {
-        recognitionRef.current?.abort();
-        recognitionRef.current = null;
-        setStatus('speaking');
-        statusRef.current = 'speaking';
-      }
+      logger.log('[Voice] TTS started → speaking');
+      setStatus('speaking');
+      statusRef.current = 'speaking';
+      vadRef.current?.setOptions({ positiveSpeechThreshold: THRESHOLD_SPEAKING });
     } else if (!isSpeaking && prevSpeaking) {
-      // TTS just finished — go back to listening
+      logger.log('[Voice] TTS ended → listening');
       if (statusRef.current === 'speaking') {
-        startListening();
+        setStatus('listening');
+        statusRef.current = 'listening';
+        vadRef.current?.setOptions({ positiveSpeechThreshold: THRESHOLD_LISTENING });
       }
     }
-  }, [isSpeaking, startListening]);
+  }, [isSpeaking]);
+
+  // ── toggle ────────────────────────────────────────────────────────────────
 
   const toggle = useCallback(() => {
     if (isActiveRef.current) {
       isActiveRef.current = false;
+      speechStartedRef.current = false;
+      speechFramesRef.current = [];
+      cancelPartialTimer();
       setIsActive(false);
       setStatus('idle');
       statusRef.current = 'idle';
       setTranscript('');
-      if (silenceTimerRef.current !== null) {
-        window.clearTimeout(silenceTimerRef.current);
-        silenceTimerRef.current = null;
-      }
-      recognitionRef.current?.abort();
-      recognitionRef.current = null;
+      stopVAD();
     } else {
       isActiveRef.current = true;
       setIsActive(true);
-      startListening();
+      setStatus('listening');
+      statusRef.current = 'listening';
+      startVAD();
     }
-  }, [startListening]);
+  }, [startVAD, stopVAD, cancelPartialTimer]);
 
   const registerSubmitCallback = useCallback((fn: (text: string) => void) => {
     submitCallbackRef.current = fn;
   }, []);
 
-  // When loading finishes and TTS doesn't start, fall back to listening
-  const notifyLoadingChange = useCallback(
-    (loading: boolean) => {
-      const prevLoading = prevLoadingRef.current;
-      prevLoadingRef.current = loading;
-
-      if (!loading && prevLoading && isActiveRef.current && statusRef.current === 'processing') {
-        // Give TTS 700ms to start; if it doesn't, resume listening
-        setTimeout(() => {
-          if (isActiveRef.current && statusRef.current === 'processing') {
-            startListening();
-          }
-        }, 700);
-      }
-    },
-    [startListening],
-  );
+  const notifyLoadingChange = useCallback((loading: boolean) => {
+    const prev = prevLoadingRef.current;
+    prevLoadingRef.current = loading;
+    if (!loading && prev && isActiveRef.current && statusRef.current === 'processing') {
+      setTimeout(() => {
+        if (isActiveRef.current && statusRef.current === 'processing') {
+          setStatus('listening');
+          statusRef.current = 'listening';
+        }
+      }, 300);
+    }
+  }, []);
 
   useEffect(() => {
-    return () => {
-      recognitionRef.current?.abort();
-      if (silenceTimerRef.current !== null) {
-        window.clearTimeout(silenceTimerRef.current);
-      }
-    };
-  }, []);
+    return () => { cancelPartialTimer(); stopVAD(); };
+  }, [cancelPartialTimer, stopVAD]);
 
   return (
     <VoiceConversationContext.Provider

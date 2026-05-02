@@ -68,6 +68,7 @@ import geminiRoutes from './routes/gemini.js';
 import pluginsRoutes from './routes/plugins.js';
 import messagesRoutes from './routes/messages.js';
 import ttsRoutes from './routes/tts.js';
+import sttRoutes from './routes/stt.js';
 import { createNormalizedMessage } from './providers/types.js';
 import { getProvider } from './providers/registry.js';
 import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
@@ -507,6 +508,9 @@ app.use('/api/agent', agentRoutes);
 
 // TTS API Routes (protected)
 app.use('/api/tts', authenticateToken, ttsRoutes);
+
+// STT API Routes (protected)
+app.use('/api/stt', authenticateToken, sttRoutes);
 
 // Serve public files (like api-docs.html)
 app.use(express.static(path.join(__dirname, '../public')));
