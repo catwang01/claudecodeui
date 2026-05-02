@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
-import { Clock, Folder, MessageSquare, Search, EyeOff } from 'lucide-react';
+import { Clock, Folder, MessageSquare, Search, Trash2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { ScrollArea } from '../../../../shared/view/ui';
 import type { Project } from '../../../../types/app';
@@ -289,7 +289,7 @@ export default function SidebarContent({
                       title="Hide from recents"
                       type="button"
                     >
-                      <EyeOff className="h-3 w-3" />
+                      <Trash2 className="h-3 w-3" />
                     </button>
                   </div>
                 </button>
