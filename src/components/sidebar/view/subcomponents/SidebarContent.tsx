@@ -11,6 +11,7 @@ import SidebarProjectList, { type SidebarProjectListProps } from './SidebarProje
 import { formatTimeAgo } from '../../../../utils/dateUtils';
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
 import { getSessionName, getProjectColor } from '../../utils/utils';
+import { authenticatedFetch } from '../../../../utils/api';
 
 type SearchMode = 'projects' | 'conversations' | 'recent';
 
@@ -106,10 +107,8 @@ export default function SidebarContent({
     const key = `${sessionId}:${provider}`;
     setHiddenSet(prev => new Set([...prev, key]));
     try {
-      const token = localStorage.getItem('auth_token');
-      await fetch(`/api/sessions/${sessionId}/hide`, {
+      await authenticatedFetch(`/api/sessions/${sessionId}/hide`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({ provider, lastActivity }),
       });
     } catch {
