@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
-import { Clock, Folder, MessageSquare, Search, X } from 'lucide-react';
+import { Clock, Folder, MessageSquare, Search, EyeOff } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { ScrollArea } from '../../../../shared/view/ui';
 import type { Project } from '../../../../types/app';
@@ -280,18 +280,18 @@ export default function SidebarContent({
                   <div className="mt-0.5 flex items-center gap-1.5 pl-5">
                     <Folder className="h-2.5 w-2.5 flex-shrink-0 text-muted-foreground/60" />
                     <span className="truncate text-[10px] text-muted-foreground/60">{project.displayName || project.name}</span>
-                    <span className="ml-auto flex-shrink-0 text-[10px] text-muted-foreground/50">
+                    <span className="ml-auto flex-shrink-0 text-[10px] text-muted-foreground/50 group-hover:hidden">
                       {formatTimeAgo(session.lastActivity || session.createdAt || '', projectListProps.currentTime, t)}
                     </span>
+                    <button
+                      className="ml-auto hidden group-hover:flex items-center justify-center h-4 w-4 rounded text-muted-foreground/40 hover:text-muted-foreground transition-colors flex-shrink-0"
+                      onClick={(e) => { e.stopPropagation(); hideSession(session.id, session.__provider || 'claude', session.lastActivity || session.createdAt || ''); }}
+                      title="Hide from recents"
+                      type="button"
+                    >
+                      <EyeOff className="h-3 w-3" />
+                    </button>
                   </div>
-                </button>
-                <button
-                  className="absolute right-1 top-1/2 -translate-y-1/2 hidden group-hover:flex h-5 w-5 items-center justify-center rounded text-muted-foreground/50 hover:bg-accent hover:text-foreground transition-colors"
-                  onClick={(e) => { e.stopPropagation(); hideSession(session.id, session.__provider || 'claude', session.lastActivity || session.createdAt || ''); }}
-                  title="Remove from recents"
-                  type="button"
-                >
-                  <X className="h-3 w-3" />
                 </button>
               </div>
               );
