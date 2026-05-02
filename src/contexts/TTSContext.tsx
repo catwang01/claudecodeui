@@ -30,6 +30,7 @@ type TTSContextValue = {
   supported: boolean;
   enabled: boolean;
   isSpeaking: boolean;
+  speakingText: string;
   speak: (text: string) => void;
   stop: () => void;
   toggle: () => void;
@@ -48,7 +49,10 @@ export function TTSProvider({ children }: { children: ReactNode }) {
 
   const [supported, setSupported] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [speakingText, setSpeakingText] = useState('');
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
 
   // Check backend availability once on mount
   useEffect(() => {
@@ -69,13 +73,47 @@ export function TTSProvider({ children }: { children: ReactNode }) {
     }
   }, [enabled]);
 
+  // Unlock audio on first user gesture — create & resume AudioContext within the gesture
+  // so iOS Safari allows subsequent auto-play via Web Audio API.
+  useEffect(() => {
+    let unlocked = false;
+    const unlock = () => {
+      if (unlocked) return;
+      unlocked = true;
+      try {
+        const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        if (AudioCtx) {
+          const ctx = new AudioCtx();
+          ctx.resume();
+          audioContextRef.current = ctx;
+        }
+      } catch { /* ignore */ }
+      document.removeEventListener('click', unlock, true);
+      document.removeEventListener('touchstart', unlock, true);
+      document.removeEventListener('keydown', unlock, true);
+    };
+    document.addEventListener('click', unlock, true);
+    document.addEventListener('touchstart', unlock, true);
+    document.addEventListener('keydown', unlock, true);
+    return () => {
+      document.removeEventListener('click', unlock, true);
+      document.removeEventListener('touchstart', unlock, true);
+      document.removeEventListener('keydown', unlock, true);
+    };
+  }, []);
+
   const stop = useCallback(() => {
+    if (sourceNodeRef.current) {
+      try { sourceNodeRef.current.stop(); } catch { /* ignore */ }
+      sourceNodeRef.current = null;
+    }
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.src = '';
       audioRef.current = null;
     }
     setIsSpeaking(false);
+    setSpeakingText('');
   }, []);
 
   const speak = useCallback(
@@ -83,6 +121,10 @@ export function TTSProvider({ children }: { children: ReactNode }) {
       if (!enabled || !text.trim()) return;
 
       // Stop any ongoing speech
+      if (sourceNodeRef.current) {
+        try { sourceNodeRef.current.stop(); } catch { /* ignore */ }
+        sourceNodeRef.current = null;
+      }
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current.src = '';
@@ -92,36 +134,56 @@ export function TTSProvider({ children }: { children: ReactNode }) {
       const clean = stripMarkdown(text);
       if (!clean) return;
 
+      setSpeakingText(clean);
       try {
-        setIsSpeaking(true);
         const res = await authenticatedFetch('/api/tts/synthesize', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text: clean, voice: voiceLangToEdgeVoice(localStorage.getItem(VOICE_LANG_KEY)) }),
         });
 
-        if (!res.ok) {
-          setIsSpeaking(false);
-          return;
+        if (!res.ok) { setSpeakingText(''); return; }
+
+        const arrayBuffer = await res.arrayBuffer();
+        const ctx = audioContextRef.current;
+
+        if (ctx && ctx.state !== 'closed') {
+          // Web Audio API path — works on iOS Safari after AudioContext is unlocked
+          const decoded = await ctx.decodeAudioData(arrayBuffer);
+          const source = ctx.createBufferSource();
+          source.buffer = decoded;
+          source.connect(ctx.destination);
+          sourceNodeRef.current = source;
+          source.onended = () => {
+            sourceNodeRef.current = null;
+            setIsSpeaking(false);
+            setSpeakingText('');
+          };
+          await ctx.resume(); // resume if suspended (e.g. iOS after page background)
+          source.start(0);
+          setIsSpeaking(true);
+        } else {
+          // Fallback: HTML Audio element (desktop browsers)
+          const blob = new Blob([arrayBuffer], { type: 'audio/mpeg' });
+          const url = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          audioRef.current = audio;
+          audio.onended = () => {
+            URL.revokeObjectURL(url);
+            setIsSpeaking(false);
+            setSpeakingText('');
+          };
+          audio.onerror = () => {
+            URL.revokeObjectURL(url);
+            setIsSpeaking(false);
+            setSpeakingText('');
+          };
+          await audio.play();
+          setIsSpeaking(true);
         }
-
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const audio = new Audio(url);
-        audioRef.current = audio;
-
-        audio.onended = () => {
-          URL.revokeObjectURL(url);
-          setIsSpeaking(false);
-        };
-        audio.onerror = () => {
-          URL.revokeObjectURL(url);
-          setIsSpeaking(false);
-        };
-
-        await audio.play();
       } catch {
         setIsSpeaking(false);
+        setSpeakingText('');
       }
     },
     [enabled],
@@ -137,15 +199,21 @@ export function TTSProvider({ children }: { children: ReactNode }) {
   // Clean up on unmount
   useEffect(() => {
     return () => {
+      if (sourceNodeRef.current) {
+        try { sourceNodeRef.current.stop(); } catch { /* ignore */ }
+      }
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current.src = '';
+      }
+      if (audioContextRef.current) {
+        audioContextRef.current.close().catch(() => {});
       }
     };
   }, []);
 
   return (
-    <TTSContext.Provider value={{ supported, enabled, isSpeaking, speak, stop, toggle }}>
+    <TTSContext.Provider value={{ supported, enabled, isSpeaking, speakingText, speak, stop, toggle }}>
       {children}
     </TTSContext.Provider>
   );
