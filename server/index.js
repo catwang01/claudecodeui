@@ -72,7 +72,7 @@ import sttRoutes from './routes/stt.js';
 import { createNormalizedMessage } from './providers/types.js';
 import { getProvider } from './providers/registry.js';
 import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
-import { initializeDatabase, sessionNamesDb, applyCustomSessionNames } from './database/db.js';
+import { initializeDatabase, sessionNamesDb, sessionDb, applyCustomSessionNames, applyHiddenFromRecents } from './database/db.js';
 import { configureWebPush } from './services/vapid-keys.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
 import { IS_PLATFORM } from './constants/config.js';
@@ -616,6 +616,7 @@ app.get('/api/projects/:projectName/sessions', authenticateToken, async (req, re
         const { limit = 5, offset = 0 } = req.query;
         const result = await getSessions(req.params.projectName, parseInt(limit), parseInt(offset));
         applyCustomSessionNames(result.sessions, 'claude');
+        applyHiddenFromRecents(result.sessions, 'claude');
         res.json(result);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -690,6 +691,49 @@ app.put('/api/sessions/:sessionId/rename', authenticateToken, async (req, res) =
         res.json({ success: true });
     } catch (error) {
         console.error(`[API] Error renaming session ${req.params.sessionId}:`, error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Hide session from recents
+app.post('/api/sessions/:sessionId/hide', authenticateToken, (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        const safeSessionId = String(sessionId).replace(/[^a-zA-Z0-9._-]/g, '');
+        if (!safeSessionId || safeSessionId !== String(sessionId)) {
+            return res.status(400).json({ error: 'Invalid sessionId' });
+        }
+        const { provider, lastActivity } = req.body;
+        if (!provider || !VALID_PROVIDERS.includes(provider)) {
+            return res.status(400).json({ error: `Provider must be one of: ${VALID_PROVIDERS.join(', ')}` });
+        }
+        if (!lastActivity || typeof lastActivity !== 'string') {
+            return res.status(400).json({ error: 'lastActivity is required' });
+        }
+        sessionDb.hideFromRecents(safeSessionId, provider, lastActivity);
+        res.json({ success: true });
+    } catch (error) {
+        console.error(`[API] Error hiding session ${req.params.sessionId}:`, error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Unhide session from recents
+app.delete('/api/sessions/:sessionId/hide', authenticateToken, (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        const safeSessionId = String(sessionId).replace(/[^a-zA-Z0-9._-]/g, '');
+        if (!safeSessionId || safeSessionId !== String(sessionId)) {
+            return res.status(400).json({ error: 'Invalid sessionId' });
+        }
+        const { provider } = req.body;
+        if (!provider || !VALID_PROVIDERS.includes(provider)) {
+            return res.status(400).json({ error: `Provider must be one of: ${VALID_PROVIDERS.join(', ')}` });
+        }
+        sessionDb.unhideFromRecents(safeSessionId, provider);
+        res.json({ success: true });
+    } catch (error) {
+        console.error(`[API] Error unhiding session ${req.params.sessionId}:`, error);
         res.status(500).json({ error: error.message });
     }
 });

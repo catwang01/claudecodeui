@@ -1,5 +1,5 @@
-import { useMemo, useState, useEffect, type ReactNode } from 'react';
-import { Clock, Folder, MessageSquare, Search } from 'lucide-react';
+import { useMemo, useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
+import { Clock, Folder, MessageSquare, Search, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { ScrollArea } from '../../../../shared/view/ui';
 import type { Project } from '../../../../types/app';
@@ -96,6 +96,27 @@ export default function SidebarContent({
   const showConversationSearch = (searchMode === 'conversations' || searchMode === 'recent') && searchFilter.trim().length >= 2;
   const hasPartialResults = conversationResults && conversationResults.results.length > 0;
 
+  const RECENT_PAGE_SIZE = 10;
+  const [visibleCount, setVisibleCount] = useState(RECENT_PAGE_SIZE);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  const [hiddenSet, setHiddenSet] = useState<Set<string>>(new Set());
+
+  const hideSession = useCallback(async (sessionId: string, provider: string, lastActivity: string) => {
+    const key = `${sessionId}:${provider}`;
+    setHiddenSet(prev => new Set([...prev, key]));
+    try {
+      const token = localStorage.getItem('auth_token');
+      await fetch(`/api/sessions/${sessionId}/hide`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ provider, lastActivity }),
+      });
+    } catch {
+      setHiddenSet(prev => { const next = new Set(prev); next.delete(key); return next; });
+    }
+  }, []);
+
   const recentSessions = useMemo(() => {
     if (searchMode !== 'recent') return [];
     const all: Array<{ session: ReturnType<typeof projectListProps.getProjectSessions>[number]; project: Project }> = [];
@@ -105,15 +126,20 @@ export default function SidebarContent({
       }
     }
     return all
+      .filter(({ session }) => {
+        if (session.hiddenFromRecents) return false;
+        const provider = session.__provider || 'claude';
+        if (hiddenSet.has(`${session.id}:${provider}`)) return false;
+        return true;
+      })
       .sort((a, b) => {
         const getTime = (s: typeof a.session) => {
           const date = s.lastActivity || s.createdAt || '';
           return date ? new Date(date).getTime() : 0;
         };
         return getTime(b.session) - getTime(a.session);
-      })
-      .slice(0, 10);
-  }, [searchMode, projectListProps]);
+      });
+  }, [searchMode, projectListProps, hiddenSet]);
 
   const [selectedProjectFilter, setSelectedProjectFilter] = useState<string | null>(null);
 
@@ -136,10 +162,29 @@ export default function SidebarContent({
     }
   }, [projectBadges, selectedProjectFilter]);
 
+  useEffect(() => {
+    setVisibleCount(RECENT_PAGE_SIZE);
+  }, [searchMode, selectedProjectFilter]);
+
   const filteredRecentSessions = useMemo(() => {
     if (!selectedProjectFilter) return recentSessions;
     return recentSessions.filter(({ project }) => project.name === selectedProjectFilter);
   }, [recentSessions, selectedProjectFilter]);
+
+  const loadMore = useCallback(() => {
+    setVisibleCount(prev => prev + RECENT_PAGE_SIZE);
+  }, []);
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      entries => { if (entries[0].isIntersecting) loadMore(); },
+      { threshold: 0.1 }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [loadMore, filteredRecentSessions.length, visibleCount]);
 
   return (
     <div
@@ -201,13 +246,13 @@ export default function SidebarContent({
                   {selectedProjectFilter ? 'No recent sessions for this project' : 'No recent sessions'}
                 </p>
               </div>
-            ) : filteredRecentSessions.map(({ session, project }) => {
+            ) : filteredRecentSessions.slice(0, visibleCount).map(({ session, project }) => {
               const color = getProjectColor(project.name);
               const isProcessing = projectListProps.processingSessions?.has(session.id) ?? false;
               const sessionDate = new Date(session.lastActivity || session.createdAt || 0);
               const isActive = (projectListProps.currentTime.getTime() - sessionDate.getTime()) / 60000 < 10;
               return (
-              <div key={`${project.name}-${session.id}`} className="relative">
+              <div key={`${project.name}-${session.id}`} className="group relative">
                 {/* Project color bookmark */}
                 <div
                   className="absolute left-2 top-1 bottom-1 w-[3px] rounded-full"
@@ -241,9 +286,20 @@ export default function SidebarContent({
                     </span>
                   </div>
                 </button>
+                <button
+                  className="absolute right-1 top-1/2 -translate-y-1/2 hidden group-hover:flex h-5 w-5 items-center justify-center rounded text-muted-foreground/50 hover:bg-accent hover:text-foreground transition-colors"
+                  onClick={(e) => { e.stopPropagation(); hideSession(session.id, session.__provider || 'claude', session.lastActivity || session.createdAt || ''); }}
+                  title="Remove from recents"
+                  type="button"
+                >
+                  <X className="h-3 w-3" />
+                </button>
               </div>
               );
             })}
+            {visibleCount < filteredRecentSessions.length && (
+              <div ref={sentinelRef} className="h-4" />
+            )}
           </div>
         ) : showConversationSearch ? (
           isSearching && !hasPartialResults ? (

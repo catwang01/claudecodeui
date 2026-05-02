@@ -66,7 +66,7 @@ import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import os from 'os';
 import sessionManager from './sessionManager.js';
-import { applyCustomSessionNames } from './database/db.js';
+import { applyCustomSessionNames, applyHiddenFromRecents } from './database/db.js';
 
 // Import TaskMaster detection functions
 async function detectTaskMasterFolder(projectPath) {
@@ -456,18 +456,22 @@ async function getProjects(progressCallback = null) {
         console.warn(`Could not load sessions for project ${entry.name}:`, sessionResult.reason?.message);
       }
       applyCustomSessionNames(project.sessions, 'claude');
+      applyHiddenFromRecents(project.sessions, 'claude');
 
       project.cursorSessions = cursorSessions.status === 'fulfilled' ? cursorSessions.value : [];
       if (cursorSessions.status === 'rejected') console.warn(`Could not load Cursor sessions for project ${entry.name}:`, cursorSessions.reason?.message);
       applyCustomSessionNames(project.cursorSessions, 'cursor');
+      applyHiddenFromRecents(project.cursorSessions, 'cursor');
 
       project.codexSessions = codexSessions.status === 'fulfilled' ? codexSessions.value : [];
       if (codexSessions.status === 'rejected') console.warn(`Could not load Codex sessions for project ${entry.name}:`, codexSessions.reason?.message);
       applyCustomSessionNames(project.codexSessions, 'codex');
+      applyHiddenFromRecents(project.codexSessions, 'codex');
 
       project.geminiSessions = geminiResult.status === 'fulfilled' ? geminiResult.value : [];
       if (geminiResult.status === 'rejected') console.warn(`Could not load Gemini sessions for project ${entry.name}:`, geminiResult.reason?.message);
       applyCustomSessionNames(project.geminiSessions, 'gemini');
+      applyHiddenFromRecents(project.geminiSessions, 'gemini');
 
       if (taskMasterResult.status === 'fulfilled') {
         const r = taskMasterResult.value;
@@ -537,12 +541,15 @@ async function getProjects(progressCallback = null) {
 
       project.cursorSessions = cursorSessions.status === 'fulfilled' ? cursorSessions.value : [];
       applyCustomSessionNames(project.cursorSessions, 'cursor');
+      applyHiddenFromRecents(project.cursorSessions, 'cursor');
 
       project.codexSessions = codexSessions.status === 'fulfilled' ? codexSessions.value : [];
       applyCustomSessionNames(project.codexSessions, 'codex');
+      applyHiddenFromRecents(project.codexSessions, 'codex');
 
       project.geminiSessions = geminiResult.status === 'fulfilled' ? geminiResult.value : [];
       applyCustomSessionNames(project.geminiSessions, 'gemini');
+      applyHiddenFromRecents(project.geminiSessions, 'gemini');
 
       if (taskMasterResult.status === 'fulfilled') {
         const r = taskMasterResult.value;

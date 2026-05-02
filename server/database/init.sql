@@ -91,6 +91,17 @@ CREATE TABLE IF NOT EXISTS session_names (
 
 CREATE INDEX IF NOT EXISTS idx_session_names_lookup ON session_names(session_id, provider);
 
+-- Session metadata (hidden from recents, etc.)
+CREATE TABLE IF NOT EXISTS session_hidden_from_recents (
+  session_id       TEXT NOT NULL,
+  provider         TEXT NOT NULL DEFAULT 'claude',
+  last_activity_at TEXT NOT NULL,
+  hidden_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(session_id, provider)
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_hidden_lookup ON session_hidden_from_recents(session_id, provider);
+
 -- App configuration table (auto-generated secrets, settings, etc.)
 CREATE TABLE IF NOT EXISTS app_config (
     key TEXT PRIMARY KEY,

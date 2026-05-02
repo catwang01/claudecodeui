@@ -5,7 +5,7 @@ import path from 'path';
 import os from 'os';
 import TOML from '@iarna/toml';
 import { getCodexSessions, deleteCodexSession } from '../projects.js';
-import { applyCustomSessionNames, sessionNamesDb } from '../database/db.js';
+import { applyCustomSessionNames, sessionNamesDb, applyHiddenFromRecents } from '../database/db.js';
 
 const router = express.Router();
 
@@ -61,6 +61,7 @@ router.get('/sessions', async (req, res) => {
 
     const sessions = await getCodexSessions(projectPath);
     applyCustomSessionNames(sessions, 'codex');
+    applyHiddenFromRecents(sessions, 'codex');
     res.json({ success: true, sessions });
   } catch (error) {
     console.error('Error fetching Codex sessions:', error);

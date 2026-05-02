@@ -12,6 +12,7 @@ export interface ProjectSession {
   updated_at?: string;
   lastActivity?: string;
   messageCount?: number;
+  hiddenFromRecents?: boolean;
   __provider?: SessionProvider;
   __projectName?: string;
   [key: string]: unknown;

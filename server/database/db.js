@@ -554,6 +554,57 @@ const sessionNamesDb = {
   },
 };
 
+// Generic session metadata DB (hidden from recents, extendable)
+const sessionDb = {
+  hideFromRecents: (sessionId, provider, lastActivityAt) => {
+    db.prepare(`
+      INSERT INTO session_hidden_from_recents (session_id, provider, last_activity_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(session_id, provider)
+      DO UPDATE SET last_activity_at = excluded.last_activity_at, hidden_at = CURRENT_TIMESTAMP
+    `).run(sessionId, provider, lastActivityAt);
+  },
+
+  unhideFromRecents: (sessionId, provider) => {
+    db.prepare(
+      'DELETE FROM session_hidden_from_recents WHERE session_id = ? AND provider = ?'
+    ).run(sessionId, provider);
+  },
+
+  // Returns Map<sessionId, lastActivityAt>
+  getHiddenMap: (sessionIds, provider) => {
+    if (!sessionIds.length) return new Map();
+    const placeholders = sessionIds.map(() => '?').join(',');
+    const rows = db.prepare(
+      `SELECT session_id, last_activity_at FROM session_hidden_from_recents
+       WHERE session_id IN (${placeholders}) AND provider = ?`
+    ).all(...sessionIds, provider);
+    return new Map(rows.map(r => [r.session_id, r.last_activity_at]));
+  },
+};
+
+// Apply hidden-from-recents flags; auto-unhides sessions with new activity
+function applyHiddenFromRecents(sessions, provider) {
+  if (!sessions?.length) return;
+  try {
+    const ids = sessions.map(s => s.id);
+    const hiddenMap = sessionDb.getHiddenMap(ids, provider);
+    if (!hiddenMap.size) return;
+    for (const session of sessions) {
+      const lastActivityAtHide = hiddenMap.get(session.id);
+      if (!lastActivityAtHide) continue;
+      const currentActivity = session.lastActivity || session.createdAt || '';
+      if (currentActivity && currentActivity > lastActivityAtHide) {
+        sessionDb.unhideFromRecents(session.id, provider);
+      } else {
+        session.hiddenFromRecents = true;
+      }
+    }
+  } catch (error) {
+    console.warn(`[DB] Failed to apply hidden-from-recents for ${provider}:`, error.message);
+  }
+}
+
 // Apply custom session names from the database (overrides CLI-generated summaries)
 function applyCustomSessionNames(sessions, provider) {
   if (!sessions?.length) return;
@@ -624,7 +675,9 @@ export {
   notificationPreferencesDb,
   pushSubscriptionsDb,
   sessionNamesDb,
+  sessionDb,
   applyCustomSessionNames,
+  applyHiddenFromRecents,
   appConfigDb,
   githubTokensDb // Backward compatibility
 };
