@@ -1081,7 +1081,7 @@ async function forkSession(projectName, sessionId, forkAfterTimestamp = null) {
 
     const newLines = sessionLines.map(line => {
       const entry = JSON.parse(line);
-      const newEntry = { ...entry, sessionId: newSessionId, timestamp: now };
+      const newEntry = { ...entry, sessionId: newSessionId };
       if (entry.uuid && uuidMap.has(entry.uuid)) newEntry.uuid = uuidMap.get(entry.uuid);
       if (entry.parentUuid && uuidMap.has(entry.parentUuid)) newEntry.parentUuid = uuidMap.get(entry.parentUuid);
       return JSON.stringify(newEntry);
