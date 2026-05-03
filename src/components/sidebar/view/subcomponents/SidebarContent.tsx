@@ -285,9 +285,12 @@ export default function SidebarContent({
                     <div className="h-2 w-2 rounded-full bg-blue-500" />
                   </div>
                 )}
-                <button
-                  className="w-full rounded-md pr-2 py-2 pl-5 text-left transition-colors hover:bg-accent/50"
+                <div
+                  className="w-full rounded-md pr-2 py-2 pl-5 text-left transition-colors hover:bg-accent/50 cursor-pointer"
                   onClick={() => projectListProps.onSessionSelect(session, project.name)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') projectListProps.onSessionSelect(session, project.name); }}
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <SessionProviderLogo provider={session.__provider} className="h-3 w-3 flex-shrink-0" />
@@ -313,7 +316,7 @@ export default function SidebarContent({
                       <Trash2 className="h-3 w-3" />
                     </button>
                   </div>
-                </button>
+                </div>
               </div>
               );
             })}
