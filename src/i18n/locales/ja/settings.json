@@ -99,6 +99,7 @@
     "tasks": "タスク",
     "notifications": "通知",
     "plugins": "プラグイン",
+    "autoDoc": "自動ドキュメント生成",
     "about": "概要"
   },
   "notifications": {
@@ -208,6 +209,29 @@
     "success": "設定を保存しました！",
     "error": "設定の保存に失敗しました",
     "saving": "保存中..."
+  },
+  "autoDoc": {
+    "title": "自動ドキュメント生成",
+    "description": "Claude セッションで定期的に実行されるバックグラウンド自動化タスクを設定します。",
+    "intervalLabel": "実行間隔",
+    "intervalDescription": "最近のセッションを処理する頻度。",
+    "promptLabel": "エージェントプロンプト",
+    "promptDescription": "処理時に各セッションに送信されるプロンプト。",
+    "minMessageCountLabel": "最小メッセージ数",
+    "minMessageCountDescription": "合計メッセージ数がこの閾値を下回るセッションはスキップされます。",
+    "modelLabel": "モデル",
+    "modelDescription": "自動ドキュメント生成に使用するClaudeモデル。",
+    "saving": "保存中...",
+    "hideAutoDocLabel": "自動生成セッションを非表示",
+    "hideAutoDocDescription": "自動生成されたセッションはサイドバーに表示されません。",
+    "intervalOptions": {
+      "5min": "5分",
+      "10min": "10分",
+      "30min": "30分",
+      "1hour": "1時間",
+      "2hours": "2時間",
+      "4hours": "4時間"
+    }
   },
   "footerActions": {
     "save": "設定を保存",

@@ -66,7 +66,7 @@ import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import os from 'os';
 import sessionManager from './sessionManager.js';
-import { applyCustomSessionNames, applyHiddenFromRecents } from './database/db.js';
+import { applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, filterHiddenAutoDocSessions, appConfigDb, sessionDb } from './database/db.js';
 
 // Import TaskMaster detection functions
 async function detectTaskMasterFolder(projectPath) {
@@ -389,6 +389,17 @@ async function extractProjectDirectory(projectName) {
   }
 }
 
+// Returns a Set of session IDs that should be excluded from all views:
+// auto-doc fork sessions + user-hidden-from-recents sessions.
+// Used by both getProjects and searchConversations to keep filtering consistent.
+function buildExcludedSessionIds(provider = 'claude') {
+  const hideAutoDocRaw = appConfigDb.get('auto_doc_hide_sessions');
+  const hideAutoDoc = hideAutoDocRaw === null ? true : hideAutoDocRaw === 'true';
+  const autoDocIds = hideAutoDoc ? sessionDb.getAllAutoDocSessionIds(provider) : new Set();
+  const hiddenIds = sessionDb.getAllHiddenSessionIds(provider);
+  return new Set([...autoDocIds, ...hiddenIds]);
+}
+
 async function getProjects(progressCallback = null) {
   const claudeDir = path.join(os.homedir(), '.claude', 'projects');
   const config = await loadProjectConfig();
@@ -398,6 +409,12 @@ async function getProjects(progressCallback = null) {
   let totalProjects = 0;
   let processedProjects = 0;
   let directories = [];
+
+  // Pre-fetch excluded session IDs once — shared rule with searchConversations
+  const excludedSessionIds = buildExcludedSessionIds('claude');
+  const autoDocPreFilter = excludedSessionIds.size > 0
+    ? (sessions) => sessions.filter(s => !excludedSessionIds.has(s.id))
+    : null;
 
   try {
     await fs.access(claudeDir);
@@ -437,7 +454,7 @@ async function getProjects(progressCallback = null) {
       // Everything else accesses different directories and can run in parallel.
       const [sessionResult, cursorSessions, codexSessions, geminiResult, taskMasterResult] =
         await Promise.allSettled([
-          getSessions(entry.name, 5, 0),
+          getSessions(entry.name, 5, 0, autoDocPreFilter),
           getCursorSessions(actualProjectDir),
           getCodexSessions(actualProjectDir, { indexRef: codexSessionsIndexRef }),
           (async () => {
@@ -457,6 +474,8 @@ async function getProjects(progressCallback = null) {
       }
       applyCustomSessionNames(project.sessions, 'claude');
       applyHiddenFromRecents(project.sessions, 'claude');
+      applyAutoDocFlag(project.sessions, 'claude');
+      filterHiddenAutoDocSessions(project.sessions);
 
       project.cursorSessions = cursorSessions.status === 'fulfilled' ? cursorSessions.value : [];
       if (cursorSessions.status === 'rejected') console.warn(`Could not load Cursor sessions for project ${entry.name}:`, cursorSessions.reason?.message);
@@ -572,7 +591,7 @@ async function getProjects(progressCallback = null) {
   return projects;
 }
 
-async function getSessions(projectName, limit = 5, offset = 0) {
+async function getSessions(projectName, limit = 5, offset = 0, preFilter = null) {
   const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
 
   try {
@@ -612,8 +631,13 @@ async function getSessions(projectName, limit = 5, offset = 0) {
 
       allEntries.push(...result.entries);
 
-      // Early exit optimization for large projects
-      if (allSessions.size >= (limit + offset) * 2 && allEntries.length >= Math.min(3, filesWithStats.length)) {
+      // Early exit optimization: stop when we have enough sessions *after* filtering.
+      // Use basic summary filter + preFilter inline so that filtered-out sessions
+      // (e.g. auto-doc sessions) don't count toward the target.
+      const basicFiltered = Array.from(allSessions.values())
+        .filter(s => !s.summary.startsWith('{ "'));
+      const effectiveCount = preFilter ? preFilter(basicFiltered).length : basicFiltered.length;
+      if (effectiveCount >= (limit + offset) * 2) {
         break;
       }
     }
@@ -683,8 +707,9 @@ async function getSessions(projectName, limit = 5, offset = 0) {
       .filter(session => !session.summary.startsWith('{ "'))
       .sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
 
-    const total = visibleSessions.length;
-    const paginatedSessions = visibleSessions.slice(offset, offset + limit);
+    const filteredSessions = preFilter ? preFilter(visibleSessions) : visibleSessions;
+    const total = filteredSessions.length;
+    const paginatedSessions = filteredSessions.slice(offset, offset + limit);
     const hasMore = offset + limit < total;
 
     return {
@@ -946,11 +971,17 @@ async function getSessionMessages(projectName, sessionId, limit = null, offset =
         crlfDelay: Infinity
       });
 
+      // When the file is named after this session (e.g. aee20b62.jsonl), include ALL
+      // entries regardless of sessionId.  SDK-forked sessions store parent history in the
+      // same file under the original sessionId, so filtering by sessionId alone would drop
+      // all of that history and the conversation would appear empty.
+      const isSessionFile = file === `${sessionId}.jsonl`;
+
       for await (const line of rl) {
         if (line.trim()) {
           try {
             const entry = JSON.parse(line);
-            if (entry.sessionId === sessionId) {
+            if (isSessionFile || entry.sessionId === sessionId) {
               messages.push(entry);
             }
           } catch (parseError) {
@@ -1925,6 +1956,8 @@ async function searchConversations(query, limit = 50, onProjectResult = null, si
   const words = safeQuery.toLowerCase().split(/\s+/).filter(w => w.length > 0);
   if (words.length === 0) return { results: [], totalMatches: 0, query: safeQuery };
 
+  const excludedSessionIds = buildExcludedSessionIds('claude');
+
   const isAborted = () => signal?.aborted === true;
 
   const isSystemMessage = (textContent) => {
@@ -2036,12 +2069,19 @@ async function searchConversations(query, limit = 50, onProjectResult = null, si
       for (const file of jsonlFiles) {
         if (totalMatches >= safeLimit || isAborted()) break;
 
+        // Skip entire file if it belongs to an auto-doc session (file-level filter).
+        // Entry-level filtering is unreliable because the SDK rewrites the file using
+        // the source session's ID instead of the fork ID.
+        const fileSessionId = file.replace('.jsonl', '');
+        if (excludedSessionIds.has(fileSessionId)) continue;
+
         const filePath = path.join(projectDir, file);
-        const sessionMatches = new Map();
-        const sessionSummaries = new Map();
+        // Use filename as the canonical sessionId — avoids duplicates caused by
+        // the SDK writing source-session IDs into fork files.
+        let fileSummary = null;
         const pendingSummaries = new Map();
-        const sessionLastMessages = new Map();
-        let currentSessionId = null;
+        let fileLastMessages = {};
+        const fileMatches = [];
 
         try {
           const fileStream = fsSync.createReadStream(filePath);
@@ -2061,36 +2101,27 @@ async function searchConversations(query, limit = 50, onProjectResult = null, si
               continue;
             }
 
-            if (entry.sessionId) {
-              currentSessionId = entry.sessionId;
-            }
             if (entry.type === 'summary' && entry.summary) {
-              const sid = entry.sessionId || currentSessionId;
-              if (sid) {
-                sessionSummaries.set(sid, entry.summary);
-              } else if (entry.leafUuid) {
-                pendingSummaries.set(entry.leafUuid, entry.summary);
-              }
+              fileSummary = entry.summary;
             }
 
-            // Apply pending summary via parentUuid
-            if (entry.parentUuid && currentSessionId && !sessionSummaries.has(currentSessionId)) {
+            // Apply pending summary via leafUuid/parentUuid chain
+            if (!fileSummary && entry.leafUuid) {
+              pendingSummaries.set(entry.leafUuid, entry.summary);
+            }
+            if (!fileSummary && entry.parentUuid) {
               const pending = pendingSummaries.get(entry.parentUuid);
-              if (pending) sessionSummaries.set(currentSessionId, pending);
+              if (pending) fileSummary = pending;
             }
 
             // Track last user/assistant message for fallback title
-            if (entry.message?.content && currentSessionId && !entry.isApiErrorMessage) {
+            if (entry.message?.content && !entry.isApiErrorMessage) {
               const role = entry.message.role;
               if (role === 'user' || role === 'assistant') {
                 const text = extractText(entry.message.content);
                 if (text && !isSystemMessage(text) && !(role === 'user' && isSubAgentEntry(entry))) {
-                  if (!sessionLastMessages.has(currentSessionId)) {
-                    sessionLastMessages.set(currentSessionId, {});
-                  }
-                  const msgs = sessionLastMessages.get(currentSessionId);
-                  if (role === 'user') msgs.user = text;
-                  else msgs.assistant = text;
+                  if (role === 'user') fileLastMessages.user = text;
+                  else fileLastMessages.assistant = text;
                 }
               }
             }
@@ -2105,15 +2136,9 @@ async function searchConversations(query, limit = 50, onProjectResult = null, si
             const textLower = text.toLowerCase();
             if (!allWordsMatch(textLower)) continue;
 
-            const sessionId = entry.sessionId || currentSessionId || file.replace('.jsonl', '');
-            if (!sessionMatches.has(sessionId)) {
-              sessionMatches.set(sessionId, []);
-            }
-
-            const matches = sessionMatches.get(sessionId);
-            if (matches.length < 2) {
+            if (fileMatches.length < 2) {
               const { snippet, highlights } = buildSnippet(text, textLower);
-              matches.push({
+              fileMatches.push({
                 role: entry.message.role,
                 snippet,
                 highlights,
@@ -2128,16 +2153,15 @@ async function searchConversations(query, limit = 50, onProjectResult = null, si
           continue;
         }
 
-        for (const [sessionId, matches] of sessionMatches) {
+        if (fileMatches.length > 0) {
+          const lastMsg = fileLastMessages.user || fileLastMessages.assistant;
           projectResult.sessions.push({
-            sessionId,
+            sessionId: fileSessionId,
             provider: 'claude',
-            sessionSummary: sessionSummaries.get(sessionId) || (() => {
-              const msgs = sessionLastMessages.get(sessionId);
-              const lastMsg = msgs?.user || msgs?.assistant;
-              return lastMsg ? (lastMsg.length > 50 ? lastMsg.substring(0, 50) + '...' : lastMsg) : 'New Session';
-            })(),
-            matches
+            sessionSummary: fileSummary || (lastMsg
+              ? (lastMsg.length > 50 ? lastMsg.substring(0, 50) + '...' : lastMsg)
+              : 'New Session'),
+            matches: fileMatches
           });
         }
       }

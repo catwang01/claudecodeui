@@ -99,6 +99,7 @@
     "tasks": "작업",
     "notifications": "알림",
     "plugins": "플러그인",
+    "autoDoc": "자동 문서 생성",
     "about": "정보"
   },
   "notifications": {
@@ -208,6 +209,29 @@
     "success": "설정이 저장되었습니다!",
     "error": "설정 저장 실패",
     "saving": "저장 중..."
+  },
+  "autoDoc": {
+    "title": "자동 문서 생성",
+    "description": "Claude 세션에서 주기적으로 실행되는 백그라운드 자동화 작업을 설정합니다.",
+    "intervalLabel": "실행 간격",
+    "intervalDescription": "최근 세션을 처리하는 빈도.",
+    "promptLabel": "에이전트 프롬프트",
+    "promptDescription": "처리 시 각 세션에 전송되는 프롬프트.",
+    "minMessageCountLabel": "최소 메시지 수",
+    "minMessageCountDescription": "총 메시지 수가 이 임계값보다 적은 세션은 건너뜁니다.",
+    "modelLabel": "모델",
+    "modelDescription": "자동 문서 생성에 사용할 Claude 모델.",
+    "saving": "저장 중...",
+    "hideAutoDocLabel": "자동 생성 세션 숨기기",
+    "hideAutoDocDescription": "자동 생성된 세션은 사이드바에 표시되지 않습니다.",
+    "intervalOptions": {
+      "5min": "5분",
+      "10min": "10분",
+      "30min": "30분",
+      "1hour": "1시간",
+      "2hours": "2시간",
+      "4hours": "4시간"
+    }
   },
   "footerActions": {
     "save": "설정 저장",

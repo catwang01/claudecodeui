@@ -1,5 +1,5 @@
 import express from 'express';
-import { apiKeysDb, credentialsDb, notificationPreferencesDb, pushSubscriptionsDb } from '../database/db.js';
+import { apiKeysDb, credentialsDb, notificationPreferencesDb, pushSubscriptionsDb, appConfigDb } from '../database/db.js';
 import { getPublicKey } from '../services/vapid-keys.js';
 import { createNotificationEvent, notifyUserIfEnabled } from '../services/notification-orchestrator.js';
 
@@ -270,6 +270,80 @@ router.post('/push/unsubscribe', async (req, res) => {
   } catch (error) {
     console.error('Error removing push subscription:', error);
     res.status(500).json({ error: 'Failed to remove push subscription' });
+  }
+});
+
+// ===============================
+// Auto-Doc Configuration
+// ===============================
+
+const AUTO_DOC_DEFAULT_INTERVAL_MS = 30 * 60 * 1000;
+const AUTO_DOC_DEFAULT_PROMPT = 'Based on this conversation, please organize and update the relevant project documentation.';
+const AUTO_DOC_DEFAULT_MIN_MESSAGE_COUNT = 20;
+const AUTO_DOC_DEFAULT_MODEL = 'claude-opus-4-6';
+
+router.get('/auto-doc', async (req, res) => {
+  try {
+    const intervalMs = parseInt(appConfigDb.get('auto_doc_interval_ms'), 10) || AUTO_DOC_DEFAULT_INTERVAL_MS;
+    const prompt = appConfigDb.get('auto_doc_prompt') || AUTO_DOC_DEFAULT_PROMPT;
+    const minMessageCount = parseInt(appConfigDb.get('auto_doc_min_message_count'), 10) || AUTO_DOC_DEFAULT_MIN_MESSAGE_COUNT;
+    const hideAutoDocRaw = appConfigDb.get('auto_doc_hide_sessions');
+    const hideAutoDoc = hideAutoDocRaw === null ? true : hideAutoDocRaw === 'true';
+    const model = appConfigDb.get('auto_doc_model') || AUTO_DOC_DEFAULT_MODEL;
+    res.json({ intervalMs, prompt, minMessageCount, hideAutoDoc, model });
+  } catch (error) {
+    console.error('Error fetching auto-doc config:', error);
+    res.status(500).json({ error: 'Failed to fetch auto-doc config' });
+  }
+});
+
+router.put('/auto-doc', async (req, res) => {
+  try {
+    const { intervalMs, prompt, minMessageCount, hideAutoDoc, model } = req.body;
+
+    if (intervalMs != null) {
+      const ms = parseInt(intervalMs, 10);
+      if (isNaN(ms) || ms < 60000) {
+        return res.status(400).json({ error: 'intervalMs must be at least 60000 (1 minute)' });
+      }
+      appConfigDb.set('auto_doc_interval_ms', String(ms));
+    }
+
+    if (prompt != null) {
+      if (typeof prompt !== 'string' || !prompt.trim()) {
+        return res.status(400).json({ error: 'prompt must be a non-empty string' });
+      }
+      appConfigDb.set('auto_doc_prompt', prompt.trim());
+    }
+
+    if (minMessageCount != null) {
+      const n = parseInt(minMessageCount, 10);
+      if (isNaN(n) || n < 1 || n > 10000) {
+        return res.status(400).json({ error: 'minMessageCount must be between 1 and 10000' });
+      }
+      appConfigDb.set('auto_doc_min_message_count', String(n));
+    }
+
+    if (hideAutoDoc != null) {
+      appConfigDb.set('auto_doc_hide_sessions', hideAutoDoc ? 'true' : 'false');
+    }
+
+    if (model != null) {
+      if (typeof model !== 'string' || !model.trim()) {
+        return res.status(400).json({ error: 'model must be a non-empty string' });
+      }
+      appConfigDb.set('auto_doc_model', model.trim());
+    }
+
+    const savedIntervalMs = parseInt(appConfigDb.get('auto_doc_interval_ms'), 10) || AUTO_DOC_DEFAULT_INTERVAL_MS;
+    const savedPrompt = appConfigDb.get('auto_doc_prompt') || AUTO_DOC_DEFAULT_PROMPT;
+    const savedMinMessageCount = parseInt(appConfigDb.get('auto_doc_min_message_count'), 10) || AUTO_DOC_DEFAULT_MIN_MESSAGE_COUNT;
+    const savedHideAutoDoc = appConfigDb.get('auto_doc_hide_sessions') === 'true';
+    const savedModel = appConfigDb.get('auto_doc_model') || AUTO_DOC_DEFAULT_MODEL;
+    res.json({ success: true, intervalMs: savedIntervalMs, prompt: savedPrompt, minMessageCount: savedMinMessageCount, hideAutoDoc: savedHideAutoDoc, model: savedModel });
+  } catch (error) {
+    console.error('Error saving auto-doc config:', error);
+    res.status(500).json({ error: 'Failed to save auto-doc config' });
   }
 });
 

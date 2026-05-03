@@ -213,6 +213,16 @@ function mapCliOptionsToSDK(options = {}) {
     sdkOptions.resume = sessionId;
   }
 
+  // Fork session (creates a new session branched from the resumed session)
+  if (options.forkSession) {
+    sdkOptions.forkSession = true;
+  }
+
+  // Max turns (limits the number of agentic turns)
+  if (options.maxTurns != null) {
+    sdkOptions.maxTurns = options.maxTurns;
+  }
+
   // Remove CLAUDECODE env var so the spawned claude CLI doesn't refuse to start
   // when the server itself is running inside a Claude Code session.
   const env = { ...process.env };

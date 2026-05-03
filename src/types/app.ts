@@ -13,6 +13,7 @@ export interface ProjectSession {
   lastActivity?: string;
   messageCount?: number;
   hiddenFromRecents?: boolean;
+  isAutoDoc?: boolean;
   __provider?: SessionProvider;
   __projectName?: string;
   [key: string]: unknown;

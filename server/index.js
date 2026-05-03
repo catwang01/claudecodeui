@@ -72,7 +72,8 @@ import sttRoutes from './routes/stt.js';
 import { createNormalizedMessage } from './providers/types.js';
 import { getProvider } from './providers/registry.js';
 import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
-import { initializeDatabase, sessionNamesDb, sessionDb, applyCustomSessionNames, applyHiddenFromRecents } from './database/db.js';
+import { initializeDatabase, sessionNamesDb, sessionDb, applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, appConfigDb } from './database/db.js';
+import { startAutoDocTimer } from './auto-doc.js';
 import { configureWebPush } from './services/vapid-keys.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
 import { IS_PLATFORM } from './constants/config.js';
@@ -614,9 +615,16 @@ app.get('/api/projects', authenticateToken, async (req, res) => {
 app.get('/api/projects/:projectName/sessions', authenticateToken, async (req, res) => {
     try {
         const { limit = 5, offset = 0 } = req.query;
-        const result = await getSessions(req.params.projectName, parseInt(limit), parseInt(offset));
+        const hideAutoDocRaw = appConfigDb.get('auto_doc_hide_sessions');
+        const hideAutoDoc = hideAutoDocRaw === null ? true : hideAutoDocRaw === 'true';
+        const summarySessionIds = hideAutoDoc ? sessionDb.getAllAutoDocSessionIds('claude') : null;
+        const preFilter = summarySessionIds
+            ? (sessions) => sessions.filter(s => !summarySessionIds.has(s.id))
+            : null;
+        const result = await getSessions(req.params.projectName, parseInt(limit), parseInt(offset), preFilter);
         applyCustomSessionNames(result.sessions, 'claude');
         applyHiddenFromRecents(result.sessions, 'claude');
+        applyAutoDocFlag(result.sessions, 'claude');
         res.json(result);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -2632,6 +2640,9 @@ async function startServer() {
 
             // Start watching the projects folder for changes
             await setupProjectsWatcher();
+
+            // Start auto-doc background timer
+            startAutoDocTimer();
 
             // Start server-side plugin processes for enabled plugins
             startEnabledPluginServers().catch(err => {

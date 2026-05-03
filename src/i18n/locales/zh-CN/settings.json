@@ -99,6 +99,7 @@
     "tasks": "任务",
     "notifications": "通知",
     "plugins": "插件",
+    "autoDoc": "自动文档生成",
     "about": "关于"
   },
   "notifications": {
@@ -208,6 +209,29 @@
     "success": "设置保存成功！",
     "error": "保存设置失败",
     "saving": "保存中..."
+  },
+  "autoDoc": {
+    "title": "自动文档生成",
+    "description": "配置定期在 Claude 会话上运行的后台自动化任务。",
+    "intervalLabel": "运行间隔",
+    "intervalDescription": "处理近期会话的频率。",
+    "promptLabel": "Agent 提示词",
+    "promptDescription": "处理每个会话时发送的提示词。",
+    "minMessageCountLabel": "最少消息数",
+    "minMessageCountDescription": "消息总数少于此阈值的会话将被跳过。",
+    "modelLabel": "模型",
+    "modelDescription": "用于自动文档生成的 Claude 模型。",
+    "saving": "保存中...",
+    "hideAutoDocLabel": "隐藏自动生成的 Session",
+    "hideAutoDocDescription": "自动生成的 Session 将不会出现在侧边栏中。",
+    "intervalOptions": {
+      "5min": "5 分钟",
+      "10min": "10 分钟",
+      "30min": "30 分钟",
+      "1hour": "1 小时",
+      "2hours": "2 小时",
+      "4hours": "4 小时"
+    }
   },
   "footerActions": {
     "save": "保存设置",

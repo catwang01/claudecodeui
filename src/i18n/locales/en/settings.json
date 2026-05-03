@@ -99,6 +99,7 @@
     "tasks": "Tasks",
     "notifications": "Notifications",
     "plugins": "Plugins",
+    "autoDoc": "Auto Doc Generation",
     "about": "About"
   },
   "notifications": {
@@ -208,6 +209,29 @@
     "success": "Settings saved successfully!",
     "error": "Failed to save settings",
     "saving": "Saving..."
+  },
+  "autoDoc": {
+    "title": "Auto Doc Generation",
+    "description": "Configure background automation tasks that run periodically on your Claude sessions.",
+    "intervalLabel": "Run interval",
+    "intervalDescription": "How often to process recent sessions.",
+    "promptLabel": "Agent prompt",
+    "promptDescription": "The prompt sent to each session when it is processed.",
+    "minMessageCountLabel": "Minimum message count",
+    "minMessageCountDescription": "Sessions with fewer total messages than this threshold will be skipped.",
+    "modelLabel": "Model",
+    "modelDescription": "The Claude model used for auto-doc generation.",
+    "saving": "Saving...",
+    "hideAutoDocLabel": "Hide auto-generated sessions",
+    "hideAutoDocDescription": "Auto-generated sessions will not appear in the sidebar.",
+    "intervalOptions": {
+      "5min": "5 minutes",
+      "10min": "10 minutes",
+      "30min": "30 minutes",
+      "1hour": "1 hour",
+      "2hours": "2 hours",
+      "4hours": "4 hours"
+    }
   },
   "footerActions": {
     "save": "Save Settings",

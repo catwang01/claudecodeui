@@ -3,6 +3,24 @@
 All notable changes to CloudCLI UI will be documented in this file.
 
 
+## [Unreleased]
+
+### New Features
+
+* **auto-doc:** background auto doc generation — periodically forks recent sessions and runs an agent to organize project documentation
+* **settings:** add Auto Doc Generation settings tab with interval, prompt, and hide toggle
+* **sidebar:** option to hide auto-generated sessions from recents and project views
+* **sidebar:** hide session from recents with auto-restore on new activity
+
+### Bug Fixes
+
+* **auto-doc:** fix `maxTurns: 1` causing premature termination — agent needs multiple turns for file I/O, increased to 20
+* **auto-doc:** fix concurrent batch execution — await batch completion before scheduling next timer tick
+
+### Refactoring
+
+* **auto-doc:** rename all `auto-summary` references to `auto-doc` throughout codebase (API routes, DB tables, config keys, code identifiers, i18n keys)
+
 ## [1.28.1](https://github.com/siteboon/claudecodeui/compare/v1.28.0...v1.28.1) (2026-04-10)
 
 ### New Features

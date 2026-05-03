@@ -1,4 +1,4 @@
-import { Check, Clock, Edit2, Trash2, X } from 'lucide-react';
+import { Check, Clock, Edit2, Sparkles, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { Badge, Button } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
@@ -101,7 +101,12 @@ export default function SidebarSessionItem({
             </div>
 
             <div className="min-w-0 flex-1">
-              <div className="truncate text-xs font-medium text-foreground">{sessionView.sessionName}</div>
+              <div className="truncate text-xs font-medium text-foreground flex items-center gap-1">
+                {session.isAutoDoc && (
+                  <Sparkles className="h-2.5 w-2.5 flex-shrink-0 text-amber-500" title="Auto Doc" />
+                )}
+                {sessionView.sessionName}
+              </div>
               <div className="mt-0.5 flex items-center gap-1">
                 <Clock className="h-2.5 w-2.5 text-muted-foreground" />
                 <span className="text-xs text-muted-foreground">
@@ -145,7 +150,12 @@ export default function SidebarSessionItem({
           <div className="flex w-full min-w-0 items-start gap-2">
             <SessionProviderLogo provider={session.__provider} className="mt-0.5 h-3 w-3 flex-shrink-0" />
             <div className="min-w-0 flex-1">
-              <div className="truncate text-xs font-medium text-foreground">{sessionView.sessionName}</div>
+              <div className="truncate text-xs font-medium text-foreground flex items-center gap-1">
+                {session.isAutoDoc && (
+                  <Sparkles className="h-2.5 w-2.5 flex-shrink-0 text-amber-500" title="Auto Doc" />
+                )}
+                {sessionView.sessionName}
+              </div>
               <div className="mt-0.5 flex items-center gap-1">
                 <Clock className="h-2.5 w-2.5 text-muted-foreground" />
                 <span className="text-xs text-muted-foreground">

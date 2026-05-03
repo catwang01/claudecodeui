@@ -148,6 +148,58 @@ const runMigrations = () => {
     )`);
     db.exec('CREATE INDEX IF NOT EXISTS idx_session_names_lookup ON session_names(session_id, provider)');
 
+    // Create session_summary_state table for tracking when sessions were last summarized
+    db.exec(`CREATE TABLE IF NOT EXISTS session_summary_state (
+      session_id          TEXT NOT NULL,
+      provider            TEXT NOT NULL DEFAULT 'claude',
+      last_summarized_at  DATETIME NOT NULL,
+      last_message_count  INTEGER NOT NULL DEFAULT 0,
+      last_message_text   TEXT,
+      summary_duration_ms INTEGER,
+      UNIQUE(session_id, provider)
+    )`);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_session_summary_state ON session_summary_state(session_id, provider)');
+
+    // Create auto_doc_sessions table for tracking forked auto-doc sessions
+    db.exec(`CREATE TABLE IF NOT EXISTS auto_doc_sessions (
+      forked_session_id  TEXT PRIMARY KEY,
+      source_session_id  TEXT NOT NULL,
+      provider           TEXT NOT NULL DEFAULT 'claude',
+      created_at         DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_auto_doc_sessions_source ON auto_doc_sessions(source_session_id)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_auto_doc_sessions_forked ON auto_doc_sessions(forked_session_id)');
+
+    // Migrate old auto_summary_sessions table to auto_doc_sessions
+    // and old auto_summary_* config keys to auto_doc_* — wrapped in a transaction
+    // so a crash mid-migration leaves the DB in a consistent state.
+    const runLegacyMigration = db.transaction(() => {
+      const oldTableExists = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='auto_summary_sessions'"
+      ).get();
+      if (oldTableExists) {
+        db.exec('INSERT OR IGNORE INTO auto_doc_sessions SELECT * FROM auto_summary_sessions');
+        db.exec('DROP TABLE auto_summary_sessions');
+      }
+
+      const configKeyMap = {
+        'auto_summary_interval_ms': 'auto_doc_interval_ms',
+        'auto_summary_prompt': 'auto_doc_prompt',
+        'auto_summary_min_message_count': 'auto_doc_min_message_count',
+        'auto_summary_hide_sessions': 'auto_doc_hide_sessions',
+      };
+      for (const [oldKey, newKey] of Object.entries(configKeyMap)) {
+        const row = db.prepare('SELECT value FROM app_config WHERE key = ?').get(oldKey);
+        if (row) {
+          db.prepare(
+            'INSERT INTO app_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+          ).run(newKey, row.value);
+          db.prepare('DELETE FROM app_config WHERE key = ?').run(oldKey);
+        }
+      }
+    });
+    runLegacyMigration();
+
     console.log('Database migrations completed successfully');
   } catch (error) {
     console.error('Error running migrations:', error.message);
@@ -571,6 +623,32 @@ const sessionDb = {
     ).run(sessionId, provider);
   },
 
+  // Summary state: upsert last_summarized_at, last_message_count, last_message_text, summary_duration_ms
+  setDocState: (sessionId, provider, messageCount, lastMessageText, durationMs) => {
+    db.prepare(`
+      INSERT INTO session_summary_state (session_id, provider, last_summarized_at, last_message_count, last_message_text, summary_duration_ms)
+      VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, ?)
+      ON CONFLICT(session_id, provider)
+      DO UPDATE SET
+        last_summarized_at  = CURRENT_TIMESTAMP,
+        last_message_count  = excluded.last_message_count,
+        last_message_text   = excluded.last_message_text,
+        summary_duration_ms = excluded.summary_duration_ms
+    `).run(sessionId, provider, messageCount, lastMessageText, durationMs);
+  },
+
+  // Returns Map<sessionId, {last_summarized_at, last_message_count, last_message_text, summary_duration_ms}>
+  getDocStateMap: (sessionIds, provider) => {
+    if (!sessionIds.length) return new Map();
+    const placeholders = sessionIds.map(() => '?').join(',');
+    const rows = db.prepare(
+      `SELECT session_id, last_summarized_at, last_message_count, last_message_text, summary_duration_ms
+       FROM session_summary_state
+       WHERE session_id IN (${placeholders}) AND provider = ?`
+    ).all(...sessionIds, provider);
+    return new Map(rows.map(r => [r.session_id, r]));
+  },
+
   // Returns Map<sessionId, lastActivityAt>
   getHiddenMap: (sessionIds, provider) => {
     if (!sessionIds.length) return new Map();
@@ -580,6 +658,41 @@ const sessionDb = {
        WHERE session_id IN (${placeholders}) AND provider = ?`
     ).all(...sessionIds, provider);
     return new Map(rows.map(r => [r.session_id, r.last_activity_at]));
+  },
+
+  // Records a forked session created by auto-doc
+  markAsAutoDocSession: (forkedSessionId, sourceSessionId, provider) => {
+    db.prepare(`
+      INSERT OR IGNORE INTO auto_doc_sessions (forked_session_id, source_session_id, provider)
+      VALUES (?, ?, ?)
+    `).run(forkedSessionId, sourceSessionId, provider);
+  },
+
+  // Batch lookup — returns Set of forked session IDs that are auto-doc sessions
+  getAutoDocSessionIds: (sessionIds, provider) => {
+    if (!sessionIds.length) return new Set();
+    const placeholders = sessionIds.map(() => '?').join(',');
+    const rows = db.prepare(
+      `SELECT forked_session_id FROM auto_doc_sessions
+       WHERE forked_session_id IN (${placeholders}) AND provider = ?`
+    ).all(...sessionIds, provider);
+    return new Set(rows.map(r => r.forked_session_id));
+  },
+
+  // Returns Set of all forked session IDs for a provider (for pre-fetching)
+  getAllAutoDocSessionIds: (provider) => {
+    const rows = db.prepare(
+      'SELECT forked_session_id FROM auto_doc_sessions WHERE provider = ?'
+    ).all(provider);
+    return new Set(rows.map(r => r.forked_session_id));
+  },
+
+  // Returns Set of all session IDs hidden from recents for a provider
+  getAllHiddenSessionIds: (provider) => {
+    const rows = db.prepare(
+      'SELECT session_id FROM session_hidden_from_recents WHERE provider = ?'
+    ).all(provider);
+    return new Set(rows.map(r => r.session_id));
   },
 };
 
@@ -605,6 +718,39 @@ function applyHiddenFromRecents(sessions, provider) {
   }
 }
 
+// Mark sessions that were created by auto-doc forks
+function applyAutoDocFlag(sessions, provider) {
+  if (!sessions?.length) return;
+  try {
+    const ids = sessions.map(s => s.id);
+    const summaryIds = sessionDb.getAutoDocSessionIds(ids, provider);
+    if (!summaryIds.size) return;
+    for (const session of sessions) {
+      if (summaryIds.has(session.id)) {
+        session.isAutoDoc = true;
+      }
+    }
+  } catch (error) {
+    console.warn(`[DB] Failed to apply auto-doc flag for ${provider}:`, error.message);
+  }
+}
+
+// Remove auto-doc sessions from the array when the hide setting is enabled.
+// Must be called after applyAutoDocFlag.
+function filterHiddenAutoDocSessions(sessions) {
+  if (!sessions?.length) return;
+  try {
+    const hideRaw = appConfigDb.get('auto_doc_hide_sessions');
+    const hide = hideRaw === null ? true : hideRaw === 'true';
+    if (!hide) return;
+    for (let i = sessions.length - 1; i >= 0; i--) {
+      if (sessions[i].isAutoDoc) sessions.splice(i, 1);
+    }
+  } catch (error) {
+    console.warn('[DB] Failed to filter hidden auto-doc sessions:', error.message);
+  }
+}
+
 // Apply custom session names from the database (overrides CLI-generated summaries)
 function applyCustomSessionNames(sessions, provider) {
   if (!sessions?.length) return;
@@ -619,6 +765,41 @@ function applyCustomSessionNames(sessions, provider) {
     console.warn(`[DB] Failed to apply custom session names for ${provider}:`, error.message);
   }
 }
+
+// User settings database operations (per-user key-value store)
+db.exec(`CREATE TABLE IF NOT EXISTS user_settings (
+  user_id TEXT NOT NULL,
+  key TEXT NOT NULL,
+  value TEXT NOT NULL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, key)
+)`);
+
+const userSettingsDb = {
+  get: (userId, key) => {
+    try {
+      const row = db.prepare('SELECT value FROM user_settings WHERE user_id = ? AND key = ?').get(String(userId), key);
+      return row?.value || null;
+    } catch {
+      return null;
+    }
+  },
+
+  set: (userId, key, value) => {
+    db.prepare(
+      'INSERT INTO user_settings (user_id, key, value, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP'
+    ).run(String(userId), key, value);
+  },
+
+  getAll: (userId) => {
+    try {
+      const rows = db.prepare('SELECT key, value FROM user_settings WHERE user_id = ?').all(String(userId));
+      return Object.fromEntries(rows.map(r => [r.key, r.value]));
+    } catch {
+      return {};
+    }
+  },
+};
 
 // App config database operations
 const appConfigDb = {
@@ -678,6 +859,9 @@ export {
   sessionDb,
   applyCustomSessionNames,
   applyHiddenFromRecents,
+  applyAutoDocFlag,
+  filterHiddenAutoDocSessions,
   appConfigDb,
+  userSettingsDb,
   githubTokensDb // Backward compatibility
 };

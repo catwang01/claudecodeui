@@ -102,6 +102,30 @@ CREATE TABLE IF NOT EXISTS session_hidden_from_recents (
 
 CREATE INDEX IF NOT EXISTS idx_session_hidden_lookup ON session_hidden_from_recents(session_id, provider);
 
+-- Session summary state (tracks when each session was last summarized)
+CREATE TABLE IF NOT EXISTS session_summary_state (
+  session_id          TEXT NOT NULL,
+  provider            TEXT NOT NULL DEFAULT 'claude',
+  last_summarized_at  DATETIME NOT NULL,
+  last_message_count  INTEGER NOT NULL DEFAULT 0,
+  last_message_text   TEXT,
+  summary_duration_ms INTEGER,
+  UNIQUE(session_id, provider)
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_summary_state ON session_summary_state(session_id, provider);
+
+-- Auto-doc forked sessions (tracks which sessions were created by auto-doc generation)
+CREATE TABLE IF NOT EXISTS auto_doc_sessions (
+  forked_session_id  TEXT PRIMARY KEY,
+  source_session_id  TEXT NOT NULL,
+  provider           TEXT NOT NULL DEFAULT 'claude',
+  created_at         DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_auto_doc_sessions_source ON auto_doc_sessions(source_session_id);
+CREATE INDEX IF NOT EXISTS idx_auto_doc_sessions_forked ON auto_doc_sessions(forked_session_id);
+
 -- App configuration table (auto-generated secrets, settings, etc.)
 CREATE TABLE IF NOT EXISTS app_config (
     key TEXT PRIMARY KEY,

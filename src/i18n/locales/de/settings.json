@@ -98,6 +98,7 @@
     "apiTokens": "API & Token",
     "tasks": "Aufgaben",
     "plugins": "Plugins",
+    "autoDoc": "Auto-Doku-Generierung",
     "about": "Info"
   },
   "appearanceSettings": {
@@ -188,6 +189,29 @@
     "success": "Einstellungen erfolgreich gespeichert!",
     "error": "Einstellungen konnten nicht gespeichert werden",
     "saving": "Wird gespeichert..."
+  },
+  "autoDoc": {
+    "title": "Auto-Doku-Generierung",
+    "description": "Hintergrund-Automatisierungsaufgaben konfigurieren, die regelmäßig auf Claude-Sitzungen ausgeführt werden.",
+    "intervalLabel": "Ausführungsintervall",
+    "intervalDescription": "Wie oft aktuelle Sitzungen verarbeitet werden.",
+    "promptLabel": "Agent-Prompt",
+    "promptDescription": "Der Prompt, der bei der Verarbeitung an jede Sitzung gesendet wird.",
+    "minMessageCountLabel": "Mindestanzahl Nachrichten",
+    "minMessageCountDescription": "Sitzungen mit weniger Gesamtnachrichten als dieser Schwelle werden übersprungen.",
+    "modelLabel": "Modell",
+    "modelDescription": "Das Claude-Modell für die automatische Dokumentengenerierung.",
+    "saving": "Wird gespeichert...",
+    "hideAutoDocLabel": "Automatisch generierte Sitzungen ausblenden",
+    "hideAutoDocDescription": "Automatisch generierte Sitzungen werden nicht in der Seitenleiste angezeigt.",
+    "intervalOptions": {
+      "5min": "5 Minuten",
+      "10min": "10 Minuten",
+      "30min": "30 Minuten",
+      "1hour": "1 Stunde",
+      "2hours": "2 Stunden",
+      "4hours": "4 Stunden"
+    }
   },
   "footerActions": {
     "save": "Einstellungen speichern",

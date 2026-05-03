@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
-import { Clock, Folder, MessageSquare, Search, Trash2 } from 'lucide-react';
+import { Clock, Folder, MessageSquare, Search, Sparkles, Trash2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { ScrollArea } from '../../../../shared/view/ui';
 import type { Project } from '../../../../types/app';
@@ -102,6 +102,14 @@ export default function SidebarContent({
   const sentinelRef = useRef<HTMLDivElement>(null);
 
   const [hiddenSet, setHiddenSet] = useState<Set<string>>(new Set());
+  const [hideAutoDoc, setHideAutoDoc] = useState(true);
+
+  useEffect(() => {
+    authenticatedFetch('/api/settings/auto-doc')
+      .then(res => res.json())
+      .then(data => setHideAutoDoc(!!data.hideAutoDoc))
+      .catch(() => {/* keep default false */});
+  }, []);
 
   const hideSession = useCallback(async (sessionId: string, provider: string, lastActivity: string) => {
     const key = `${sessionId}:${provider}`;
@@ -126,6 +134,7 @@ export default function SidebarContent({
     }
     return all
       .filter(({ session }) => {
+        if (hideAutoDoc && session.isAutoDoc) return false;
         if (session.hiddenFromRecents) return false;
         const provider = session.__provider || 'claude';
         if (hiddenSet.has(`${session.id}:${provider}`)) return false;
@@ -138,7 +147,16 @@ export default function SidebarContent({
         };
         return getTime(b.session) - getTime(a.session);
       });
-  }, [searchMode, projectListProps, hiddenSet]);
+  }, [searchMode, projectListProps, hiddenSet, hideAutoDoc]);
+
+  const filteredProjectListProps = useMemo(() => {
+    if (!hideAutoDoc) return projectListProps;
+    return {
+      ...projectListProps,
+      getProjectSessions: (project: Parameters<typeof projectListProps.getProjectSessions>[0]) =>
+        projectListProps.getProjectSessions(project).filter(s => !s.isAutoDoc),
+    };
+  }, [projectListProps, hideAutoDoc]);
 
   const [selectedProjectFilter, setSelectedProjectFilter] = useState<string | null>(null);
 
@@ -273,7 +291,10 @@ export default function SidebarContent({
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <SessionProviderLogo provider={session.__provider} className="h-3 w-3 flex-shrink-0" />
-                    <span className="truncate text-xs font-medium text-foreground flex-1">
+                    <span className="truncate text-xs font-medium text-foreground flex-1 flex items-center gap-1">
+                      {session.isAutoDoc && (
+                        <Sparkles className="h-2.5 w-2.5 flex-shrink-0 text-amber-500" title="Auto Doc" />
+                      )}
                       {getSessionName(session, t)}
                     </span>
                   </div>
@@ -395,7 +416,7 @@ export default function SidebarContent({
             </div>
           ) : null
         ) : (
-          <SidebarProjectList {...projectListProps} />
+          <SidebarProjectList {...filteredProjectListProps} />
         )}
       </ScrollArea>
 
