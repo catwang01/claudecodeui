@@ -166,6 +166,11 @@ function ChatInterface({
     getInputProps,
     isDragActive,
     openImagePicker,
+    attachedFiles,
+    fileInputRef,
+    openFilePicker,
+    handleFileInputChange,
+    handleRemoveFile,
     handleSubmit,
     handleInputChange,
     handleKeyDown,
@@ -443,6 +448,11 @@ function ChatInterface({
           getRootProps={getRootProps as (...args: unknown[]) => Record<string, unknown>}
           getInputProps={getInputProps as (...args: unknown[]) => Record<string, unknown>}
           openImagePicker={openImagePicker}
+          attachedFiles={attachedFiles}
+          onRemoveFile={handleRemoveFile}
+          fileInputRef={fileInputRef}
+          onFileInputChange={handleFileInputChange}
+          openFilePicker={openFilePicker}
           inputHighlightRef={inputHighlightRef}
           renderInputWithMentions={renderInputWithMentions}
           textareaRef={textareaRef}

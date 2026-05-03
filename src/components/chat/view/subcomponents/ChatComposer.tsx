@@ -77,6 +77,11 @@ interface ChatComposerProps {
   getRootProps: (...args: unknown[]) => Record<string, unknown>;
   getInputProps: (...args: unknown[]) => Record<string, unknown>;
   openImagePicker: () => void;
+  attachedFiles: File[];
+  onRemoveFile: (index: number) => void;
+  fileInputRef: RefObject<HTMLInputElement>;
+  onFileInputChange: (event: ChangeEvent<HTMLInputElement>) => void;
+  openFilePicker: () => void;
   inputHighlightRef: RefObject<HTMLDivElement>;
   renderInputWithMentions: (text: string) => ReactNode;
   textareaRef: RefObject<HTMLTextAreaElement>;
@@ -138,6 +143,11 @@ export default function ChatComposer({
   getRootProps,
   getInputProps,
   openImagePicker,
+  attachedFiles = [],
+  onRemoveFile,
+  fileInputRef,
+  onFileInputChange,
+  openFilePicker,
   inputHighlightRef,
   renderInputWithMentions,
   textareaRef,
@@ -250,6 +260,49 @@ export default function ChatComposer({
           </div>
         )}
 
+        {attachedFiles.length > 0 && (
+          <div className="mb-2 rounded-xl bg-muted/40 p-2">
+            <div className="flex flex-wrap gap-2">
+              {attachedFiles.map((file, index) => (
+                <div
+                  key={index}
+                  className="flex items-center gap-1 rounded-lg border border-border/40 bg-card px-2 py-1 text-sm"
+                >
+                  <svg
+                    className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"
+                    />
+                  </svg>
+                  <span className="max-w-[200px] truncate text-foreground">{file.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => onRemoveFile(index)}
+                    aria-label={`Remove ${file.name}`}
+                    className="ml-0.5 rounded p-0.5 text-muted-foreground hover:text-foreground"
+                  >
+                    <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M6 18L18 6M6 6l12 12"
+                      />
+                    </svg>
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {showFileDropdown && filteredFiles.length > 0 && (
           <div className="absolute bottom-full left-0 right-0 z-50 mb-2 max-h-48 overflow-y-auto rounded-xl border border-border/50 bg-card/95 shadow-lg backdrop-blur-md">
             {filteredFiles.map((file, index) => (
@@ -294,8 +347,15 @@ export default function ChatComposer({
           }`}
         >
           <input {...getInputProps()} />
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={onFileInputChange}
+          />
           <div ref={inputHighlightRef} aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden rounded-2xl">
-            <div className="chat-input-placeholder block w-full whitespace-pre-wrap break-words py-1.5 pl-12 pr-20 text-base leading-6 text-transparent sm:py-4 sm:pr-40">
+            <div className="chat-input-placeholder block w-full whitespace-pre-wrap break-words py-1.5 pl-20 pr-20 text-base leading-6 text-transparent sm:py-4 sm:pr-40">
               {renderInputWithMentions(input)}
             </div>
           </div>
@@ -313,7 +373,7 @@ export default function ChatComposer({
               onBlur={() => onInputFocusChange?.(false)}
               onInput={onTextareaInput}
               placeholder={placeholder}
-              className="chat-input-placeholder block max-h-[40vh] min-h-[50px] w-full resize-none overflow-y-auto rounded-2xl bg-transparent py-1.5 pl-12 pr-20 text-base leading-6 text-foreground placeholder-muted-foreground/50 transition-all duration-200 focus:outline-none sm:max-h-[300px] sm:min-h-[80px] sm:py-4 sm:pr-40"
+              className="chat-input-placeholder block max-h-[40vh] min-h-[50px] w-full resize-none overflow-y-auto rounded-2xl bg-transparent py-1.5 pl-20 pr-20 text-base leading-6 text-foreground placeholder-muted-foreground/50 transition-all duration-200 focus:outline-none sm:max-h-[300px] sm:min-h-[80px] sm:py-4 sm:pr-40"
               style={{ height: '50px' }}
             />
 
@@ -329,6 +389,27 @@ export default function ChatComposer({
                   strokeLinejoin="round"
                   strokeWidth={2}
                   d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+                />
+              </svg>
+            </button>
+
+            <button
+              type="button"
+              onClick={openFilePicker}
+              className="absolute left-10 top-1/2 -translate-y-1/2 transform rounded-xl p-2 transition-colors hover:bg-accent/60"
+              title={t('input.attachFiles', { defaultValue: 'Attach files' })}
+            >
+              <svg
+                className="h-5 w-5 text-muted-foreground"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"
                 />
               </svg>
             </button>
@@ -354,7 +435,7 @@ export default function ChatComposer({
             </button>
 
             <div
-              className={`pointer-events-none absolute bottom-1 left-12 right-14 hidden text-xs text-muted-foreground/50 transition-opacity duration-200 sm:right-40 sm:block ${
+              className={`pointer-events-none absolute bottom-1 left-20 right-14 hidden text-xs text-muted-foreground/50 transition-opacity duration-200 sm:right-40 sm:block ${
                 input.trim() ? 'opacity-0' : 'opacity-100'
               }`}
             >

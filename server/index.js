@@ -2300,6 +2300,52 @@ app.post('/api/projects/:projectName/upload-images', authenticateToken, async (r
     }
 });
 
+// File upload endpoint (any file type, kept on disk for AI to read)
+app.post('/api/projects/:projectName/upload-files', authenticateToken, async (req, res) => {
+    try {
+        const multer = (await import('multer')).default;
+        const path = (await import('path')).default;
+        const fs = (await import('fs')).promises;
+        const os = (await import('os')).default;
+
+        const storage = multer.diskStorage({
+            destination: async (req, file, cb) => {
+                const uploadDir = path.join(os.tmpdir(), 'claude-ui-uploads', String(req.user.id));
+                await fs.mkdir(uploadDir, { recursive: true });
+                cb(null, uploadDir);
+            },
+            filename: (req, file, cb) => {
+                const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+                const sanitizedName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+                cb(null, uniqueSuffix + '-' + sanitizedName);
+            },
+        });
+
+        const upload = multer({
+            storage,
+            limits: { fileSize: 50 * 1024 * 1024, files: 10 },
+        });
+
+        upload.array('files', 10)(req, res, async (err) => {
+            if (err) {
+                return res.status(400).json({ error: err.message });
+            }
+            if (!req.files || req.files.length === 0) {
+                return res.status(400).json({ error: 'No files provided' });
+            }
+            const files = req.files.map((file) => ({
+                name: file.originalname,
+                path: file.path,
+                size: file.size,
+            }));
+            res.json({ files });
+        });
+    } catch (error) {
+        console.error('Error in file upload endpoint:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
 // Get token usage for a specific session
 app.get('/api/projects/:projectName/sessions/:sessionId/token-usage', authenticateToken, async (req, res) => {
     try {

@@ -145,6 +145,8 @@ export function useChatComposerState({
   const [attachedImages, setAttachedImages] = useState<File[]>([]);
   const [uploadingImages, setUploadingImages] = useState<Map<string, number>>(new Map());
   const [imageErrors, setImageErrors] = useState<Map<string, string>>(new Map());
+  const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [isTextareaExpanded, setIsTextareaExpanded] = useState(false);
   const [thinkingMode, setThinkingMode] = useState('none');
 
@@ -424,6 +426,24 @@ export function useChatComposerState({
     }
   }, []);
 
+  const openFilePicker = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleFileInputChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    if (files.length > 0) {
+      setAttachedFiles((previous) => [...previous, ...files].slice(0, 10));
+    }
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  }, []);
+
+  const handleRemoveFile = useCallback((index: number) => {
+    setAttachedFiles((previous) => previous.filter((_, i) => i !== index));
+  }, []);
+
   const handlePaste = useCallback(
     (event: ClipboardEvent<HTMLTextAreaElement>) => {
       const items = Array.from(event.clipboardData.items);
@@ -466,7 +486,8 @@ export function useChatComposerState({
     ) => {
       event.preventDefault();
       const currentInput = inputValueRef.current;
-      if (!currentInput.trim() || isLoading || !selectedProject || !isConnected) {
+      const hasContent = currentInput.trim().length > 0 || attachedFiles.length > 0 || attachedImages.length > 0;
+      if (!hasContent || isLoading || !selectedProject || !isConnected) {
         return;
       }
 
@@ -480,6 +501,7 @@ export function useChatComposerState({
           executeCommand(matchedCommand, trimmedInput);
           setInput('');
           inputValueRef.current = '';
+          setAttachedFiles([]);
           setAttachedImages([]);
           setUploadingImages(new Map());
           setImageErrors(new Map());
@@ -524,6 +546,36 @@ export function useChatComposerState({
           addMessage({
             type: 'error',
             content: `Failed to upload images: ${message}`,
+            timestamp: new Date(),
+          });
+          return;
+        }
+      }
+
+      if (attachedFiles.length > 0) {
+        const formData = new FormData();
+        attachedFiles.forEach((file) => {
+          formData.append('files', file);
+        });
+        try {
+          const response = await authenticatedFetch(
+            `/api/projects/${selectedProject.name}/upload-files`,
+            { method: 'POST', headers: {}, body: formData },
+          );
+          if (!response.ok) {
+            throw new Error('Failed to upload files');
+          }
+          const result = await response.json();
+          const paths = (result.files ?? [])
+            .map((f: { path: string }) => `- ${f.path}`)
+            .join('\n');
+          messageContent = `${messageContent}\n\nAttached files:\n${paths}`;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Unknown error';
+          logger.error('File upload failed:', error);
+          addMessage({
+            type: 'error',
+            content: `Failed to upload files: ${message}`,
             timestamp: new Date(),
           });
           return;
@@ -668,6 +720,7 @@ export function useChatComposerState({
       setAttachedImages([]);
       setUploadingImages(new Map());
       setImageErrors(new Map());
+      setAttachedFiles([]);
       setIsTextareaExpanded(false);
       setThinkingMode('none');
 
@@ -680,6 +733,7 @@ export function useChatComposerState({
     [
       selectedSession,
       attachedImages,
+      attachedFiles,
       claudeModel,
       codexModel,
       currentSessionId,
@@ -976,6 +1030,12 @@ export function useChatComposerState({
     getInputProps,
     isDragActive,
     openImagePicker: open,
+    attachedFiles,
+    setAttachedFiles,
+    fileInputRef,
+    openFilePicker,
+    handleFileInputChange,
+    handleRemoveFile,
     handleSubmit,
     handleInputChange,
     handleKeyDown,
