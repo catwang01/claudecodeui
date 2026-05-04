@@ -33,6 +33,9 @@ const DEFAULT_MIN_SESSION_MSG_COUNT = 20;
 // How many most-recent sessions to consider each batch
 const MAX_SESSIONS = 20;
 
+// Skip sessions whose file was modified within this window (likely still active)
+const ACTIVE_FILE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
+
 function getConfig() {
   const intervalMs = parseInt(appConfigDb.get('auto_doc_interval_ms'), 10) || DEFAULT_INTERVAL_MS;
   const prompt = appConfigDb.get('auto_doc_prompt') || DEFAULT_PROMPT;
@@ -116,8 +119,13 @@ async function collectRecentSessions() {
 
     for (const file of files.filter(f => f.endsWith('.jsonl') && !f.startsWith('agent-'))) {
       try {
-        const parsed = await parseSessionsMeta(path.join(projectPath, file));
-        for (const s of parsed) s.projectName = dirEntry.name;
+        const filePath = path.join(projectPath, file);
+        const stat = await fs.stat(filePath);
+        const parsed = await parseSessionsMeta(filePath);
+        for (const s of parsed) {
+          s.projectName = dirEntry.name;
+          s.fileMtime = stat.mtime;
+        }
         all.push(...parsed);
       } catch { /* skip malformed */ }
     }
@@ -141,13 +149,19 @@ async function selectCandidates(sessions, config) {
   const { minMessageCount } = config;
 
   const activeSessionIds = new Set(getActiveClaudeSDKSessions());
+  const now = Date.now();
+  // Tie the active-file threshold to the configured interval so short intervals
+  // don't over-block recently-idle sessions. Cap at 10 minutes.
+  const activeFileThresholdMs = Math.min(config.intervalMs / 3, ACTIVE_FILE_THRESHOLD_MS);
 
   return sessions.filter(session => {
-    // Skip sessions that are currently being processed (incomplete information)
+    // Skip sessions that are currently being processed via the UI
     if (activeSessionIds.has(session.id)) return false;
     // Skip sessions that are themselves auto-doc forks
     if (autoDocSessionIds.has(session.id)) return false;
     if (session.messageCount < minMessageCount) return false;
+    // Skip sessions whose file was modified recently — likely still active (CLI session)
+    if (session.fileMtime && (now - session.fileMtime.getTime()) < activeFileThresholdMs) return false;
 
     const state = stateMap.get(session.id);
     if (state) {
@@ -164,6 +178,16 @@ async function selectCandidates(sessions, config) {
 async function runSession(session, config) {
   const { prompt, model } = config;
   const start = Date.now();
+
+  // Save state BEFORE forking so that if the server restarts mid-run, the session
+  // won't be picked up again on next startup (prevents duplicate forks).
+  sessionDb.setDocState(
+    session.id,
+    'claude',
+    session.messageCount,
+    session.lastUserMessage,
+    0 // durationMs unknown yet; will be updated after completion
+  );
 
   // Use server-side fork so the new session has its own JSONL with full history.
   // SDK forkSession leaves parent history under the original sessionId, making it
@@ -193,6 +217,7 @@ async function runSession(session, config) {
 
   const durationMs = Date.now() - start;
 
+  // Update with actual duration now that we're done
   sessionDb.setDocState(
     session.id,
     'claude',
@@ -206,27 +231,46 @@ async function runSession(session, config) {
 
 // ─── Batch ────────────────────────────────────────────────────────────────────
 
+let batchRunning = false;
+
 async function runBatch() {
-  const config = getConfig();
-  const sessions = await collectRecentSessions();
-  const candidates = await selectCandidates(sessions, config);
+  if (batchRunning) {
+    console.log('[AutoDoc] Batch already running, skipping');
+    return;
+  }
+  batchRunning = true;
+  try {
+    const config = getConfig();
+    const sessions = await collectRecentSessions();
+    const candidates = await selectCandidates(sessions, config);
 
-  if (!candidates.length) return;
+    if (!candidates.length) return;
 
-  console.log(`[AutoDoc] ${candidates.length} session(s) to process`);
+    console.log(`[AutoDoc] ${candidates.length} session(s) to process`);
 
-  for (const session of candidates) {
-    try {
-      await runSession(session, config);
-    } catch (err) {
-      console.warn(`[AutoDoc] Failed for ${session.id}: ${err.message}`);
+    for (const session of candidates) {
+      try {
+        await runSession(session, config);
+      } catch (err) {
+        console.warn(`[AutoDoc] Failed for ${session.id}: ${err.message}`);
+      }
     }
+  } finally {
+    batchRunning = false;
   }
 }
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
+let timerStarted = false;
+
 export function startAutoDocTimer() {
+  if (timerStarted) {
+    console.log('[AutoDoc] Timer already started, skipping duplicate call');
+    return;
+  }
+  timerStarted = true;
+
   const fire = () =>
     runBatch().catch(err => console.warn('[AutoDoc] Batch error:', err.message));
 
