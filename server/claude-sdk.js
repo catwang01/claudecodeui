@@ -789,17 +789,18 @@ async function abortClaudeSDKSession(sessionId) {
   try {
     console.log(`Aborting SDK session: ${sessionId}`);
 
-    // Call interrupt() on the query instance
-    await session.instance.interrupt();
-
-    // Update session status
+    // Mark as aborted and remove immediately so polling stops returning isProcessing: true.
+    // This lets the caller send complete{aborted:true} without waiting for the API to respond.
     session.status = 'aborted';
-
-    // Clean up temporary image files
-    await cleanupTempFiles(session.tempImagePaths, session.tempDir);
-
-    // Clean up session
     removeSession(sessionId);
+
+    // Call interrupt() and cleanup in background — do NOT await so the caller returns
+    // immediately and the client gets visual feedback right away.
+    session.instance.interrupt()
+      .then(() => cleanupTempFiles(session.tempImagePaths, session.tempDir))
+      .catch(err => {
+        console.error(`[ABORT] interrupt() error for session ${sessionId}:`, err.message);
+      });
 
     return true;
   } catch (error) {

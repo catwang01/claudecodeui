@@ -645,8 +645,12 @@ export function useChatSessionState({
     const activeViewSessionId = selectedSession?.id || currentSessionId;
     if (!activeViewSessionId || !processingSessions) return;
     const shouldBeProcessing = processingSessions.has(activeViewSessionId);
-    if (shouldBeProcessing && !isLoading) {
-      setIsLoading(true);
+    if (shouldBeProcessing) {
+      // Always re-enable loading + abort when the session is still processing.
+      // The !isLoading guard caused a bug: after a WS disconnect canAbortSession
+      // was cleared but isLoading stayed true, so the condition never triggered
+      // and the Abort button appeared unresponsive even though the session was live.
+      if (!isLoading) setIsLoading(true);
       setCanAbortSession(true);
     }
   }, [currentSessionId, isLoading, processingSessions, selectedSession?.id]);
