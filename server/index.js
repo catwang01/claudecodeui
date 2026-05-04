@@ -72,7 +72,7 @@ import sttRoutes from './routes/stt.js';
 import { createNormalizedMessage } from './providers/types.js';
 import { getProvider } from './providers/registry.js';
 import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
-import { initializeDatabase, sessionNamesDb, sessionDb, applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, appConfigDb } from './database/db.js';
+import { initializeDatabase, sessionNamesDb, sessionDb, applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, applyLastAutoDocAt, appConfigDb } from './database/db.js';
 import { startAutoDocTimer } from './auto-doc.js';
 import { configureWebPush } from './services/vapid-keys.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
@@ -625,6 +625,7 @@ app.get('/api/projects/:projectName/sessions', authenticateToken, async (req, re
         applyCustomSessionNames(result.sessions, 'claude');
         applyHiddenFromRecents(result.sessions, 'claude');
         applyAutoDocFlag(result.sessions, 'claude');
+        applyLastAutoDocAt(result.sessions, 'claude');
         res.json(result);
     } catch (error) {
         res.status(500).json({ error: error.message });

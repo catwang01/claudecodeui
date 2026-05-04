@@ -66,7 +66,7 @@ import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import os from 'os';
 import sessionManager from './sessionManager.js';
-import { applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, filterHiddenAutoDocSessions, appConfigDb, sessionDb } from './database/db.js';
+import { applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, applyLastAutoDocAt, filterHiddenAutoDocSessions, appConfigDb, sessionDb } from './database/db.js';
 
 // Import TaskMaster detection functions
 async function detectTaskMasterFolder(projectPath) {
@@ -475,6 +475,7 @@ async function getProjects(progressCallback = null) {
       applyCustomSessionNames(project.sessions, 'claude');
       applyHiddenFromRecents(project.sessions, 'claude');
       applyAutoDocFlag(project.sessions, 'claude');
+      applyLastAutoDocAt(project.sessions, 'claude');
       filterHiddenAutoDocSessions(project.sessions);
 
       project.cursorSessions = cursorSessions.status === 'fulfilled' ? cursorSessions.value : [];

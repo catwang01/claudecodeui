@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
-import { Clock, Folder, MessageSquare, Search, Sparkles, Trash2 } from 'lucide-react';
+import { Clock, Folder, MessageSquare, Search } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { ScrollArea } from '../../../../shared/view/ui';
 import type { Project } from '../../../../types/app';
@@ -8,9 +8,8 @@ import type { ConversationSearchResults, SearchProgress } from '../../hooks/useS
 import SidebarFooter from './SidebarFooter';
 import SidebarHeader from './SidebarHeader';
 import SidebarProjectList, { type SidebarProjectListProps } from './SidebarProjectList';
-import { formatTimeAgo } from '../../../../utils/dateUtils';
-import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
-import { getSessionName, getProjectColor } from '../../utils/utils';
+import SidebarSessionItem from './SidebarSessionItem';
+import { getProjectColor } from '../../utils/utils';
 import { authenticatedFetch } from '../../../../utils/api';
 
 type SearchMode = 'projects' | 'conversations' | 'recent';
@@ -265,59 +264,20 @@ export default function SidebarContent({
               </div>
             ) : filteredRecentSessions.slice(0, visibleCount).map(({ session, project }) => {
               const color = getProjectColor(project.name);
-              const isProcessing = projectListProps.processingSessions?.has(session.id) ?? false;
-              const sessionDate = new Date(session.lastActivity || session.createdAt || 0);
-              const isActive = (projectListProps.currentTime.getTime() - sessionDate.getTime()) / 60000 < 10;
               return (
-              <div key={`${project.name}-${session.id}`} className="group relative">
-                {/* Project color bookmark */}
-                <div
-                  className="absolute left-2 top-1 bottom-1 w-[3px] rounded-full"
-                  style={{ background: color.dot }}
-                />
-                {isProcessing && (
-                  <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2">
-                    <div className="h-2 w-2 animate-spin rounded-full border border-yellow-400 border-t-transparent" />
-                  </div>
-                )}
-                {!isProcessing && isActive && (
-                  <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2">
-                    <div className="h-2 w-2 rounded-full bg-blue-500" />
-                  </div>
-                )}
-                <div
-                  className="w-full rounded-md pr-2 py-2 pl-5 text-left transition-colors hover:bg-accent/50 cursor-pointer"
-                  onClick={() => projectListProps.onSessionSelect(session, project.name)}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') projectListProps.onSessionSelect(session, project.name); }}
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <SessionProviderLogo provider={session.__provider} className="h-3 w-3 flex-shrink-0" />
-                    <span className="truncate text-xs font-medium text-foreground flex-1 flex items-center gap-1">
-                      {session.isAutoDoc && (
-                        <Sparkles className="h-2.5 w-2.5 flex-shrink-0 text-amber-500" title="Auto Doc" />
-                      )}
-                      {getSessionName(session, t)}
-                    </span>
-                  </div>
-                  <div className="mt-0.5 flex items-center gap-1.5 pl-5">
-                    <Folder className="h-2.5 w-2.5 flex-shrink-0 text-muted-foreground/60" />
-                    <span className="truncate text-[10px] text-muted-foreground/60">{project.displayName || project.name}</span>
-                    <span className="ml-auto flex-shrink-0 text-[10px] text-muted-foreground/50 group-hover:hidden">
-                      {formatTimeAgo(session.lastActivity || session.createdAt || '', projectListProps.currentTime, t)}
-                    </span>
-                    <button
-                      className="ml-auto hidden group-hover:flex items-center justify-center h-4 w-4 rounded text-muted-foreground/40 hover:text-muted-foreground transition-colors flex-shrink-0"
-                      onClick={(e) => { e.stopPropagation(); hideSession(session.id, session.__provider || 'claude', session.lastActivity || session.createdAt || ''); }}
-                      title="Hide from recents"
-                      type="button"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </button>
-                  </div>
-                </div>
-              </div>
+              <SidebarSessionItem
+                key={`${project.name}-${session.id}`}
+                variant="recents"
+                project={project}
+                session={session}
+                currentTime={projectListProps.currentTime}
+                isProcessing={projectListProps.processingSessions?.has(session.id) ?? false}
+                projectColorDot={color.dot}
+                projectDisplayName={project.displayName || project.name}
+                onSessionSelect={projectListProps.onSessionSelect}
+                onHideSession={() => hideSession(session.id, session.__provider || 'claude', session.lastActivity || session.createdAt || '')}
+                t={t}
+              />
               );
             })}
             {visibleCount < filteredRecentSessions.length && (

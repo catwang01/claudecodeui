@@ -625,16 +625,17 @@ const sessionDb = {
 
   // Summary state: upsert last_summarized_at, last_message_count, last_message_text, summary_duration_ms
   setDocState: (sessionId, provider, messageCount, lastMessageText, durationMs) => {
+    const now = new Date().toISOString();
     db.prepare(`
       INSERT INTO session_summary_state (session_id, provider, last_summarized_at, last_message_count, last_message_text, summary_duration_ms)
-      VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(session_id, provider)
       DO UPDATE SET
-        last_summarized_at  = CURRENT_TIMESTAMP,
+        last_summarized_at  = excluded.last_summarized_at,
         last_message_count  = excluded.last_message_count,
         last_message_text   = excluded.last_message_text,
         summary_duration_ms = excluded.summary_duration_ms
-    `).run(sessionId, provider, messageCount, lastMessageText, durationMs);
+    `).run(sessionId, provider, now, messageCount, lastMessageText, durationMs);
   },
 
   // Returns Map<sessionId, {last_summarized_at, last_message_count, last_message_text, summary_duration_ms}>
@@ -663,9 +664,9 @@ const sessionDb = {
   // Records a forked session created by auto-doc
   markAsAutoDocSession: (forkedSessionId, sourceSessionId, provider) => {
     db.prepare(`
-      INSERT OR IGNORE INTO auto_doc_sessions (forked_session_id, source_session_id, provider)
-      VALUES (?, ?, ?)
-    `).run(forkedSessionId, sourceSessionId, provider);
+      INSERT OR IGNORE INTO auto_doc_sessions (forked_session_id, source_session_id, provider, created_at)
+      VALUES (?, ?, ?, ?)
+    `).run(forkedSessionId, sourceSessionId, provider, new Date().toISOString());
   },
 
   // Batch lookup — returns Set of forked session IDs that are auto-doc sessions
@@ -685,6 +686,19 @@ const sessionDb = {
       'SELECT forked_session_id FROM auto_doc_sessions WHERE provider = ?'
     ).all(provider);
     return new Set(rows.map(r => r.forked_session_id));
+  },
+
+  // Batch lookup — returns Map of sourceSessionId -> most recent created_at
+  getLastAutoDocTimestamps: (sourceSessionIds, provider) => {
+    if (!sourceSessionIds.length) return new Map();
+    const placeholders = sourceSessionIds.map(() => '?').join(',');
+    const rows = db.prepare(
+      `SELECT source_session_id, MAX(created_at) as last_auto_doc_at
+       FROM auto_doc_sessions
+       WHERE source_session_id IN (${placeholders}) AND provider = ?
+       GROUP BY source_session_id`
+    ).all(...sourceSessionIds, provider);
+    return new Map(rows.map(r => [r.source_session_id, r.last_auto_doc_at]));
   },
 
   // Returns Set of all session IDs hidden from recents for a provider
@@ -732,6 +746,22 @@ function applyAutoDocFlag(sessions, provider) {
     }
   } catch (error) {
     console.warn(`[DB] Failed to apply auto-doc flag for ${provider}:`, error.message);
+  }
+}
+
+// Set lastAutoDocAt on source sessions that have been processed by auto-doc
+function applyLastAutoDocAt(sessions, provider) {
+  if (!sessions?.length) return;
+  try {
+    const ids = sessions.map(s => s.id);
+    const timestamps = sessionDb.getLastAutoDocTimestamps(ids, provider);
+    if (!timestamps.size) return;
+    for (const session of sessions) {
+      const ts = timestamps.get(session.id);
+      if (ts) session.lastAutoDocAt = ts;
+    }
+  } catch (error) {
+    console.warn(`[DB] Failed to apply lastAutoDocAt for ${provider}:`, error.message);
   }
 }
 
@@ -860,6 +890,7 @@ export {
   applyCustomSessionNames,
   applyHiddenFromRecents,
   applyAutoDocFlag,
+  applyLastAutoDocAt,
   filterHiddenAutoDocSessions,
   appConfigDb,
   userSettingsDb,

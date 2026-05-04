@@ -1,4 +1,4 @@
-import { Check, Clock, Edit2, Sparkles, Trash2, X } from 'lucide-react';
+import { Check, Clock, Edit2, Folder, Sparkles, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { Badge, Button } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
@@ -8,7 +8,8 @@ import type { SessionWithProvider } from '../../types/types';
 import { createSessionViewModel } from '../../utils/utils';
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
 
-type SidebarSessionItemProps = {
+type DefaultProps = {
+  variant?: 'default';
   project: Project;
   session: SessionWithProvider;
   selectedSession: ProjectSession | null;
@@ -31,24 +32,104 @@ type SidebarSessionItemProps = {
   t: TFunction;
 };
 
-export default function SidebarSessionItem({
-  project,
-  session,
-  selectedSession,
-  currentTime,
-  editingSession,
-  editingSessionName,
-  onEditingSessionNameChange,
-  onStartEditingSession,
-  onCancelEditingSession,
-  onSaveEditingSession,
-  onProjectSelect,
-  onSessionSelect,
-  onDeleteSession,
-  isProcessing = false,
-  t,
-}: SidebarSessionItemProps) {
+type RecentsProps = {
+  variant: 'recents';
+  project: Project;
+  session: SessionWithProvider;
+  currentTime: Date;
+  projectColorDot: string;
+  projectDisplayName: string;
+  onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
+  onHideSession: () => void;
+  isProcessing?: boolean;
+  t: TFunction;
+};
+
+type SidebarSessionItemProps = DefaultProps | RecentsProps;
+
+export default function SidebarSessionItem(props: SidebarSessionItemProps) {
+  const { project, session, currentTime, isProcessing = false, t } = props;
   const sessionView = createSessionViewModel(session, currentTime, t, isProcessing);
+
+  if (props.variant === 'recents') {
+    const { projectColorDot, projectDisplayName, onSessionSelect, onHideSession } = props;
+    return (
+      <div className="group relative">
+        <div
+          className="absolute left-2 top-1 bottom-1 w-[3px] rounded-full"
+          style={{ background: projectColorDot }}
+        />
+        {sessionView.isProcessing && (
+          <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2">
+            <div className="h-2 w-2 animate-spin rounded-full border border-yellow-400 border-t-transparent" />
+          </div>
+        )}
+        {!sessionView.isProcessing && sessionView.isActive && (
+          <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2">
+            <div className="h-2 w-2 rounded-full bg-blue-500" />
+          </div>
+        )}
+        <div
+          className="w-full rounded-md pr-2 py-2 pl-5 text-left transition-colors hover:bg-accent/50 cursor-pointer"
+          onClick={() => onSessionSelect(session, project.name)}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onSessionSelect(session, project.name); }}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <SessionProviderLogo provider={session.__provider} className="h-3 w-3 flex-shrink-0" />
+            <span className="truncate text-xs font-medium text-foreground flex-1 flex items-center gap-1">
+              {session.isAutoDoc && (
+                <Sparkles className="h-2.5 w-2.5 flex-shrink-0 text-amber-500" title="Auto Doc" />
+              )}
+              {sessionView.sessionName}
+            </span>
+          </div>
+          <div className="mt-0.5 flex items-center gap-1.5 pl-5">
+            <Folder className="h-2.5 w-2.5 flex-shrink-0 text-muted-foreground/60" />
+            <span className="truncate text-[10px] text-muted-foreground/60">{projectDisplayName}</span>
+            {sessionView.messageCount > 0 && (
+              <Badge variant="secondary" className="ml-auto px-1 py-0 text-xs flex-shrink-0">
+                {sessionView.messageCount}
+              </Badge>
+            )}
+            <span className={cn('flex-shrink-0 text-[10px] text-muted-foreground/50', sessionView.messageCount > 0 ? 'ml-1' : 'ml-auto')}>
+              {formatTimeAgo(sessionView.sessionTime, currentTime, t)}
+            </span>
+            <button
+              className="ml-1 hidden group-hover:flex items-center justify-center h-4 w-4 rounded text-muted-foreground/40 hover:text-muted-foreground transition-colors flex-shrink-0"
+              onClick={(e) => { e.stopPropagation(); onHideSession(); }}
+              title="Hide from recents"
+              type="button"
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
+          </div>
+          {session.lastAutoDocAt && (
+            <div className="mt-0.5 flex items-center gap-1 pl-5">
+              <Sparkles className="h-2.5 w-2.5 flex-shrink-0 text-amber-400" />
+              <span className="text-[10px] text-amber-500/70">
+                summarized {formatTimeAgo(session.lastAutoDocAt as string, currentTime, t)}
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  const {
+    selectedSession,
+    editingSession,
+    editingSessionName,
+    onEditingSessionNameChange,
+    onStartEditingSession,
+    onCancelEditingSession,
+    onSaveEditingSession,
+    onProjectSelect,
+    onSessionSelect,
+    onDeleteSession,
+  } = props;
   const isSelected = selectedSession?.id === session.id;
 
   const selectMobileSession = () => {
@@ -121,6 +202,14 @@ export default function SidebarSessionItem({
                   <SessionProviderLogo provider={session.__provider} className="h-3 w-3" />
                 </span>
               </div>
+              {session.lastAutoDocAt && (
+                <div className="mt-0.5 flex items-center gap-1">
+                  <Sparkles className="h-2.5 w-2.5 flex-shrink-0 text-amber-400" />
+                  <span className="text-xs text-amber-500/70">
+                    summarized {formatTimeAgo(session.lastAutoDocAt, currentTime, t)}
+                  </span>
+                </div>
+              )}
             </div>
 
             {!sessionView.isCursorSession && (
@@ -173,6 +262,14 @@ export default function SidebarSessionItem({
                   <SessionProviderLogo provider={session.__provider} className="h-3 w-3" />
                 </span>
               </div>
+              {session.lastAutoDocAt && (
+                <div className="mt-0.5 flex items-center gap-1">
+                  <Sparkles className="h-2.5 w-2.5 flex-shrink-0 text-amber-400" />
+                  <span className="text-xs text-amber-500/70">
+                    summarized {formatTimeAgo(session.lastAutoDocAt, currentTime, t)}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         </Button>
