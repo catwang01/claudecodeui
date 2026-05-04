@@ -1,5 +1,5 @@
 import express from 'express';
-import { apiKeysDb, credentialsDb, notificationPreferencesDb, pushSubscriptionsDb, appConfigDb } from '../database/db.js';
+import { apiKeysDb, credentialsDb, notificationPreferencesDb, pushSubscriptionsDb, appConfigDb, userSettingsDb } from '../database/db.js';
 import { getPublicKey } from '../services/vapid-keys.js';
 import { createNotificationEvent, notifyUserIfEnabled } from '../services/notification-orchestrator.js';
 
@@ -345,6 +345,37 @@ router.put('/auto-doc', async (req, res) => {
     console.error('Error saving auto-doc config:', error);
     res.status(500).json({ error: 'Failed to save auto-doc config' });
   }
+});
+
+// ===============================
+// User Preferences (per-user key-value)
+// ===============================
+
+// Allowed keys for user preferences
+const USER_PREF_KEYS = new Set([
+  'claude-settings',
+  'cursor-tools-settings',
+  'codex-settings',
+  'gemini-settings',
+  'code-editor-settings',
+]);
+
+router.get('/user-preferences/:key', (req, res) => {
+  const { key } = req.params;
+  if (!USER_PREF_KEYS.has(key)) {
+    return res.status(400).json({ error: 'Unknown preference key' });
+  }
+  const raw = userSettingsDb.get(req.user.id, key);
+  res.json({ value: raw ? JSON.parse(raw) : null });
+});
+
+router.put('/user-preferences/:key', (req, res) => {
+  const { key } = req.params;
+  if (!USER_PREF_KEYS.has(key)) {
+    return res.status(400).json({ error: 'Unknown preference key' });
+  }
+  userSettingsDb.set(req.user.id, key, JSON.stringify(req.body));
+  res.json({ success: true });
 });
 
 export default router;

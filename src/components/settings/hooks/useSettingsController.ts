@@ -140,14 +140,6 @@ const toCodexPermissionMode = (value: unknown): CodexPermissionMode => {
   return 'default';
 };
 
-const readCodeEditorSettings = (): CodeEditorSettingsState => ({
-  theme: localStorage.getItem('codeEditorTheme') === 'light' ? 'light' : 'dark',
-  wordWrap: localStorage.getItem('codeEditorWordWrap') === 'true',
-  showMinimap: localStorage.getItem('codeEditorShowMinimap') !== 'false',
-  lineNumbers: localStorage.getItem('codeEditorLineNumbers') !== 'false',
-  fontSize: localStorage.getItem('codeEditorFontSize') ?? DEFAULT_CODE_EDITOR_SETTINGS.fontSize,
-});
-
 const mapCliServersToMcpServers = (servers: McpCliServer[] = []): McpServer[] => (
   servers.map((server) => ({
     id: server.name,
@@ -213,9 +205,9 @@ export function useSettingsController({ isOpen, initialTab, projects, onClose }:
   const [saveStatus, setSaveStatus] = useState<'success' | 'error' | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [projectSortOrder, setProjectSortOrder] = useState<ProjectSortOrder>('name');
-  const [codeEditorSettings, setCodeEditorSettings] = useState<CodeEditorSettingsState>(() => (
-    readCodeEditorSettings()
-  ));
+  const [codeEditorSettings, setCodeEditorSettings] = useState<CodeEditorSettingsState>(
+    DEFAULT_CODE_EDITOR_SETTINGS
+  );
 
   const [claudePermissions, setClaudePermissions] = useState<ClaudePermissionsState>(() => (
     createEmptyClaudePermissions()
@@ -659,38 +651,81 @@ export function useSettingsController({ isOpen, initialTab, projects, onClose }:
 
   const loadSettings = useCallback(async () => {
     try {
-      const savedClaudeSettings = parseJson<ClaudeSettingsStorage>(
-        localStorage.getItem('claude-settings'),
-        {},
-      );
+      // Helper: fetch from API, fall back to localStorage for one-time migration
+      const fetchPref = async <T extends object>(key: string, lsKey: string): Promise<T | null> => {
+        try {
+          const res = await authenticatedFetch(`/api/settings/user-preferences/${key}`);
+          if (res.ok) {
+            const data = await res.json() as { value: T | null };
+            if (data.value !== null) return data.value;
+          }
+        } catch { /* fall through to localStorage migration */ }
+        // Nothing in DB yet — migrate from localStorage if present
+        const raw = localStorage.getItem(lsKey);
+        if (raw) {
+          const parsed = parseJson<T>(raw, {} as T);
+          // Save to DB async, then clear localStorage
+          void authenticatedFetch(`/api/settings/user-preferences/${key}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: raw,
+          }).then(() => localStorage.removeItem(lsKey));
+          return parsed;
+        }
+        return null;
+      };
+
+      const claudeData = await fetchPref<ClaudeSettingsStorage>('claude-settings', 'claude-settings');
       setClaudePermissions({
-        allowedTools: savedClaudeSettings.allowedTools || [],
-        disallowedTools: savedClaudeSettings.disallowedTools || [],
-        skipPermissions: Boolean(savedClaudeSettings.skipPermissions),
+        allowedTools: claudeData?.allowedTools || [],
+        disallowedTools: claudeData?.disallowedTools || [],
+        skipPermissions: Boolean(claudeData?.skipPermissions),
       });
-      setProjectSortOrder(savedClaudeSettings.projectSortOrder === 'date' ? 'date' : 'name');
+      setProjectSortOrder(claudeData?.projectSortOrder === 'date' ? 'date' : 'name');
 
-      const savedCursorSettings = parseJson<CursorSettingsStorage>(
-        localStorage.getItem('cursor-tools-settings'),
-        {},
-      );
+      const cursorData = await fetchPref<CursorSettingsStorage>('cursor-tools-settings', 'cursor-tools-settings');
       setCursorPermissions({
-        allowedCommands: savedCursorSettings.allowedCommands || [],
-        disallowedCommands: savedCursorSettings.disallowedCommands || [],
-        skipPermissions: Boolean(savedCursorSettings.skipPermissions),
+        allowedCommands: cursorData?.allowedCommands || [],
+        disallowedCommands: cursorData?.disallowedCommands || [],
+        skipPermissions: Boolean(cursorData?.skipPermissions),
       });
 
-      const savedCodexSettings = parseJson<CodexSettingsStorage>(
-        localStorage.getItem('codex-settings'),
-        {},
-      );
-      setCodexPermissionMode(toCodexPermissionMode(savedCodexSettings.permissionMode));
+      const codexData = await fetchPref<CodexSettingsStorage>('codex-settings', 'codex-settings');
+      setCodexPermissionMode(toCodexPermissionMode(codexData?.permissionMode));
 
-      const savedGeminiSettings = parseJson<{ permissionMode?: GeminiPermissionMode }>(
-        localStorage.getItem('gemini-settings'),
-        {},
-      );
-      setGeminiPermissionMode(savedGeminiSettings.permissionMode || 'default');
+      const geminiData = await fetchPref<{ permissionMode?: GeminiPermissionMode }>('gemini-settings', 'gemini-settings');
+      setGeminiPermissionMode(geminiData?.permissionMode || 'default');
+
+      const editorData = await fetchPref<CodeEditorSettingsState>('code-editor-settings', '__legacy-code-editor__');
+      if (editorData) {
+        setCodeEditorSettings({
+          theme: editorData.theme === 'light' ? 'light' : 'dark',
+          wordWrap: Boolean(editorData.wordWrap),
+          showMinimap: editorData.showMinimap !== false,
+          lineNumbers: editorData.lineNumbers !== false,
+          fontSize: editorData.fontSize ?? DEFAULT_CODE_EDITOR_SETTINGS.fontSize,
+        });
+        window.dispatchEvent(new Event('codeEditorSettingsChanged'));
+      } else {
+        // Migrate individual codeEditor localStorage keys
+        const legacyEditor: CodeEditorSettingsState = {
+          theme: localStorage.getItem('codeEditorTheme') === 'light' ? 'light' : 'dark',
+          wordWrap: localStorage.getItem('codeEditorWordWrap') === 'true',
+          showMinimap: localStorage.getItem('codeEditorShowMinimap') !== 'false',
+          lineNumbers: localStorage.getItem('codeEditorLineNumbers') !== 'false',
+          fontSize: localStorage.getItem('codeEditorFontSize') ?? DEFAULT_CODE_EDITOR_SETTINGS.fontSize,
+        };
+        setCodeEditorSettings(legacyEditor);
+        void authenticatedFetch('/api/settings/user-preferences/code-editor-settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(legacyEditor),
+        }).then(() => {
+          ['codeEditorTheme', 'codeEditorWordWrap', 'codeEditorShowMinimap', 'codeEditorLineNumbers', 'codeEditorFontSize']
+            .forEach(k => localStorage.removeItem(k));
+        });
+        window.dispatchEvent(new Event('codeEditorSettingsChanged'));
+      }
 
       try {
         const notificationResponse = await authenticatedFetch('/api/settings/notification-preferences');
@@ -743,38 +778,34 @@ export function useSettingsController({ isOpen, initialTab, projects, onClose }:
 
     try {
       const now = new Date().toISOString();
-      localStorage.setItem('claude-settings', JSON.stringify({
-        allowedTools: claudePermissions.allowedTools,
-        disallowedTools: claudePermissions.disallowedTools,
-        skipPermissions: claudePermissions.skipPermissions,
-        projectSortOrder,
-        lastUpdated: now,
-      }));
 
-      localStorage.setItem('cursor-tools-settings', JSON.stringify({
-        allowedCommands: cursorPermissions.allowedCommands,
-        disallowedCommands: cursorPermissions.disallowedCommands,
-        skipPermissions: cursorPermissions.skipPermissions,
-        lastUpdated: now,
-      }));
+      const savePref = (key: string, value: object) =>
+        authenticatedFetch(`/api/settings/user-preferences/${key}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...value, lastUpdated: now }),
+        });
 
-      localStorage.setItem('codex-settings', JSON.stringify({
-        permissionMode: codexPermissionMode,
-        lastUpdated: now,
-      }));
-
-      localStorage.setItem('gemini-settings', JSON.stringify({
-        permissionMode: geminiPermissionMode,
-        lastUpdated: now,
-      }));
-
-      const notificationResponse = await authenticatedFetch('/api/settings/notification-preferences', {
-        method: 'PUT',
-        body: JSON.stringify(notificationPreferences),
-      });
-      if (!notificationResponse.ok) {
-        throw new Error('Failed to save notification preferences');
-      }
+      await Promise.all([
+        savePref('claude-settings', {
+          allowedTools: claudePermissions.allowedTools,
+          disallowedTools: claudePermissions.disallowedTools,
+          skipPermissions: claudePermissions.skipPermissions,
+          projectSortOrder,
+        }),
+        savePref('cursor-tools-settings', {
+          allowedCommands: cursorPermissions.allowedCommands,
+          disallowedCommands: cursorPermissions.disallowedCommands,
+          skipPermissions: cursorPermissions.skipPermissions,
+        }),
+        savePref('codex-settings', { permissionMode: codexPermissionMode }),
+        savePref('gemini-settings', { permissionMode: geminiPermissionMode }),
+        savePref('code-editor-settings', codeEditorSettings),
+        authenticatedFetch('/api/settings/notification-preferences', {
+          method: 'PUT',
+          body: JSON.stringify(notificationPreferences),
+        }),
+      ]);
 
       setSaveStatus('success');
     } catch (error) {
@@ -785,6 +816,7 @@ export function useSettingsController({ isOpen, initialTab, projects, onClose }:
     claudePermissions.allowedTools,
     claudePermissions.disallowedTools,
     claudePermissions.skipPermissions,
+    codeEditorSettings,
     codexPermissionMode,
     cursorPermissions.allowedCommands,
     cursorPermissions.disallowedCommands,
@@ -835,11 +867,6 @@ export function useSettingsController({ isOpen, initialTab, projects, onClose }:
   }, [checkAuthStatus, initialTab, isOpen, loadSettings]);
 
   useEffect(() => {
-    localStorage.setItem('codeEditorTheme', codeEditorSettings.theme);
-    localStorage.setItem('codeEditorWordWrap', String(codeEditorSettings.wordWrap));
-    localStorage.setItem('codeEditorShowMinimap', String(codeEditorSettings.showMinimap));
-    localStorage.setItem('codeEditorLineNumbers', String(codeEditorSettings.lineNumbers));
-    localStorage.setItem('codeEditorFontSize', codeEditorSettings.fontSize);
     window.dispatchEvent(new Event('codeEditorSettingsChanged'));
   }, [codeEditorSettings]);
 
