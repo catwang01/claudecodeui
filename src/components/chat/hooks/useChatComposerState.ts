@@ -146,7 +146,9 @@ export function useChatComposerState({
   const [uploadingImages, setUploadingImages] = useState<Map<string, number>>(new Map());
   const [imageErrors, setImageErrors] = useState<Map<string, string>>(new Map());
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const [isTextareaExpanded, setIsTextareaExpanded] = useState(false);
   const [thinkingMode, setThinkingMode] = useState('none');
 
@@ -404,13 +406,14 @@ export function useChatComposerState({
           return false;
         }
 
-        if (!file.size || file.size > 5 * 1024 * 1024) {
+        if (!file.size || file.size > 100 * 1024 * 1024) {
           const fileName = file.name || 'Unknown file';
           setImageErrors((previous) => {
             const next = new Map(previous);
-            next.set(fileName, 'File too large (max 5MB)');
+            next.set(fileName, 'File too large (max 100MB)');
             return next;
           });
+          setUploadError(`图片 "${fileName}" 超过 100MB 限制`);
           return false;
         }
 
@@ -432,8 +435,13 @@ export function useChatComposerState({
 
   const handleFileInputChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || []);
-    if (files.length > 0) {
-      setAttachedFiles((previous) => [...previous, ...files].slice(0, 10));
+    const oversized = files.filter((f) => f.size > 1024 * 1024 * 1024);
+    const valid = files.filter((f) => f.size <= 1024 * 1024 * 1024);
+    if (oversized.length > 0) {
+      setUploadError(`文件 "${oversized[0].name}" 超过 1GB 限制`);
+    }
+    if (valid.length > 0) {
+      setAttachedFiles((previous) => [...previous, ...valid].slice(0, 10));
     }
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
@@ -469,13 +477,34 @@ export function useChatComposerState({
     [handleImageFiles],
   );
 
-  const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
-    accept: {
-      'image/*': ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'],
+  const handleDrop = useCallback(
+    (acceptedFiles: File[]) => {
+      const images = acceptedFiles.filter((f) => f.type.startsWith('image/'));
+      const others = acceptedFiles.filter((f) => !f.type.startsWith('image/'));
+      if (images.length > 0) handleImageFiles(images);
+      if (others.length > 0) {
+        const oversized = others.filter((f) => f.size > 1024 * 1024 * 1024);
+        const valid = others.filter((f) => f.size <= 1024 * 1024 * 1024);
+        if (oversized.length > 0) {
+          setUploadError(`文件 "${oversized[0].name}" 超过 1GB 限制`);
+        }
+        if (valid.length > 0) {
+          setAttachedFiles((prev) => [...prev, ...valid].slice(0, 10));
+        }
+      }
     },
-    maxSize: 5 * 1024 * 1024,
-    maxFiles: 5,
-    onDrop: handleImageFiles,
+    [handleImageFiles],
+  );
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    maxFiles: 10,
+    onDrop: handleDrop,
+    onDropRejected: (rejections) => {
+      const tooMany = rejections.some((r) => r.errors.some((e) => e.code === 'too-many-files'));
+      if (tooMany) {
+        setUploadError('最多同时上传 10 个文件');
+      }
+    },
     noClick: true,
     noKeyboard: true,
   });
@@ -1029,9 +1058,13 @@ export function useChatComposerState({
     getRootProps,
     getInputProps,
     isDragActive,
-    openImagePicker: open,
+    openImagePicker: () => imageInputRef.current?.click(),
+    imageInputRef,
+    handleImageFiles,
     attachedFiles,
     setAttachedFiles,
+    uploadError,
+    setUploadError,
     fileInputRef,
     openFilePicker,
     handleFileInputChange,

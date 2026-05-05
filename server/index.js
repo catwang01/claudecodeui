@@ -1430,7 +1430,7 @@ const uploadFilesHandler = async (req, res) => {
             }
         }),
         limits: {
-            fileSize: 50 * 1024 * 1024, // 50MB limit
+            fileSize: 1024 * 1024 * 1024, // 1GB limit
             files: 20 // Max 20 files at once
         }
     });
@@ -1440,7 +1440,7 @@ const uploadFilesHandler = async (req, res) => {
         if (err) {
             console.error('Multer error:', err);
             if (err.code === 'LIMIT_FILE_SIZE') {
-                return res.status(400).json({ error: 'File too large. Maximum size is 50MB.' });
+                return res.status(400).json({ error: 'File too large. Maximum size is 1GB.' });
             }
             if (err.code === 'LIMIT_FILE_COUNT') {
                 return res.status(400).json({ error: 'Too many files. Maximum is 20 files.' });
@@ -2251,7 +2251,7 @@ app.post('/api/projects/:projectName/upload-images', authenticateToken, async (r
             storage,
             fileFilter,
             limits: {
-                fileSize: 5 * 1024 * 1024, // 5MB
+                fileSize: 100 * 1024 * 1024, // 100MB
                 files: 5
             }
         });
@@ -2324,7 +2324,7 @@ app.post('/api/projects/:projectName/upload-files', authenticateToken, async (re
 
         const upload = multer({
             storage,
-            limits: { fileSize: 50 * 1024 * 1024, files: 10 },
+            limits: { fileSize: 1024 * 1024 * 1024, files: 10 },
         });
 
         upload.array('files', 10)(req, res, async (err) => {

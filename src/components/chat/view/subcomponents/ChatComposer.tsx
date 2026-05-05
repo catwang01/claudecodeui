@@ -59,7 +59,6 @@ interface ChatComposerProps {
   hasMessages: boolean;
   onScrollToBottom: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement> | MouseEvent<HTMLButtonElement> | TouchEvent<HTMLButtonElement>) => void;
-  isDragActive: boolean;
   attachedImages: File[];
   onRemoveImage: (index: number) => void;
   uploadingImages: Map<string, number>;
@@ -74,8 +73,6 @@ interface ChatComposerProps {
   onCloseCommandMenu: () => void;
   isCommandMenuOpen: boolean;
   frequentCommands: SlashCommand[];
-  getRootProps: (...args: unknown[]) => Record<string, unknown>;
-  getInputProps: (...args: unknown[]) => Record<string, unknown>;
   openImagePicker: () => void;
   attachedFiles: File[];
   onRemoveFile: (index: number) => void;
@@ -125,7 +122,6 @@ export default function ChatComposer({
   hasMessages,
   onScrollToBottom,
   onSubmit,
-  isDragActive,
   attachedImages,
   onRemoveImage,
   uploadingImages,
@@ -140,8 +136,6 @@ export default function ChatComposer({
   onCloseCommandMenu,
   isCommandMenuOpen,
   frequentCommands,
-  getRootProps,
-  getInputProps,
   openImagePicker,
   attachedFiles = [],
   onRemoveFile,
@@ -228,22 +222,6 @@ export default function ChatComposer({
       </div>
 
       {!hasQuestionPanel && <form onSubmit={onSubmit as (event: FormEvent<HTMLFormElement>) => void} className="relative mx-auto max-w-4xl">
-        {isDragActive && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/50 bg-primary/15">
-            <div className="rounded-xl border border-border/30 bg-card p-4 shadow-lg">
-              <svg className="mx-auto mb-2 h-8 w-8 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
-                />
-              </svg>
-              <p className="text-sm font-medium">Drop images here</p>
-            </div>
-          </div>
-        )}
-
         {attachedImages.length > 0 && (
           <div className="mb-2 rounded-xl bg-muted/40 p-2">
             <div className="flex flex-wrap gap-2">
@@ -341,12 +319,10 @@ export default function ChatComposer({
         />
 
         <div
-          {...getRootProps()}
           className={`relative overflow-hidden rounded-2xl border border-border/50 bg-card/80 shadow-sm backdrop-blur-sm transition-all duration-200 focus-within:border-primary/30 focus-within:shadow-md focus-within:ring-1 focus-within:ring-primary/15 ${
             isTextareaExpanded ? 'chat-input-expanded' : ''
           }`}
         >
-          <input {...getInputProps()} />
           <input
             ref={fileInputRef}
             type="file"
