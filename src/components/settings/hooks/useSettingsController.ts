@@ -657,7 +657,11 @@ export function useSettingsController({ isOpen, initialTab, projects, onClose }:
           const res = await authenticatedFetch(`/api/settings/user-preferences/${key}`);
           if (res.ok) {
             const data = await res.json() as { value: T | null };
-            if (data.value !== null) return data.value;
+            if (data.value !== null) {
+              // Sync back to localStorage so useChatComposerState (which reads localStorage) has fresh data
+              try { localStorage.setItem(lsKey, JSON.stringify(data.value)); } catch { /* ignore quota errors */ }
+              return data.value;
+            }
           }
         } catch { /* fall through to localStorage migration */ }
         // Nothing in DB yet — migrate from localStorage if present
@@ -779,12 +783,16 @@ export function useSettingsController({ isOpen, initialTab, projects, onClose }:
     try {
       const now = new Date().toISOString();
 
-      const savePref = (key: string, value: object) =>
-        authenticatedFetch(`/api/settings/user-preferences/${key}`, {
+      const savePref = (key: string, value: object) => {
+        const body = JSON.stringify({ ...value, lastUpdated: now });
+        // Mirror to localStorage so useChatComposerState (which reads localStorage) gets fresh data
+        try { localStorage.setItem(key, body); } catch { /* ignore quota errors */ }
+        return authenticatedFetch(`/api/settings/user-preferences/${key}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...value, lastUpdated: now }),
+          body,
         });
+      };
 
       await Promise.all([
         savePref('claude-settings', {
