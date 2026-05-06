@@ -62,11 +62,31 @@ import fsSync from 'fs';
 import path from 'path';
 import readline from 'readline';
 import crypto from 'crypto';
+import { spawn } from 'child_process';
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import os from 'os';
 import sessionManager from './sessionManager.js';
 import { applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, applyLastAutoDocAt, filterHiddenAutoDocSessions, appConfigDb, sessionDb } from './database/db.js';
+
+async function getProjectGitBranch(projectPath) {
+  const run = (args) => new Promise((resolve, reject) => {
+    const child = spawn('git', args, { cwd: projectPath, shell: false });
+    let out = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.on('close', (code) => { code === 0 ? resolve(out.trim()) : reject(new Error(`exit ${code}`)); });
+    child.on('error', reject);
+  });
+  try {
+    const branch = await run(['symbolic-ref', '--short', 'HEAD']);
+    if (branch) return branch;
+  } catch { /* fall through */ }
+  try {
+    return await run(['rev-parse', '--abbrev-ref', 'HEAD']);
+  } catch {
+    return null;
+  }
+}
 
 // Import TaskMaster detection functions
 async function detectTaskMasterFolder(projectPath) {
@@ -452,7 +472,7 @@ async function getProjects(progressCallback = null) {
 
       // getSessions reads .jsonl files — keep sequential to avoid I/O contention.
       // Everything else accesses different directories and can run in parallel.
-      const [sessionResult, cursorSessions, codexSessions, geminiResult, taskMasterResult] =
+      const [sessionResult, cursorSessions, codexSessions, geminiResult, taskMasterResult, gitBranchResult] =
         await Promise.allSettled([
           getSessions(entry.name, 5, 0, autoDocPreFilter),
           getCursorSessions(actualProjectDir),
@@ -464,6 +484,7 @@ async function getProjects(progressCallback = null) {
             return [...uiSessions, ...cliSessions.filter(s => !uiIds.has(s.id))];
           })(),
           detectTaskMasterFolder(actualProjectDir),
+          getProjectGitBranch(actualProjectDir),
         ]);
 
       if (sessionResult.status === 'fulfilled') {
@@ -505,6 +526,8 @@ async function getProjects(progressCallback = null) {
         console.warn(`Could not detect TaskMaster for project ${entry.name}:`, taskMasterResult.reason?.message);
         project.taskmaster = { hasTaskmaster: false, hasEssentialFiles: false, metadata: null, status: 'error' };
       }
+
+      project.currentBranch = gitBranchResult.status === 'fulfilled' ? gitBranchResult.value : null;
 
       projects.push(project);
     }

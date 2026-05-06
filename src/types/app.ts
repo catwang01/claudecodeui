@@ -44,6 +44,7 @@ export interface Project {
   geminiSessions?: ProjectSession[];
   sessionMeta?: ProjectSessionMeta;
   taskmaster?: ProjectTaskmasterInfo;
+  currentBranch?: string | null;
   [key: string]: unknown;
 }
 

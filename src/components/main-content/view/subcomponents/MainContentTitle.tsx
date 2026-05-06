@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next';
+import { GitBranch } from 'lucide-react';
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
 import type { AppTab, Project, ProjectSession } from '../../../../types/app';
 import { usePlugins } from '../../../../contexts/PluginsContext';
@@ -38,6 +39,16 @@ function getSessionTitle(session: ProjectSession): string {
   return (session.summary as string) || 'New Session';
 }
 
+function BranchBadge({ branch }: { branch?: string | null }) {
+  if (!branch) return null;
+  return (
+    <span className="ml-1 inline-flex flex-shrink-0 items-center gap-0.5 rounded bg-blue-500/10 px-1 py-0.5 text-[10px] font-medium text-blue-600 dark:text-blue-400">
+      <GitBranch className="h-2.5 w-2.5" />
+      {branch}
+    </span>
+  );
+}
+
 export default function MainContentTitle({
   activeTab,
   selectedProject,
@@ -68,19 +79,28 @@ export default function MainContentTitle({
             <h2 className="scrollbar-hide overflow-x-auto whitespace-nowrap text-sm font-semibold leading-tight text-foreground">
               {getSessionTitle(selectedSession)}
             </h2>
-            <div className="truncate text-[11px] leading-tight text-muted-foreground">{selectedProject.displayName}</div>
+            <div className="flex min-w-0 items-center text-[11px] leading-tight text-muted-foreground">
+              <span className="truncate">{selectedProject.displayName}</span>
+              <BranchBadge branch={selectedProject.currentBranch} />
+            </div>
           </div>
         ) : showChatNewSession ? (
           <div className="min-w-0">
             <h2 className="text-base font-semibold leading-tight text-foreground">{t('mainContent.newSession')}</h2>
-            <div className="truncate text-xs leading-tight text-muted-foreground">{selectedProject.displayName}</div>
+            <div className="flex min-w-0 items-center text-xs leading-tight text-muted-foreground">
+              <span className="truncate">{selectedProject.displayName}</span>
+              <BranchBadge branch={selectedProject.currentBranch} />
+            </div>
           </div>
         ) : (
           <div className="min-w-0">
             <h2 className="text-sm font-semibold leading-tight text-foreground">
               {getTabTitle(activeTab, shouldShowTasksTab, t, pluginDisplayName)}
             </h2>
-            <div className="truncate text-[11px] leading-tight text-muted-foreground">{selectedProject.displayName}</div>
+            <div className="flex min-w-0 items-center text-[11px] leading-tight text-muted-foreground">
+              <span className="truncate">{selectedProject.displayName}</span>
+              <BranchBadge branch={selectedProject.currentBranch} />
+            </div>
           </div>
         )}
       </div>
