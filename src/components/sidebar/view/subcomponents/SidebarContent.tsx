@@ -277,6 +277,12 @@ export default function SidebarContent({
                 onSessionSelect={projectListProps.onSessionSelect}
                 onHideSession={() => hideSession(session.id, session.__provider || 'claude', session.lastActivity || session.createdAt || '')}
                 onDeleteSession={projectListProps.onDeleteSession}
+                onProjectNavigate={(proj) => {
+                  onSearchModeChange('projects');
+                  if (!projectListProps.expandedProjects.has(proj.name)) {
+                    projectListProps.onToggleProject(proj.name);
+                  }
+                }}
                 t={t}
               />
               );
