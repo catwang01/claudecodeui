@@ -648,32 +648,41 @@ export function useChatComposerState({
         onSessionProcessing?.(effectiveSessionId, provider);
       }
 
-      const getToolsSettings = () => {
+      const getToolsSettings = async () => {
+        const settingsKey =
+          provider === 'cursor'
+            ? 'cursor-tools-settings'
+            : provider === 'codex'
+              ? 'codex-settings'
+              : provider === 'gemini'
+                ? 'gemini-settings'
+                : 'claude-settings';
         try {
-          const settingsKey =
-            provider === 'cursor'
-              ? 'cursor-tools-settings'
-              : provider === 'codex'
-                ? 'codex-settings'
-                : provider === 'gemini'
-                  ? 'gemini-settings'
-                  : 'claude-settings';
           const savedSettings = safeLocalStorage.getItem(settingsKey);
           if (savedSettings) {
-            return JSON.parse(savedSettings);
+            return JSON.parse(savedSettings) as Record<string, unknown>;
+          }
+          // localStorage empty (e.g. after SQLite migration) — fetch from API and cache
+          const res = await authenticatedFetch(`/api/settings/user-preferences/${settingsKey}`);
+          if (res.ok) {
+            const data = await res.json() as { value: Record<string, unknown> | null };
+            if (data.value) {
+              try { localStorage.setItem(settingsKey, JSON.stringify(data.value)); } catch { /* ignore */ }
+              return data.value;
+            }
           }
         } catch (error) {
           logger.error('Error loading tools settings:', error);
         }
 
         return {
-          allowedTools: [],
-          disallowedTools: [],
+          allowedTools: [] as string[],
+          disallowedTools: [] as string[],
           skipPermissions: false,
         };
       };
 
-      const toolsSettings = getToolsSettings();
+      const toolsSettings = await getToolsSettings();
       const resolvedProjectPath = selectedProject.fullPath || selectedProject.path || '';
       const sessionSummary = getNotificationSessionSummary(selectedSession, currentInput);
 
