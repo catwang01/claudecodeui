@@ -100,7 +100,8 @@
     "notifications": "Notifications",
     "plugins": "Plugins",
     "autoDoc": "Auto Doc Generation",
-    "about": "About"
+    "about": "About",
+    "debug": "Debug"
   },
   "notifications": {
     "title": "Notifications",

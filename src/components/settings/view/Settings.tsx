@@ -14,6 +14,7 @@ import TasksSettingsTab from '../view/tabs/tasks-settings/TasksSettingsTab';
 import PluginSettingsTab from '../../plugins/view/PluginSettingsTab';
 import AboutTab from '../view/tabs/AboutTab';
 import AutomationsSettingsTab from '../view/tabs/AutomationsSettingsTab';
+import DebugSettingsTab from '../view/tabs/DebugSettingsTab';
 import { useSettingsController } from '../hooks/useSettingsController';
 import { useWebPush } from '../../../hooks/useWebPush';
 import type { SettingsProps } from '../types/types';
@@ -212,6 +213,8 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
               {activeTab === 'auto-doc' && <AutomationsSettingsTab />}
 
               {activeTab === 'about' && <AboutTab />}
+
+              {activeTab === 'debug' && <DebugSettingsTab />}
             </div>
           </main>
         </div>
