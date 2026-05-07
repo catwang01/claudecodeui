@@ -1,9 +1,11 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { Radio } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { PermissionMode, Provider } from '../../types/types';
 import type { VoiceStatus } from '../../../../contexts/VoiceConversationContext';
 import ThinkingModeSelector from './ThinkingModeSelector';
 import TokenUsagePie from './TokenUsagePie';
+import { authenticatedFetch } from '../../../../utils/api';
 
 interface ChatInputControlsProps {
   permissionMode: PermissionMode | string;
@@ -45,6 +47,35 @@ export default function ChatInputControls({
   onVoiceToggle,
 }: ChatInputControlsProps) {
   const { t } = useTranslation('chat');
+
+  const [tapEnabled, setTapEnabled] = useState(false);
+  const [tapToggling, setTapToggling] = useState(false);
+
+  useEffect(() => {
+    authenticatedFetch('/api/settings/tap')
+      .then(res => res.json())
+      .then(data => setTapEnabled(!!data.enabled))
+      .catch(() => {});
+  }, []);
+
+  const handleTapToggle = async () => {
+    setTapToggling(true);
+    try {
+      const res = await authenticatedFetch('/api/settings/tap', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !tapEnabled }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setTapEnabled(!!data.enabled);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setTapToggling(false);
+    }
+  };
 
   return (
     <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3">
@@ -195,6 +226,38 @@ export default function ChatInputControls({
             </svg>
           )}
         </button>
+      )}
+
+      {/* API traffic tap toggle */}
+      <button
+        type="button"
+        onClick={handleTapToggle}
+        disabled={tapToggling}
+        title={tapEnabled ? 'API tap: ON — click to disable' : 'API tap: OFF — click to enable'}
+        className={`relative flex h-7 w-7 items-center justify-center rounded-lg transition-all duration-200 sm:h-8 sm:w-8 disabled:opacity-50 ${
+          tapEnabled
+            ? 'bg-orange-500/15 text-orange-500 hover:bg-orange-500/25'
+            : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
+        }`}
+      >
+        {tapEnabled && (
+          <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-orange-500" />
+        )}
+        <Radio className="h-4 w-4 sm:h-[18px] sm:w-[18px]" />
+      </button>
+
+      {tapEnabled && (
+        <a
+          href={`/api/tap/viewer?token=${encodeURIComponent(localStorage.getItem('auth-token') ?? '')}`}
+          target="_blank"
+          rel="noreferrer"
+          title="Open API trace viewer"
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-orange-500 transition-colors hover:bg-orange-500/15 sm:h-8 sm:w-8"
+        >
+          <svg className="h-3.5 w-3.5 sm:h-4 sm:w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+          </svg>
+        </a>
       )}
     </div>
   );

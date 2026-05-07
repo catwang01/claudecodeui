@@ -13,6 +13,7 @@
  */
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
+import { getTapProxyPort } from './tap.js';
 import crypto from 'crypto';
 import { promises as fs } from 'fs';
 import path from 'path';
@@ -227,7 +228,24 @@ function mapCliOptionsToSDK(options = {}) {
   // when the server itself is running inside a Claude Code session.
   const env = { ...process.env };
   delete env.CLAUDECODE;
+
   sdkOptions.env = env;
+
+  // If claude-tap proxy is running, override ANTHROPIC_BASE_URL via extraArgs.settings.
+  // --settings JSON is the highest-priority settings layer, overriding user settings.json
+  // (which may have a custom ANTHROPIC_BASE_URL like a company proxy endpoint).
+  const tapPort = getTapProxyPort();
+  if (tapPort) {
+    const tapUrl = `http://127.0.0.1:${tapPort}`;
+    sdkOptions.extraArgs = {
+      settings: JSON.stringify({
+        env: { ANTHROPIC_BASE_URL: tapUrl }
+      })
+    };
+    console.log(`[tap] extraArgs.settings ANTHROPIC_BASE_URL=${tapUrl}`);
+  } else {
+    console.log('[tap] proxy not running, no URL override');
+  }
 
   return sdkOptions;
 }

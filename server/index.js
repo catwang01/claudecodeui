@@ -74,6 +74,7 @@ import { getProvider } from './providers/registry.js';
 import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
 import { initializeDatabase, sessionNamesDb, sessionDb, applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, applyLastAutoDocAt, appConfigDb } from './database/db.js';
 import { startAutoDocTimer } from './auto-doc.js';
+import { startTapProxy, stopTapProxy, resolveAnthropicBaseUrl, tapViewerProxy } from './tap.js';
 import { configureWebPush } from './services/vapid-keys.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
 import { IS_PLATFORM } from './constants/config.js';
@@ -512,6 +513,9 @@ app.use('/api/tts', authenticateToken, ttsRoutes);
 
 // STT API Routes (protected)
 app.use('/api/stt', authenticateToken, sttRoutes);
+
+// claude-tap live viewer proxy (protected) — proxies to 127.0.0.1:<livePort>
+app.use('/api/tap/viewer', authenticateToken, tapViewerProxy);
 
 // Serve public files (like api-docs.html)
 app.use(express.static(path.join(__dirname, '../public')));
@@ -2691,14 +2695,24 @@ async function startServer() {
             // Start auto-doc background timer
             startAutoDocTimer();
 
+            // Start claude-tap proxy if enabled in config
+            const tapEnabled = appConfigDb.get('tap_enabled');
+            if (tapEnabled === 'true') {
+                const targetUrl = await resolveAnthropicBaseUrl();
+                startTapProxy(targetUrl).catch(err => {
+                    console.warn('[tap] Could not start proxy:', err.message);
+                });
+            }
+
             // Start server-side plugin processes for enabled plugins
             startEnabledPluginServers().catch(err => {
                 console.error('[Plugins] Error during startup:', err.message);
             });
         });
 
-        // Clean up plugin processes on shutdown
+        // Clean up plugin processes and tap proxy on shutdown
         const shutdownPlugins = async () => {
+            stopTapProxy();
             await stopAllPlugins();
             process.exit(0);
         };

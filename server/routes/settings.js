@@ -2,6 +2,7 @@ import express from 'express';
 import { apiKeysDb, credentialsDb, notificationPreferencesDb, pushSubscriptionsDb, appConfigDb, userSettingsDb } from '../database/db.js';
 import { getPublicKey } from '../services/vapid-keys.js';
 import { createNotificationEvent, notifyUserIfEnabled } from '../services/notification-orchestrator.js';
+import { startTapProxy, stopTapProxy, getTapProxyPort, getTapLivePort, resolveAnthropicBaseUrl } from '../tap.js';
 
 const router = express.Router();
 
@@ -344,6 +345,54 @@ router.put('/auto-doc', async (req, res) => {
   } catch (error) {
     console.error('Error saving auto-doc config:', error);
     res.status(500).json({ error: 'Failed to save auto-doc config' });
+  }
+});
+
+// ===============================
+// Claude-tap (API traffic inspector)
+// ===============================
+
+router.get('/tap', async (req, res) => {
+  try {
+    const enabled = appConfigDb.get('tap_enabled') === 'true';
+    const port = getTapProxyPort();
+    const livePort = getTapLivePort();
+    res.json({ enabled, port, livePort });
+  } catch (error) {
+    console.error('Error fetching tap config:', error);
+    res.status(500).json({ error: 'Failed to fetch tap config' });
+  }
+});
+
+router.put('/tap', async (req, res) => {
+  try {
+    const { enabled } = req.body;
+    if (typeof enabled !== 'boolean') {
+      return res.status(400).json({ error: 'enabled must be a boolean' });
+    }
+
+    if (enabled && !getTapProxyPort()) {
+      const targetUrl = await resolveAnthropicBaseUrl();
+      try {
+        await startTapProxy(targetUrl);
+      } catch (err) {
+        // Don't persist enabled=true if proxy failed to start
+        appConfigDb.set('tap_enabled', 'false');
+        return res.status(500).json({
+          error: err.code === 'ENOENT'
+            ? 'claude-tap not found. Install with: pip install claude-tap (requires Python 3.11+)'
+            : `Failed to start tap proxy: ${err.message}`,
+        });
+      }
+    } else if (!enabled) {
+      stopTapProxy();
+    }
+
+    appConfigDb.set('tap_enabled', enabled ? 'true' : 'false');
+    res.json({ success: true, enabled, port: getTapProxyPort(), livePort: getTapLivePort() });
+  } catch (error) {
+    console.error('Error saving tap config:', error);
+    res.status(500).json({ error: 'Failed to save tap config' });
   }
 });
 
