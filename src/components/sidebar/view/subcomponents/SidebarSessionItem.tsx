@@ -1,4 +1,4 @@
-import { Check, Clock, Edit2, Folder, Sparkles, Trash2, X } from 'lucide-react';
+import { Check, Clock, Edit2, EyeOff, Folder, Sparkles, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { Badge, Button } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
@@ -41,6 +41,12 @@ type RecentsProps = {
   projectDisplayName: string;
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
   onHideSession: () => void;
+  onDeleteSession: (
+    projectName: string,
+    sessionId: string,
+    sessionTitle: string,
+    provider: SessionProvider,
+  ) => void;
   isProcessing?: boolean;
   t: TFunction;
 };
@@ -52,7 +58,7 @@ export default function SidebarSessionItem(props: SidebarSessionItemProps) {
   const sessionView = createSessionViewModel(session, currentTime, t, isProcessing);
 
   if (props.variant === 'recents') {
-    const { projectColorDot, projectDisplayName, onSessionSelect, onHideSession } = props;
+    const { projectColorDot, projectDisplayName, onSessionSelect, onHideSession, onDeleteSession } = props;
     return (
       <div className="group relative">
         <div
@@ -102,8 +108,18 @@ export default function SidebarSessionItem(props: SidebarSessionItemProps) {
               title="Hide from recents"
               type="button"
             >
+              <EyeOff className="h-3 w-3" />
+            </button>
+            {!sessionView.isCursorSession && (
+            <button
+              className="hidden group-hover:flex items-center justify-center h-4 w-4 rounded text-muted-foreground/40 hover:text-red-500 transition-colors flex-shrink-0"
+              onClick={(e) => { e.stopPropagation(); onDeleteSession(project.name, session.id, sessionView.sessionName, session.__provider); }}
+              title="Delete session"
+              type="button"
+            >
               <Trash2 className="h-3 w-3" />
             </button>
+            )}
           </div>
           {session.lastAutoDocAt && (
             <div className="mt-0.5 flex items-center gap-1 pl-5">

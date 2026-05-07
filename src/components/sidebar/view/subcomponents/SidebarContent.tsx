@@ -276,6 +276,7 @@ export default function SidebarContent({
                 projectDisplayName={project.displayName || project.name}
                 onSessionSelect={projectListProps.onSessionSelect}
                 onHideSession={() => hideSession(session.id, session.__provider || 'claude', session.lastActivity || session.createdAt || '')}
+                onDeleteSession={projectListProps.onDeleteSession}
                 t={t}
               />
               );
