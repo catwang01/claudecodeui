@@ -94,13 +94,13 @@ export default function SidebarSessionItem(props: SidebarSessionItemProps) {
           </div>
           <div className="mt-0.5 flex items-center gap-1.5 pl-5">
             <button
-              className="flex items-center gap-1.5 min-w-0 max-w-[40%] rounded px-0.5 hover:text-foreground/80 transition-colors cursor-pointer"
+              className="group/folder flex items-center gap-1 min-w-0 max-w-[40%] rounded px-0.5 py-0.5 hover:bg-accent/60 transition-colors cursor-pointer"
               onClick={(e) => { e.stopPropagation(); onProjectNavigate(project); }}
               title={`Go to project: ${projectDisplayName}`}
               type="button"
             >
-              <Folder className="h-2.5 w-2.5 flex-shrink-0 text-muted-foreground/60" />
-              <span className="truncate text-[10px] text-muted-foreground/60">{projectDisplayName}</span>
+              <Folder className="h-2.5 w-2.5 flex-shrink-0 text-muted-foreground/60 group-hover/folder:text-foreground/70 transition-colors" />
+              <span className="truncate text-[10px] text-muted-foreground/60 group-hover/folder:text-foreground/70 group-hover/folder:underline transition-colors">{projectDisplayName}</span>
             </button>
             {sessionView.messageCount > 0 && (
               <Badge variant="secondary" className="ml-auto px-1 py-0 text-xs flex-shrink-0">

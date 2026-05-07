@@ -99,6 +99,8 @@ export default function SidebarContent({
   const RECENT_PAGE_SIZE = 10;
   const [visibleCount, setVisibleCount] = useState(RECENT_PAGE_SIZE);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const [scrollTargetProject, setScrollTargetProject] = useState<string | null>(null);
 
   const [hiddenSet, setHiddenSet] = useState<Set<string>>(new Set());
   const [hideAutoDoc, setHideAutoDoc] = useState(true);
@@ -109,6 +111,16 @@ export default function SidebarContent({
       .then(data => setHideAutoDoc(!!data.hideAutoDoc))
       .catch(() => {/* keep default false */});
   }, []);
+
+  useEffect(() => {
+    if (searchMode === 'projects' && scrollTargetProject) {
+      requestAnimationFrame(() => {
+        const el = scrollAreaRef.current?.querySelector<HTMLElement>(`[data-project-name="${CSS.escape(scrollTargetProject)}"]`);
+        el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        setScrollTargetProject(null);
+      });
+    }
+  }, [searchMode, scrollTargetProject]);
 
   const hideSession = useCallback(async (sessionId: string, provider: string, lastActivity: string) => {
     const key = `${sessionId}:${provider}`;
@@ -224,7 +236,7 @@ export default function SidebarContent({
         t={t}
       />
 
-      <ScrollArea className="flex-1 overflow-y-auto overscroll-contain md:px-1.5 md:py-2">
+      <ScrollArea ref={scrollAreaRef} className="flex-1 overflow-y-auto overscroll-contain md:px-1.5 md:py-2">
         {searchMode === 'recent' && !showConversationSearch ? (
           <div className="space-y-1 px-2 py-1">
             {/* Project filter badges */}
@@ -278,6 +290,7 @@ export default function SidebarContent({
                 onHideSession={() => hideSession(session.id, session.__provider || 'claude', session.lastActivity || session.createdAt || '')}
                 onDeleteSession={projectListProps.onDeleteSession}
                 onProjectNavigate={(proj) => {
+                  setScrollTargetProject(proj.name);
                   onSearchModeChange('projects');
                   if (!projectListProps.expandedProjects.has(proj.name)) {
                     projectListProps.onToggleProject(proj.name);
