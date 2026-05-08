@@ -440,7 +440,7 @@ export function useSidebarController({
   );
 
   const confirmDeleteSession = useCallback(async () => {
-    if (!sessionDeleteConfirmation) {
+    if (!sessionDeleteConfirmation || isDeletingSession) {
       return;
     }
 
@@ -476,7 +476,7 @@ export function useSidebarController({
     } finally {
       setIsDeletingSession(false);
     }
-  }, [onSessionDelete, sessionDeleteConfirmation, t]);
+  }, [onSessionDelete, sessionDeleteConfirmation, isDeletingSession, t]);
 
   const requestProjectDelete = useCallback(
     (project: Project) => {
