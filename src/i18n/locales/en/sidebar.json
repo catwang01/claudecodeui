@@ -64,6 +64,7 @@
     "cancel": "Cancel",
     "save": "Save",
     "delete": "Delete",
+    "deleting": "Deleting...",
     "rename": "Rename",
     "joinCommunity": "Join Community",
     "reportIssue": "Report Issue",

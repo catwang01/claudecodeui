@@ -64,6 +64,7 @@
     "cancel": "Abbrechen",
     "save": "Speichern",
     "delete": "Löschen",
+    "deleting": "Wird gelöscht...",
     "rename": "Umbenennen",
     "joinCommunity": "Community beitreten",
     "reportIssue": "Problem melden",

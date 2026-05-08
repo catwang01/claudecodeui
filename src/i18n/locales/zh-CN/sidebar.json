@@ -64,6 +64,7 @@
     "cancel": "取消",
     "save": "保存",
     "delete": "删除",
+    "deleting": "删除中...",
     "rename": "重命名",
     "joinCommunity": "加入社区",
     "reportIssue": "报告问题",

@@ -63,6 +63,7 @@
     "cancel": "キャンセル",
     "save": "保存",
     "delete": "削除",
+    "deleting": "削除中...",
     "rename": "名前の変更",
     "joinCommunity": "コミュニティに参加",
     "reportIssue": "問題を報告",
