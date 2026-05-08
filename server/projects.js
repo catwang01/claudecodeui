@@ -294,14 +294,9 @@ async function generateDisplayName(projectName, actualProjectDir = null) {
     // Fall back to path-based naming if package.json doesn't exist or can't be read
   }
 
-  // If it starts with /, it's an absolute path
-  if (projectPath.startsWith('/')) {
-    const parts = projectPath.split('/').filter(Boolean);
-    // Return only the last folder name
-    return parts[parts.length - 1] || projectPath;
-  }
-
-  return projectPath;
+  // Extract the last folder name from the path (works for both Unix and Windows paths)
+  const basename = path.basename(projectPath);
+  return basename || projectPath;
 }
 
 // Read the first cwd value found in a JSONL file, then stop reading.
