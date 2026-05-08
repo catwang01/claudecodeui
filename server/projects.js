@@ -431,10 +431,12 @@ async function getProjects(progressCallback = null) {
     ? (sessions) => sessions.filter(s => !excludedSessionIds.has(s.id))
     : null;
 
+  const isUUID = (name) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(name);
+
   try {
     await fs.access(claudeDir);
     const entries = await fs.readdir(claudeDir, { withFileTypes: true });
-    directories = entries.filter(e => e.isDirectory());
+    directories = entries.filter(e => e.isDirectory() && !isUUID(e.name));
     directories.forEach(e => existingProjects.add(e.name));
 
     const manualProjectsCount = Object.entries(config)
@@ -971,7 +973,29 @@ async function getSessionMessages(projectName, sessionId, limit = null, offset =
     const files = await fs.readdir(projectDir);
     // agent-*.jsonl files contain subagent tool history - we'll process them separately
     const jsonlFiles = files.filter(file => file.endsWith('.jsonl') && !file.startsWith('agent-'));
-    const agentFiles = files.filter(file => file.endsWith('.jsonl') && file.startsWith('agent-'));
+
+    // Scan for agent files in session subdirectories: {projectDir}/{sessionId}/subagents/agent-{id}.jsonl
+    const agentFilesMap = new Map(); // agentFileName -> full path
+    try {
+      const entries = await fs.readdir(projectDir, { withFileTypes: true });
+      const sessionDirs = entries.filter(e => e.isDirectory());
+
+      for (const sessionDir of sessionDirs) {
+        const subagentsDir = path.join(projectDir, sessionDir.name, 'subagents');
+        try {
+          const subagentFiles = await fs.readdir(subagentsDir);
+          for (const file of subagentFiles) {
+            if (file.endsWith('.jsonl') && file.startsWith('agent-')) {
+              agentFilesMap.set(file, path.join(subagentsDir, file));
+            }
+          }
+        } catch (err) {
+          // Session directory may not have subagents subdirectory - skip
+        }
+      }
+    } catch (err) {
+      // Project directory may not be scannable - continue without agent files
+    }
 
     if (jsonlFiles.length === 0) {
       return { messages: [], total: 0, hasMore: false };
@@ -1021,8 +1045,8 @@ async function getSessionMessages(projectName, sessionId, limit = null, offset =
     // Load agent tools for each agentId found
     for (const agentId of agentIds) {
       const agentFileName = `agent-${agentId}.jsonl`;
-      if (agentFiles.includes(agentFileName)) {
-        const agentFilePath = path.join(projectDir, agentFileName);
+      if (agentFilesMap.has(agentFileName)) {
+        const agentFilePath = agentFilesMap.get(agentFileName);
         const tools = await parseAgentTools(agentFilePath);
         agentToolsCache.set(agentId, tools);
       }
