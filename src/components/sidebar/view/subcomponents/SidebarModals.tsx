@@ -26,6 +26,7 @@ type SidebarModalsProps = {
   sessionDeleteConfirmation: SessionDeleteConfirmation | null;
   onCancelDeleteSession: () => void;
   onConfirmDeleteSession: () => void;
+  isDeletingSession: boolean;
   showVersionModal: boolean;
   onCloseVersionModal: () => void;
   releaseInfo: ReleaseInfo | null;
@@ -62,6 +63,7 @@ export default function SidebarModals({
   sessionDeleteConfirmation,
   onCancelDeleteSession,
   onConfirmDeleteSession,
+  isDeletingSession,
   showVersionModal,
   onCloseVersionModal,
   releaseInfo,
@@ -179,16 +181,31 @@ export default function SidebarModals({
                 </div>
               </div>
               <div className="flex gap-3 border-t border-border bg-muted/30 p-4">
-                <Button variant="outline" className="flex-1" onClick={onCancelDeleteSession}>
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={onCancelDeleteSession}
+                  disabled={isDeletingSession}
+                >
                   {t('actions.cancel')}
                 </Button>
                 <Button
                   variant="destructive"
                   className="flex-1 bg-red-600 text-white hover:bg-red-700"
                   onClick={onConfirmDeleteSession}
+                  disabled={isDeletingSession}
                 >
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  {t('actions.delete')}
+                  {isDeletingSession ? (
+                    <>
+                      <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                      {t('actions.deleting')}
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      {t('actions.delete')}
+                    </>
+                  )}
                 </Button>
               </div>
             </div>
