@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next';
+import { useState } from 'react';
 import { DarkModeToggle } from '../../../../shared/view/ui';
 import type { CodeEditorSettingsState, ProjectSortOrder } from '../../types/types';
 import LanguageSelector from '../../../../shared/view/ui/LanguageSelector';
@@ -10,6 +11,8 @@ import SettingsToggle from '../SettingsToggle';
 type AppearanceSettingsTabProps = {
   projectSortOrder: ProjectSortOrder;
   onProjectSortOrderChange: (value: ProjectSortOrder) => void;
+  projectExcludePatterns: string[];
+  onProjectExcludePatternsChange: (value: string[]) => void;
   codeEditorSettings: CodeEditorSettingsState;
   onCodeEditorThemeChange: (value: 'dark' | 'light') => void;
   onCodeEditorWordWrapChange: (value: boolean) => void;
@@ -21,6 +24,8 @@ type AppearanceSettingsTabProps = {
 export default function AppearanceSettingsTab({
   projectSortOrder,
   onProjectSortOrderChange,
+  projectExcludePatterns,
+  onProjectExcludePatternsChange,
   codeEditorSettings,
   onCodeEditorThemeChange,
   onCodeEditorWordWrapChange,
@@ -29,6 +34,31 @@ export default function AppearanceSettingsTab({
   onCodeEditorFontSizeChange,
 }: AppearanceSettingsTabProps) {
   const { t } = useTranslation('settings');
+  const [newPattern, setNewPattern] = useState('');
+
+  const handleAddPattern = () => {
+    const trimmed = newPattern.trim();
+    if (!trimmed) return;
+
+    // Check if pattern already exists
+    if (projectExcludePatterns.includes(trimmed)) {
+      setNewPattern('');
+      return;
+    }
+
+    // Test if it's a valid regex
+    try {
+      new RegExp(trimmed);
+      onProjectExcludePatternsChange([...projectExcludePatterns, trimmed]);
+      setNewPattern('');
+    } catch (e) {
+      alert('Invalid regex pattern');
+    }
+  };
+
+  const handleRemovePattern = (pattern: string) => {
+    onProjectExcludePatternsChange(projectExcludePatterns.filter((p) => p !== pattern));
+  };
 
   return (
     <div className="space-y-8">
@@ -64,6 +94,60 @@ export default function AppearanceSettingsTab({
               <option value="date">{t('appearanceSettings.projectSorting.recentActivity')}</option>
             </select>
           </SettingsRow>
+        </SettingsCard>
+      </SettingsSection>
+
+      <SettingsSection title="Project Exclude Patterns">
+        <SettingsCard>
+          <div className="space-y-4">
+            <div>
+              <p className="text-sm text-muted-foreground mb-3">
+                Hide projects matching these regex patterns from the sidebar. Patterns are matched against project name, display name, and path.
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={newPattern}
+                  onChange={(e) => setNewPattern(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      handleAddPattern();
+                    }
+                  }}
+                  placeholder="e.g., ^test-.*|.*-archive$"
+                  className="flex-1 rounded-lg border border-input bg-card px-3 py-2 text-sm text-foreground focus:border-primary focus:ring-1 focus:ring-primary"
+                />
+                <button
+                  onClick={handleAddPattern}
+                  className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                >
+                  Add
+                </button>
+              </div>
+            </div>
+
+            {projectExcludePatterns.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-foreground">Current patterns:</p>
+                <div className="space-y-1.5">
+                  {projectExcludePatterns.map((pattern) => (
+                    <div
+                      key={pattern}
+                      className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-3 py-2"
+                    >
+                      <code className="text-xs text-foreground font-mono">{pattern}</code>
+                      <button
+                        onClick={() => handleRemovePattern(pattern)}
+                        className="ml-3 text-xs text-muted-foreground hover:text-destructive"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </SettingsCard>
       </SettingsSection>
 

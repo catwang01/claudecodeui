@@ -28,6 +28,8 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
     deleteError,
     projectSortOrder,
     setProjectSortOrder,
+    projectExcludePatterns,
+    setProjectExcludePatterns,
     codeEditorSettings,
     updateCodeEditorSetting,
     claudePermissions,
@@ -147,6 +149,8 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
                 <AppearanceSettingsTab
                   projectSortOrder={projectSortOrder}
                   onProjectSortOrderChange={setProjectSortOrder}
+                  projectExcludePatterns={projectExcludePatterns}
+                  onProjectExcludePatternsChange={setProjectExcludePatterns}
                   codeEditorSettings={codeEditorSettings}
                   onCodeEditorThemeChange={(value) => updateCodeEditorSetting('theme', value)}
                   onCodeEditorWordWrapChange={(value) => updateCodeEditorSetting('wordWrap', value)}

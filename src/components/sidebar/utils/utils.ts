@@ -22,6 +22,20 @@ export const readProjectSortOrder = (): ProjectSortOrder => {
   }
 };
 
+export const readProjectExcludePatterns = (): string[] => {
+  try {
+    const rawSettings = localStorage.getItem('claude-settings');
+    if (!rawSettings) {
+      return [];
+    }
+
+    const settings = JSON.parse(rawSettings) as { projectExcludePatterns?: string[] };
+    return Array.isArray(settings.projectExcludePatterns) ? settings.projectExcludePatterns : [];
+  } catch {
+    return [];
+  }
+};
+
 export const loadStarredProjects = (): Set<string> => {
   try {
     const saved = localStorage.getItem('starredProjects');
@@ -177,13 +191,42 @@ export const sortProjects = (
   return byName;
 };
 
-export const filterProjects = (projects: Project[], searchFilter: string): Project[] => {
+export const filterProjects = (projects: Project[], searchFilter: string, excludePatterns: string[] = []): Project[] => {
   const normalizedSearch = searchFilter.trim().toLowerCase();
-  if (!normalizedSearch) {
-    return projects;
+
+  // Apply exclude patterns first
+  let filtered = projects;
+  if (excludePatterns && excludePatterns.length > 0) {
+    filtered = projects.filter((project) => {
+      const displayName = project.displayName || project.name;
+      const projectName = project.name;
+      const projectPath = project.path || project.fullPath || '';
+
+      // Check if project matches any exclude pattern
+      for (const pattern of excludePatterns) {
+        if (!pattern || !pattern.trim()) continue;
+
+        try {
+          const regex = new RegExp(pattern, 'i');
+          if (regex.test(displayName) || regex.test(projectName) || regex.test(projectPath)) {
+            return false; // Exclude this project
+          }
+        } catch (e) {
+          // Invalid regex pattern, skip it
+          console.warn(`Invalid exclude pattern: ${pattern}`, e);
+        }
+      }
+
+      return true; // Keep this project
+    });
   }
 
-  return projects.filter((project) => {
+  // Apply search filter
+  if (!normalizedSearch) {
+    return filtered;
+  }
+
+  return filtered.filter((project) => {
     const displayName = (project.displayName || project.name).toLowerCase();
     const projectName = project.name.toLowerCase();
     return displayName.includes(normalizedSearch) || projectName.includes(normalizedSearch);

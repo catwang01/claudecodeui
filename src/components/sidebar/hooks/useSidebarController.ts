@@ -17,6 +17,7 @@ import {
   loadStarredProjects,
   persistStarredProjects,
   readProjectSortOrder,
+  readProjectExcludePatterns,
   sortProjects,
 } from '../utils/utils';
 import { logger } from '../../../utils/logger';
@@ -101,6 +102,7 @@ export function useSidebarController({
   const [initialSessionsLoaded, setInitialSessionsLoaded] = useState<Set<string>>(new Set());
   const [currentTime, setCurrentTime] = useState(new Date());
   const [projectSortOrder, setProjectSortOrder] = useState<ProjectSortOrder>('name');
+  const [projectExcludePatterns, setProjectExcludePatterns] = useState<string[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [projectHasMoreOverrides, setProjectHasMoreOverrides] = useState<Record<string, boolean>>({});
   const [editingSession, setEditingSession] = useState<string | null>(null);
@@ -178,6 +180,33 @@ export function useSidebarController({
     const interval = setInterval(() => {
       if (document.hasFocus()) {
         loadSortOrder();
+      }
+    }, 1000);
+
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
+    const loadExcludePatterns = () => {
+      setProjectExcludePatterns(readProjectExcludePatterns());
+    };
+
+    loadExcludePatterns();
+
+    const handleStorageChange = (event: StorageEvent) => {
+      if (event.key === 'claude-settings') {
+        loadExcludePatterns();
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+
+    const interval = setInterval(() => {
+      if (document.hasFocus()) {
+        loadExcludePatterns();
       }
     }, 1000);
 
@@ -360,8 +389,8 @@ export function useSidebarController({
   );
 
   const filteredProjects = useMemo(
-    () => filterProjects(sortedProjects, searchFilter),
-    [searchFilter, sortedProjects],
+    () => filterProjects(sortedProjects, searchFilter, projectExcludePatterns),
+    [searchFilter, sortedProjects, projectExcludePatterns],
   );
 
   const startEditing = useCallback((project: Project) => {

@@ -86,6 +86,7 @@ type ClaudeSettingsStorage = {
   disallowedTools?: string[];
   skipPermissions?: boolean;
   projectSortOrder?: ProjectSortOrder;
+  projectExcludePatterns?: string[];
 };
 
 type CursorSettingsStorage = {
@@ -205,6 +206,7 @@ export function useSettingsController({ isOpen, initialTab, projects, onClose }:
   const [saveStatus, setSaveStatus] = useState<'success' | 'error' | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [projectSortOrder, setProjectSortOrder] = useState<ProjectSortOrder>('name');
+  const [projectExcludePatterns, setProjectExcludePatterns] = useState<string[]>([]);
   const [codeEditorSettings, setCodeEditorSettings] = useState<CodeEditorSettingsState>(
     DEFAULT_CODE_EDITOR_SETTINGS
   );
@@ -686,6 +688,7 @@ export function useSettingsController({ isOpen, initialTab, projects, onClose }:
         skipPermissions: Boolean(claudeData?.skipPermissions),
       });
       setProjectSortOrder(claudeData?.projectSortOrder === 'date' ? 'date' : 'name');
+      setProjectExcludePatterns(Array.isArray(claudeData?.projectExcludePatterns) ? claudeData.projectExcludePatterns : []);
 
       const cursorData = await fetchPref<CursorSettingsStorage>('cursor-tools-settings', 'cursor-tools-settings');
       setCursorPermissions({
@@ -800,6 +803,7 @@ export function useSettingsController({ isOpen, initialTab, projects, onClose }:
           disallowedTools: claudePermissions.disallowedTools,
           skipPermissions: claudePermissions.skipPermissions,
           projectSortOrder,
+          projectExcludePatterns,
         }),
         savePref('cursor-tools-settings', {
           allowedCommands: cursorPermissions.allowedCommands,
@@ -832,6 +836,7 @@ export function useSettingsController({ isOpen, initialTab, projects, onClose }:
     notificationPreferences,
     geminiPermissionMode,
     projectSortOrder,
+    projectExcludePatterns,
   ]);
 
   const updateCodeEditorSetting = useCallback(
@@ -941,6 +946,8 @@ export function useSettingsController({ isOpen, initialTab, projects, onClose }:
     deleteError,
     projectSortOrder,
     setProjectSortOrder,
+    projectExcludePatterns,
+    setProjectExcludePatterns,
     codeEditorSettings,
     updateCodeEditorSetting,
     claudePermissions,

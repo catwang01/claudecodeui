@@ -138,7 +138,7 @@ export default function SidebarContent({
   const recentSessions = useMemo(() => {
     if (searchMode !== 'recent') return [];
     const all: Array<{ session: ReturnType<typeof projectListProps.getProjectSessions>[number]; project: Project }> = [];
-    for (const project of projectListProps.projects) {
+    for (const project of projectListProps.filteredProjects) {
       for (const session of projectListProps.getProjectSessions(project)) {
         all.push({ session, project });
       }
