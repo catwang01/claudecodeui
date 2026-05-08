@@ -111,6 +111,7 @@ export function useSidebarController({
   const [deletingProjects, setDeletingProjects] = useState<Set<string>>(new Set());
   const [deleteConfirmation, setDeleteConfirmation] = useState<DeleteProjectConfirmation | null>(null);
   const [sessionDeleteConfirmation, setSessionDeleteConfirmation] = useState<SessionDeleteConfirmation | null>(null);
+  const [isDeletingSession, setIsDeletingSession] = useState(false);
   const [showVersionModal, setShowVersionModal] = useState(false);
   const [starredProjects, setStarredProjects] = useState<Set<string>>(() => loadStarredProjects());
   const [searchMode, setSearchMode] = useState<'projects' | 'conversations' | 'recent'>('projects');
@@ -444,7 +445,9 @@ export function useSidebarController({
     }
 
     const { projectName, sessionId, provider } = sessionDeleteConfirmation;
-    setSessionDeleteConfirmation(null);
+
+    // Set loading state BEFORE clearing confirmation to keep dialog open
+    setIsDeletingSession(true);
 
     try {
       let response;
@@ -458,6 +461,7 @@ export function useSidebarController({
 
       if (response.ok) {
         onSessionDelete?.(sessionId);
+        setSessionDeleteConfirmation(null); // Close dialog on success
       } else {
         const errorText = await response.text();
         logger.error('[Sidebar] Failed to delete session:', {
@@ -469,6 +473,8 @@ export function useSidebarController({
     } catch (error) {
       logger.error('[Sidebar] Error deleting session:', error);
       alert(t('messages.deleteSessionError'));
+    } finally {
+      setIsDeletingSession(false);
     }
   }, [onSessionDelete, sessionDeleteConfirmation, t]);
 
@@ -627,6 +633,7 @@ export function useSidebarController({
     deletingProjects,
     deleteConfirmation,
     sessionDeleteConfirmation,
+    isDeletingSession,
     showVersionModal,
     starredProjects,
     filteredProjects,
