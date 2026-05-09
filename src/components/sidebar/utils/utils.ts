@@ -202,13 +202,13 @@ export const filterProjects = (projects: Project[], searchFilter: string, exclud
       const projectName = project.name;
       const projectPath = project.path || project.fullPath || '';
 
-      // Check if project matches any exclude pattern
+      // Check if project matches any exclude pattern (only match against path)
       for (const pattern of excludePatterns) {
         if (!pattern || !pattern.trim()) continue;
 
         try {
           const regex = new RegExp(pattern, 'i');
-          if (regex.test(displayName) || regex.test(projectName) || regex.test(projectPath)) {
+          if (regex.test(projectPath)) {
             return false; // Exclude this project
           }
         } catch (e) {
