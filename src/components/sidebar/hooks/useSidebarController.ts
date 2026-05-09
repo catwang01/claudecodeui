@@ -192,7 +192,16 @@ export function useSidebarController({
 
   useEffect(() => {
     const loadExcludePatterns = () => {
-      setProjectExcludePatterns(readProjectExcludePatterns());
+      const newPatterns = readProjectExcludePatterns();
+      setProjectExcludePatterns((prev) => {
+        if (
+          prev.length === newPatterns.length &&
+          prev.every((p, i) => p === newPatterns[i])
+        ) {
+          return prev;
+        }
+        return newPatterns;
+      });
     };
 
     loadExcludePatterns();

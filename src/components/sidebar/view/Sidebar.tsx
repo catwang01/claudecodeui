@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDeviceSettings } from '../../../hooks/useDeviceSettings';
 import { useVersionCheck } from '../../../hooks/useVersionCheck';
@@ -47,6 +47,11 @@ function Sidebar({
   const { sidebarVisible } = preferences;
   const { setCurrentProject, mcpServerStatus } = useTaskMaster() as TaskMasterSidebarContext;
   const { tasksEnabled } = useTasksSettings();
+
+  const setSidebarVisible = useCallback(
+    (visible: boolean) => setPreference('sidebarVisible', visible),
+    [setPreference],
+  );
 
   const {
     isSidebarCollapsed,
@@ -112,7 +117,7 @@ function Sidebar({
     onSessionDelete,
     onProjectDelete,
     setCurrentProject,
-    setSidebarVisible: (visible) => setPreference('sidebarVisible', visible),
+    setSidebarVisible,
     sidebarVisible,
   });
 
