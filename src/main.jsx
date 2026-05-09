@@ -7,6 +7,15 @@ import 'katex/dist/katex.min.css'
 // Initialize i18n
 import './i18n/config.js'
 
+// Prevent Alt key from activating browser menu bar (Edge/Chrome default behavior)
+// Must use capture phase to intercept before input elements consume the event
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Alt') e.preventDefault();
+}, true);
+window.addEventListener('keyup', (e) => {
+  if (e.key === 'Alt') e.preventDefault();
+}, true);
+
 // Register service worker for PWA + Web Push support
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').catch(err => {
