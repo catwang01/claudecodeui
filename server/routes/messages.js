@@ -155,8 +155,7 @@ router.get('/:sessionId/messages', async (req, res) => {
     const end = limit !== null ? Math.max(0, total - offset) : total;
     const pageMessages = allMessages.slice(start, end);
 
-    return res.json({
-      messages: pageMessages,
+    return res.json({      messages: pageMessages,
       total,
       hasMore: start > 0,
       offset,

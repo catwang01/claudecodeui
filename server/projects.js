@@ -970,17 +970,11 @@ async function getSessionMessages(projectName, sessionId, limit = null, offset =
   const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
 
   try {
-    const files = await fs.readdir(projectDir);
-    // agent-*.jsonl files contain subagent tool history - we'll process them separately
-    const jsonlFiles = files.filter(file => file.endsWith('.jsonl') && !file.startsWith('agent-'));
-
     // Scan for agent files in session subdirectories: {projectDir}/{sessionId}/subagents/agent-{id}.jsonl
     const agentFilesMap = new Map(); // agentFileName -> full path
     try {
       const entries = await fs.readdir(projectDir, { withFileTypes: true });
-      const sessionDirs = entries.filter(e => e.isDirectory());
-
-      for (const sessionDir of sessionDirs) {
+      for (const sessionDir of entries.filter(e => e.isDirectory())) {
         const subagentsDir = path.join(projectDir, sessionDir.name, 'subagents');
         try {
           const subagentFiles = await fs.readdir(subagentsDir);
@@ -997,7 +991,23 @@ async function getSessionMessages(projectName, sessionId, limit = null, offset =
       // Project directory may not be scannable - continue without agent files
     }
 
-    if (jsonlFiles.length === 0) {
+    // Determine which JSONL files to read.
+    // Fast path: {sessionId}.jsonl exists → read only that file (contains the full session
+    // history, including any parent history copied in during SDK forks).
+    // Fallback: scan all files and filter by entry.sessionId (legacy / edge-case sessions
+    // that have no dedicated file).
+    const sessionFile = path.join(projectDir, `${sessionId}.jsonl`);
+    let filesToRead; // array of { filePath, filterBySessionId }
+    try {
+      await fs.access(sessionFile);
+      filesToRead = [{ filePath: sessionFile, filterBySessionId: false }];
+    } catch {
+      const allFiles = await fs.readdir(projectDir);
+      const jsonlFiles = allFiles.filter(f => f.endsWith('.jsonl') && !f.startsWith('agent-'));
+      filesToRead = jsonlFiles.map(f => ({ filePath: path.join(projectDir, f), filterBySessionId: true }));
+    }
+
+    if (filesToRead.length === 0) {
       return { messages: [], total: 0, hasMore: false };
     }
 
@@ -1005,26 +1015,14 @@ async function getSessionMessages(projectName, sessionId, limit = null, offset =
     // Map of agentId -> tools for subagent tool grouping
     const agentToolsCache = new Map();
 
-    // Process all JSONL files to find messages for this session
-    for (const file of jsonlFiles) {
-      const jsonlFile = path.join(projectDir, file);
-      const fileStream = fsSync.createReadStream(jsonlFile);
-      const rl = readline.createInterface({
-        input: fileStream,
-        crlfDelay: Infinity
-      });
-
-      // When the file is named after this session (e.g. aee20b62.jsonl), include ALL
-      // entries regardless of sessionId.  SDK-forked sessions store parent history in the
-      // same file under the original sessionId, so filtering by sessionId alone would drop
-      // all of that history and the conversation would appear empty.
-      const isSessionFile = file === `${sessionId}.jsonl`;
-
+    for (const { filePath, filterBySessionId } of filesToRead) {
+      const fileStream = fsSync.createReadStream(filePath);
+      const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
       for await (const line of rl) {
         if (line.trim()) {
           try {
             const entry = JSON.parse(line);
-            if (isSessionFile || entry.sessionId === sessionId) {
+            if (!filterBySessionId || entry.sessionId === sessionId) {
               messages.push(entry);
             }
           } catch (parseError) {
