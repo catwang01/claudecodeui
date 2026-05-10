@@ -25,6 +25,8 @@ interface ChatInputControlsProps {
   isVoiceActive: boolean;
   isVoiceSupported: boolean;
   onVoiceToggle: () => void;
+  sessionId?: string | null;
+  sessionTitle?: string | null;
 }
 
 export default function ChatInputControls({
@@ -45,35 +47,46 @@ export default function ChatInputControls({
   isVoiceActive,
   isVoiceSupported,
   onVoiceToggle,
+  sessionId,
+  sessionTitle,
 }: ChatInputControlsProps) {
   const { t } = useTranslation('chat');
 
-  const [tapEnabled, setTapEnabled] = useState(false);
-  const [tapToggling, setTapToggling] = useState(false);
+  const [tapActive, setTapActive] = useState(false);
+  const [tapLoading, setTapLoading] = useState(false);
 
   useEffect(() => {
-    authenticatedFetch('/api/settings/tap')
-      .then(res => res.json())
-      .then(data => setTapEnabled(!!data.enabled))
-      .catch(() => {});
-  }, []);
+    if (!sessionId) {
+      setTapActive(false);
+      return;
+    }
+    setTapActive(false); // reset before fetch
+    let cancelled = false;
+    authenticatedFetch(`/api/settings/tap/sessions/${sessionId}`)
+      .then(res => { if (!cancelled) setTapActive(res.ok); })
+      .catch(() => { if (!cancelled) setTapActive(false); });
+    return () => { cancelled = true; };
+  }, [sessionId]);
 
   const handleTapToggle = async () => {
-    setTapToggling(true);
+    if (!sessionId) return;
+    setTapLoading(true);
     try {
-      const res = await authenticatedFetch('/api/settings/tap', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: !tapEnabled }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setTapEnabled(!!data.enabled);
+      if (tapActive) {
+        const res = await authenticatedFetch(`/api/settings/tap/sessions/${sessionId}`, { method: 'DELETE' });
+        if (res.ok) setTapActive(false);
+      } else {
+        const res = await authenticatedFetch(`/api/settings/tap/sessions/${sessionId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionTitle: sessionTitle ?? undefined }),
+        });
+        if (res.ok) setTapActive(true);
       }
     } catch {
       // ignore
     } finally {
-      setTapToggling(false);
+      setTapLoading(false);
     }
   };
 
@@ -228,27 +241,29 @@ export default function ChatInputControls({
         </button>
       )}
 
-      {/* API traffic tap toggle */}
-      <button
-        type="button"
-        onClick={handleTapToggle}
-        disabled={tapToggling}
-        title={tapEnabled ? 'API tap: ON — click to disable' : 'API tap: OFF — click to enable'}
-        className={`relative flex h-7 w-7 items-center justify-center rounded-lg transition-all duration-200 sm:h-8 sm:w-8 disabled:opacity-50 ${
-          tapEnabled
-            ? 'bg-orange-500/15 text-orange-500 hover:bg-orange-500/25'
-            : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
-        }`}
-      >
-        {tapEnabled && (
-          <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-orange-500" />
-        )}
-        <Radio className="h-4 w-4 sm:h-[18px] sm:w-[18px]" />
-      </button>
+      {/* API traffic tap toggle — per-session */}
+      {sessionId && (
+        <button
+          type="button"
+          onClick={handleTapToggle}
+          disabled={tapLoading}
+          title={tapActive ? 'API tap: ON — click to disable' : 'API tap: OFF — click to enable'}
+          className={`relative flex h-7 w-7 items-center justify-center rounded-lg transition-all duration-200 sm:h-8 sm:w-8 disabled:opacity-50 ${
+            tapActive
+              ? 'bg-orange-500/15 text-orange-500 hover:bg-orange-500/25'
+              : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
+          }`}
+        >
+          {tapActive && (
+            <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-orange-500" />
+          )}
+          <Radio className="h-4 w-4 sm:h-[18px] sm:w-[18px]" />
+        </button>
+      )}
 
-      {tapEnabled && (
+      {tapActive && (
         <a
-          href={`/api/tap/viewer?token=${encodeURIComponent(localStorage.getItem('auth-token') ?? '')}`}
+          href="/tap"
           target="_blank"
           rel="noreferrer"
           title="Open API trace viewer"

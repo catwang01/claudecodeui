@@ -9,6 +9,7 @@ import { PluginsProvider } from './contexts/PluginsContext';
 import { TTSProvider } from './contexts/TTSContext';
 import { VoiceConversationProvider } from './contexts/VoiceConversationContext';
 import AppContent from './components/app/AppContent';
+import TapPage from './pages/TapPage';
 import i18n from './i18n/config.js';
 
 export default function App() {
@@ -27,6 +28,7 @@ export default function App() {
                           <Routes>
                             <Route path="/" element={<AppContent />} />
                             <Route path="/session/:sessionId" element={<AppContent />} />
+                            <Route path="/tap" element={<TapPage />} />
                           </Routes>
                         </Router>
                       </VoiceConversationProvider>

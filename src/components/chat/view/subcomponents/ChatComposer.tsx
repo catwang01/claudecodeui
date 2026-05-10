@@ -98,6 +98,8 @@ interface ChatComposerProps {
   isVoiceActive: boolean;
   isVoiceSupported: boolean;
   onVoiceToggle: () => void;
+  sessionId?: string | null;
+  sessionTitle?: string | null;
 }
 
 export default function ChatComposer({
@@ -161,6 +163,8 @@ export default function ChatComposer({
   isVoiceActive,
   isVoiceSupported,
   onVoiceToggle,
+  sessionId,
+  sessionTitle,
 }: ChatComposerProps) {
   const { t } = useTranslation('chat');
   const textareaRect = textareaRef.current?.getBoundingClientRect();
@@ -218,6 +222,8 @@ export default function ChatComposer({
           isVoiceActive={isVoiceActive}
           isVoiceSupported={isVoiceSupported}
           onVoiceToggle={onVoiceToggle}
+          sessionId={sessionId}
+          sessionTitle={sessionTitle}
         />}
       </div>
 

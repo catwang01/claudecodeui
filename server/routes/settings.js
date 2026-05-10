@@ -2,7 +2,7 @@ import express from 'express';
 import { apiKeysDb, credentialsDb, notificationPreferencesDb, pushSubscriptionsDb, appConfigDb, userSettingsDb } from '../database/db.js';
 import { getPublicKey } from '../services/vapid-keys.js';
 import { createNotificationEvent, notifyUserIfEnabled } from '../services/notification-orchestrator.js';
-import { startTapProxy, stopTapProxy, getTapProxyPort, getTapLivePort, resolveAnthropicBaseUrl } from '../tap.js';
+import { startTapForSession, stopTapForSession, getTapSession, listTapSessions, resolveAnthropicBaseUrl } from '../tap.js';
 
 const router = express.Router();
 
@@ -349,51 +349,46 @@ router.put('/auto-doc', async (req, res) => {
 });
 
 // ===============================
-// Claude-tap (API traffic inspector)
+// Claude-tap (API traffic inspector) — per-session
 // ===============================
 
-router.get('/tap', async (req, res) => {
+router.get('/tap/sessions', (req, res) => {
+  res.json(listTapSessions());
+});
+
+router.get('/tap/sessions/:sessionId', (req, res) => {
+  const session = getTapSession(req.params.sessionId);
+  if (!session) return res.status(404).json({ error: 'No tap session for this sessionId' });
+  res.json({
+    sessionId: req.params.sessionId,
+    sessionTitle: session.sessionTitle,
+    proxyPort: session.proxyPort,
+    viewerPort: session.viewerPort,
+    startedAt: session.startedAt,
+  });
+});
+
+router.post('/tap/sessions/:sessionId', async (req, res) => {
+  const { sessionId } = req.params;
+  const { sessionTitle } = req.body;
   try {
-    const enabled = appConfigDb.get('tap_enabled') === 'true';
-    const port = getTapProxyPort();
-    const livePort = getTapLivePort();
-    res.json({ enabled, port, livePort });
-  } catch (error) {
-    console.error('Error fetching tap config:', error);
-    res.status(500).json({ error: 'Failed to fetch tap config' });
+    const targetUrl = await resolveAnthropicBaseUrl();
+    const result = await startTapForSession(sessionId, sessionTitle || sessionId.slice(0, 8), targetUrl);
+    res.json({ sessionId, ...result });
+  } catch (err) {
+    const message = err.code === 'ENOENT'
+      ? 'claude-tap not found. Install with: pip install claude-tap (requires Python 3.11+)'
+      : `Failed to start tap proxy: ${err.message}`;
+    res.status(500).json({ error: message });
   }
 });
 
-router.put('/tap', async (req, res) => {
-  try {
-    const { enabled } = req.body;
-    if (typeof enabled !== 'boolean') {
-      return res.status(400).json({ error: 'enabled must be a boolean' });
-    }
-
-    if (enabled && !getTapProxyPort()) {
-      const targetUrl = await resolveAnthropicBaseUrl();
-      try {
-        await startTapProxy(targetUrl);
-      } catch (err) {
-        // Don't persist enabled=true if proxy failed to start
-        appConfigDb.set('tap_enabled', 'false');
-        return res.status(500).json({
-          error: err.code === 'ENOENT'
-            ? 'claude-tap not found. Install with: pip install claude-tap (requires Python 3.11+)'
-            : `Failed to start tap proxy: ${err.message}`,
-        });
-      }
-    } else if (!enabled) {
-      stopTapProxy();
-    }
-
-    appConfigDb.set('tap_enabled', enabled ? 'true' : 'false');
-    res.json({ success: true, enabled, port: getTapProxyPort(), livePort: getTapLivePort() });
-  } catch (error) {
-    console.error('Error saving tap config:', error);
-    res.status(500).json({ error: 'Failed to save tap config' });
-  }
+router.delete('/tap/sessions/:sessionId', (req, res) => {
+  const { sessionId } = req.params;
+  const session = getTapSession(sessionId);
+  if (!session) return res.status(404).json({ error: 'No tap session for this sessionId' });
+  stopTapForSession(sessionId);
+  res.json({ success: true });
 });
 
 // ===============================

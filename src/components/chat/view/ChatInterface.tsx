@@ -511,6 +511,8 @@ function ChatInterface({
           isVoiceActive={isVoiceActive}
           isVoiceSupported={isVoiceSupported}
           onVoiceToggle={toggleVoice}
+          sessionId={selectedSession?.id ?? null}
+          sessionTitle={selectedSession?.title ?? selectedSession?.summary ?? null}
         />
       </div>
 

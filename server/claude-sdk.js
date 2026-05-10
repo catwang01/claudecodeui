@@ -13,7 +13,7 @@
  */
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import { getTapProxyPort } from './tap.js';
+import { getTapSession } from './tap.js';
 import crypto from 'crypto';
 import { promises as fs } from 'fs';
 import path from 'path';
@@ -231,20 +231,16 @@ function mapCliOptionsToSDK(options = {}) {
 
   sdkOptions.env = env;
 
-  // If claude-tap proxy is running, override ANTHROPIC_BASE_URL via extraArgs.settings.
-  // --settings JSON is the highest-priority settings layer, overriding user settings.json
-  // (which may have a custom ANTHROPIC_BASE_URL like a company proxy endpoint).
-  const tapPort = getTapProxyPort();
-  if (tapPort) {
-    const tapUrl = `http://127.0.0.1:${tapPort}`;
+  // If a per-session claude-tap proxy is running, override ANTHROPIC_BASE_URL via extraArgs.settings.
+  const tapSession = sessionId ? getTapSession(sessionId) : null;
+  if (tapSession) {
+    const tapUrl = `http://127.0.0.1:${tapSession.proxyPort}`;
     sdkOptions.extraArgs = {
       settings: JSON.stringify({
         env: { ANTHROPIC_BASE_URL: tapUrl }
       })
     };
-    console.log(`[tap] extraArgs.settings ANTHROPIC_BASE_URL=${tapUrl}`);
-  } else {
-    console.log('[tap] proxy not running, no URL override');
+    console.log(`[tap] session ${sessionId.slice(0, 8)}: ANTHROPIC_BASE_URL=${tapUrl}`);
   }
 
   return sdkOptions;
