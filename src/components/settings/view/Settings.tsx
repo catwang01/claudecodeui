@@ -30,6 +30,8 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
     setProjectSortOrder,
     projectExcludePatterns,
     setProjectExcludePatterns,
+    recentsTagLimit,
+    setRecentsTagLimit,
     codeEditorSettings,
     updateCodeEditorSetting,
     claudePermissions,
@@ -151,6 +153,8 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
                   onProjectSortOrderChange={setProjectSortOrder}
                   projectExcludePatterns={projectExcludePatterns}
                   onProjectExcludePatternsChange={setProjectExcludePatterns}
+                  recentsTagLimit={recentsTagLimit}
+                  onRecentsTagLimitChange={setRecentsTagLimit}
                   codeEditorSettings={codeEditorSettings}
                   onCodeEditorThemeChange={(value) => updateCodeEditorSetting('theme', value)}
                   onCodeEditorWordWrapChange={(value) => updateCodeEditorSetting('wordWrap', value)}

@@ -78,6 +78,7 @@ function Sidebar({
     isDeletingSession,
     showVersionModal,
     filteredProjects,
+    recentsTagLimit,
     toggleProject,
     handleSessionClick,
     toggleStarProject,
@@ -279,6 +280,7 @@ function Sidebar({
             onShowVersionModal={() => setShowVersionModal(true)}
             onShowSettings={onShowSettings}
             projectListProps={projectListProps}
+            recentsTagLimit={recentsTagLimit}
             t={t}
           />
         </>

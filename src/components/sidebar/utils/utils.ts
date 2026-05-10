@@ -36,6 +36,20 @@ export const readProjectExcludePatterns = (): string[] => {
   }
 };
 
+export const DEFAULT_RECENTS_TAG_LIMIT = 10;
+
+export const readRecentsTagLimit = (): number => {
+  try {
+    const rawSettings = localStorage.getItem('claude-settings');
+    if (!rawSettings) return DEFAULT_RECENTS_TAG_LIMIT;
+    const settings = JSON.parse(rawSettings) as { recentsTagLimit?: number };
+    const val = settings.recentsTagLimit;
+    return typeof val === 'number' && val > 0 ? val : DEFAULT_RECENTS_TAG_LIMIT;
+  } catch {
+    return DEFAULT_RECENTS_TAG_LIMIT;
+  }
+};
+
 export const loadStarredProjects = (): Set<string> => {
   try {
     const saved = localStorage.getItem('starredProjects');

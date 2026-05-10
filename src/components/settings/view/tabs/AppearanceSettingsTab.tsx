@@ -13,6 +13,8 @@ type AppearanceSettingsTabProps = {
   onProjectSortOrderChange: (value: ProjectSortOrder) => void;
   projectExcludePatterns: string[];
   onProjectExcludePatternsChange: (value: string[]) => void;
+  recentsTagLimit: number;
+  onRecentsTagLimitChange: (value: number) => void;
   codeEditorSettings: CodeEditorSettingsState;
   onCodeEditorThemeChange: (value: 'dark' | 'light') => void;
   onCodeEditorWordWrapChange: (value: boolean) => void;
@@ -26,6 +28,8 @@ export default function AppearanceSettingsTab({
   onProjectSortOrderChange,
   projectExcludePatterns,
   onProjectExcludePatternsChange,
+  recentsTagLimit,
+  onRecentsTagLimitChange,
   codeEditorSettings,
   onCodeEditorThemeChange,
   onCodeEditorWordWrapChange,
@@ -148,6 +152,27 @@ export default function AppearanceSettingsTab({
               </div>
             )}
           </div>
+        </SettingsCard>
+      </SettingsSection>
+
+      <SettingsSection title="Recents Tag Limit">
+        <SettingsCard>
+          <SettingsRow
+            label="Recents tag limit"
+            description="Number of recent sessions used to populate the project filter tags in the Recents view."
+          >
+            <input
+              type="number"
+              min={1}
+              max={100}
+              value={recentsTagLimit}
+              onChange={(e) => {
+                const val = parseInt(e.target.value, 10);
+                if (!isNaN(val) && val > 0) onRecentsTagLimitChange(val);
+              }}
+              className="w-20 rounded-lg border border-input bg-card px-3 py-2 text-sm text-foreground focus:border-primary focus:ring-1 focus:ring-primary"
+            />
+          </SettingsRow>
         </SettingsCard>
       </SettingsSection>
 

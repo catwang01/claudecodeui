@@ -18,6 +18,8 @@ import {
   persistStarredProjects,
   readProjectSortOrder,
   readProjectExcludePatterns,
+  readRecentsTagLimit,
+  DEFAULT_RECENTS_TAG_LIMIT,
   sortProjects,
 } from '../utils/utils';
 import { logger } from '../../../utils/logger';
@@ -103,6 +105,7 @@ export function useSidebarController({
   const [currentTime, setCurrentTime] = useState(new Date());
   const [projectSortOrder, setProjectSortOrder] = useState<ProjectSortOrder>('name');
   const [projectExcludePatterns, setProjectExcludePatterns] = useState<string[]>([]);
+  const [recentsTagLimit, setRecentsTagLimit] = useState<number>(DEFAULT_RECENTS_TAG_LIMIT);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [projectHasMoreOverrides, setProjectHasMoreOverrides] = useState<Record<string, boolean>>({});
   const [editingSession, setEditingSession] = useState<string | null>(null);
@@ -220,6 +223,20 @@ export function useSidebarController({
       }
     }, 1000);
 
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
+    const load = () => setRecentsTagLimit(readRecentsTagLimit());
+    load();
+    const handleStorageChange = (event: StorageEvent) => {
+      if (event.key === 'claude-settings') load();
+    };
+    window.addEventListener('storage', handleStorageChange);
+    const interval = setInterval(() => { if (document.hasFocus()) load(); }, 1000);
     return () => {
       window.removeEventListener('storage', handleStorageChange);
       clearInterval(interval);
@@ -645,6 +662,7 @@ export function useSidebarController({
     isDeletingSession,
     showVersionModal,
     starredProjects,
+    recentsTagLimit,
     filteredProjects,
     toggleProject,
     handleSessionClick,

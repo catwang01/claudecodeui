@@ -63,6 +63,7 @@ type SidebarContentProps = {
   onShowVersionModal: () => void;
   onShowSettings: () => void;
   projectListProps: SidebarProjectListProps;
+  recentsTagLimit?: number;
   t: TFunction;
 };
 
@@ -91,6 +92,7 @@ export default function SidebarContent({
   onShowVersionModal,
   onShowSettings,
   projectListProps,
+  recentsTagLimit = 10,
   t,
 }: SidebarContentProps) {
   const showConversationSearch = (searchMode === 'conversations' || searchMode === 'recent') && searchFilter.trim().length >= 2;
@@ -172,17 +174,17 @@ export default function SidebarContent({
   const [selectedProjectFilter, setSelectedProjectFilter] = useState<string | null>(null);
 
   const projectBadges = useMemo(() => {
-    const counts = new Map<string, { project: Project; count: number }>();
-    for (const { project } of recentSessions) {
-      const existing = counts.get(project.name);
+    const seen = new Map<string, { project: Project; count: number }>();
+    for (const { project } of recentSessions.slice(0, recentsTagLimit)) {
+      const existing = seen.get(project.name);
       if (existing) {
         existing.count++;
       } else {
-        counts.set(project.name, { project, count: 1 });
+        seen.set(project.name, { project, count: 1 });
       }
     }
-    return Array.from(counts.values()).sort((a, b) => b.count - a.count);
-  }, [recentSessions]);
+    return Array.from(seen.values()).sort((a, b) => b.count - a.count);
+  }, [recentSessions, recentsTagLimit]);
 
   useEffect(() => {
     if (selectedProjectFilter && !projectBadges.some(b => b.project.name === selectedProjectFilter)) {
