@@ -43,6 +43,7 @@ type LatestChatMessage = {
   tokenBudget?: unknown;
   newSessionId?: string;
   aborted?: boolean;
+  startTime?: number | null;
   [key: string]: any;
 };
 
@@ -63,7 +64,7 @@ interface UseChatRealtimeHandlersArgs {
   streamTimerRef: MutableRefObject<number | null>;
   accumulatedStreamRef: MutableRefObject<string>;
   onSessionInactive?: (sessionId?: string | null) => void;
-  onSessionProcessing?: (sessionId?: string | null, provider?: string) => void;
+  onSessionProcessing?: (sessionId?: string | null, provider?: string, startTime?: number | null) => void;
   onSessionNotProcessing?: (sessionId?: string | null) => void;
   onPreSessionCreated?: (newSessionId: string) => void;
   onReplaceTemporarySession?: (sessionId?: string | null) => void;
@@ -158,7 +159,7 @@ export function useChatRealtimeHandlers({
             statusSessionId === currentSessionId || (selectedSession && statusSessionId === selectedSession.id);
 
           if (msg.isProcessing) {
-            onSessionProcessing?.(statusSessionId, msg.provider);
+            onSessionProcessing?.(statusSessionId, msg.provider, msg.startTime ?? null);
             if (isCurrentSession) { setIsLoading(true); setCanAbortSession(true); }
             return;
           }

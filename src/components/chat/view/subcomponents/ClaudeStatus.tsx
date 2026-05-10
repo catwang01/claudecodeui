@@ -11,6 +11,7 @@ type ClaudeStatusProps = {
   } | null;
   onAbort?: () => void;
   isLoading: boolean;
+  loadingStartTime?: number | null;
   provider?: string;
 };
 
@@ -41,6 +42,7 @@ export default function ClaudeStatus({
   status,
   onAbort,
   isLoading,
+  loadingStartTime,
   provider = 'claude',
 }: ClaudeStatusProps) {
   const { t } = useTranslation('chat');
@@ -48,22 +50,26 @@ export default function ClaudeStatus({
   const [dots, setDots] = useState('');
 
   useEffect(() => {
-    if (!isLoading) {
+    if (!isLoading || loadingStartTime == null) {
       setElapsedTime(0);
       return;
     }
-    const startTime = Date.now();
+    setElapsedTime(Math.floor((Date.now() - loadingStartTime) / 1000));
     const timer = setInterval(() => {
-      setElapsedTime(Math.floor((Date.now() - startTime) / 1000));
+      setElapsedTime(Math.floor((Date.now() - loadingStartTime) / 1000));
     }, 1000);
+    return () => clearInterval(timer);
+  }, [isLoading, loadingStartTime]);
+
+  useEffect(() => {
+    if (!isLoading) {
+      setDots('');
+      return;
+    }
     const dotTimer = setInterval(() => {
       setDots((prev) => (prev.length >= 3 ? '' : prev + '.'));
     }, 500);
-
-    return () => {
-      clearInterval(timer);
-      clearInterval(dotTimer);
-    };
+    return () => clearInterval(dotTimer);
   }, [isLoading]);
 
   if (!isLoading && !status) return null;

@@ -833,6 +833,10 @@ function isClaudeSDKSessionActive(sessionId) {
   return session && session.status === 'active';
 }
 
+function getClaudeSDKSessionStartTime(sessionId) {
+  return getSession(sessionId)?.startTime ?? null;
+}
+
 /**
  * Gets all active SDK session IDs
  * @returns {Array<string>} Array of active session IDs
@@ -886,6 +890,7 @@ export {
   queryClaudeSDK,
   abortClaudeSDKSession,
   isClaudeSDKSessionActive,
+  getClaudeSDKSessionStartTime,
   getActiveClaudeSDKSessions,
   resolveToolApproval,
   getPendingApprovalsForSession,

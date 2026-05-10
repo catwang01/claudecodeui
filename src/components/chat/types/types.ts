@@ -103,7 +103,7 @@ export interface ChatInterfaceProps {
   onInputFocusChange?: (focused: boolean) => void;
   onSessionActive?: (sessionId?: string | null) => void;
   onSessionInactive?: (sessionId?: string | null) => void;
-  onSessionProcessing?: (sessionId?: string | null, provider?: string) => void;
+  onSessionProcessing?: (sessionId?: string | null, provider?: string, startTime?: number | null) => void;
   onSessionNotProcessing?: (sessionId?: string | null) => void;
   processingSessions?: Set<string>;
   onReplaceTemporarySession?: (sessionId?: string | null) => void;

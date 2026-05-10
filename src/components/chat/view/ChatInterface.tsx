@@ -95,6 +95,8 @@ function ChatInterface({
     rewindMessages,
     isLoading,
     setIsLoading,
+    loadingStartTime,
+    setSessionStartTime,
     currentSessionId,
     setCurrentSessionId,
     isLoadingSessionMessages,
@@ -263,6 +265,16 @@ function ChatInterface({
     }
   }, [selectedProject, selectedSession, onNavigateToSession]);
 
+  // When the server reports a session is processing, override the local Date.now() estimate
+  // with the server-recorded startTime so the timer is accurate even after page reload.
+  const handleSessionProcessing = useCallback((sessionId?: string | null, provider?: string, startTime?: number | null) => {
+    const activeId = selectedSession?.id || currentSessionId;
+    if (sessionId && startTime && sessionId === activeId) {
+      setSessionStartTime(sessionId, startTime);
+    }
+    onSessionProcessing?.(sessionId, provider);
+  }, [onSessionProcessing, setSessionStartTime, selectedSession?.id, currentSessionId]);
+
   useChatRealtimeHandlers({
     latestMessage,
     provider,
@@ -280,7 +292,7 @@ function ChatInterface({
     streamTimerRef,
     accumulatedStreamRef,
     onSessionInactive,
-    onSessionProcessing,
+    onSessionProcessing: handleSessionProcessing,
     onSessionNotProcessing,
     onPreSessionCreated: flushPendingMessageToSession,
     onReplaceTemporarySession,
@@ -443,6 +455,7 @@ function ChatInterface({
           handleGrantToolPermission={handleGrantToolPermission}
           claudeStatus={claudeStatus}
           isLoading={isLoading}
+          loadingStartTime={loadingStartTime}
           isConnected={isConnected}
           onAbortSession={handleAbortSession}
           provider={provider}

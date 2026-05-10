@@ -45,7 +45,7 @@ import fetch from 'node-fetch';
 import mime from 'mime-types';
 
 import { getProjects, getSessions, renameProject, deleteSession, forkSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, searchConversations } from './projects.js';
-import { queryClaudeSDK, abortClaudeSDKSession, isClaudeSDKSessionActive, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
+import { queryClaudeSDK, abortClaudeSDKSession, isClaudeSDKSessionActive, getClaudeSDKSessionStartTime, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
 import { pendingLocalIdMappings, saveLocalIdMapping } from './localids.js';
 import { spawnCursor, abortCursorSession, isCursorSessionActive, getActiveCursorSessions } from './cursor-cli.js';
 import { queryCodex, abortCodexSession, isCodexSessionActive, getActiveCodexSessions } from './openai-codex.js';
@@ -1794,7 +1794,8 @@ function handleChatConnection(ws, request) {
                             reconnectSessionWriter(sessionId, ws);
                         }
                     }
-                    writer.send({ type: 'session-status', sessionId, provider: prov, isProcessing: isActive });
+                    const startTime = isActive && prov === 'claude' ? getClaudeSDKSessionStartTime(sessionId) : null;
+                    writer.send({ type: 'session-status', sessionId, provider: prov, isProcessing: isActive, startTime });
                 }
             } else if (data.type === 'check-session-status') {
                 // Check if a specific session is currently processing
@@ -1822,7 +1823,8 @@ function handleChatConnection(ws, request) {
                     type: 'session-status',
                     sessionId,
                     provider,
-                    isProcessing: isActive
+                    isProcessing: isActive,
+                    startTime: isActive && provider === 'claude' ? getClaudeSDKSessionStartTime(sessionId) : null,
                 });
             } else if (data.type === 'get-pending-permissions') {
                 // Return pending permission requests for a session

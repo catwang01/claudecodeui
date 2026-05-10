@@ -101,7 +101,7 @@ export function useChatSessionState({
   pendingViewSessionRef,
   sessionStore,
 }: UseChatSessionStateArgs) {
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoadingState] = useState(false);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(selectedSession?.id || null);
   const [isLoadingSessionMessages, setIsLoadingSessionMessages] = useState(false);
   const [isLoadingMoreMessages, setIsLoadingMoreMessages] = useState(false);
@@ -117,6 +117,23 @@ export function useChatSessionState({
   const [loadAllJustFinished, setLoadAllJustFinished] = useState(false);
   const [showLoadAllOverlay, setShowLoadAllOverlay] = useState(false);
   const [viewHiddenCount, setViewHiddenCount] = useState(0);
+  const [loadingStartTime, setLoadingStartTime] = useState<number | null>(null);
+
+  // When loading stops, clear startTime. When loading starts without a server-provided
+  // startTime yet (e.g. re-submitting to same session), fall back to Date.now().
+  const setIsLoading = useCallback((loading: boolean) => {
+    if (!loading) {
+      setLoadingStartTime(null);
+    } else {
+      setLoadingStartTime((prev) => prev ?? Date.now());
+    }
+    setIsLoadingState(loading);
+  }, []);
+
+  // Called by ChatInterface when server provides accurate startTime via check-session-status.
+  const setSessionStartTime = useCallback((_sessionId: string, startTime: number) => {
+    setLoadingStartTime(startTime);
+  }, []);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [searchTarget, setSearchTarget] = useState<{ timestamp?: string; uuid?: string; snippet?: string } | null>(null);
@@ -337,8 +354,6 @@ export function useChatSessionState({
   selectedProjectRef.current = selectedProject;
   const selectedSessionRef = useRef(selectedSession);
   selectedSessionRef.current = selectedSession;
-  const isLoadingRef = useRef(isLoading);
-  isLoadingRef.current = isLoading;
 
   // Main session loading effect — store-based
   useEffect(() => {
@@ -756,6 +771,8 @@ export function useChatSessionState({
     rewindMessages,
     isLoading,
     setIsLoading,
+    loadingStartTime,
+    setSessionStartTime,
     currentSessionId,
     setCurrentSessionId,
     isLoadingSessionMessages,
