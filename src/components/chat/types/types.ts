@@ -117,4 +117,5 @@ export interface ChatInterfaceProps {
   sendByCtrlEnter?: boolean;
   onTaskClick?: (...args: unknown[]) => void;
   onShowAllTasks?: (() => void) | null;
+  allProjects?: Project[];
 }

@@ -22,6 +22,7 @@ import type {
 import type { Project, ProjectSession, SessionProvider } from '../../../types/app';
 import { escapeRegExp } from '../utils/chatFormatting';
 import { useFileMentions } from './useFileMentions';
+import type { MentionableFile } from './useFileMentions';
 import { type SlashCommand, useSlashCommands } from './useSlashCommands';
 import { logger } from '../../../utils/logger';
 
@@ -62,11 +63,7 @@ interface UseChatComposerStateArgs {
   setClaudeStatus: (status: { text: string; tokens: number; can_interrupt: boolean } | null) => void;
   setIsUserScrolledUp: (isScrolledUp: boolean) => void;
   setPendingPermissionRequests: Dispatch<SetStateAction<PendingPermissionRequest[]>>;
-}
-
-interface MentionableFile {
-  name: string;
-  path: string;
+  allProjects?: Project[];
 }
 
 interface CommandExecutionResult {
@@ -135,6 +132,7 @@ export function useChatComposerState({
   setClaudeStatus,
   setIsUserScrolledUp,
   setPendingPermissionRequests,
+  allProjects = [],
 }: UseChatComposerStateArgs) {
   const [input, setInput] = useState(() => {
     if (typeof window !== 'undefined' && selectedProject) {
@@ -381,6 +379,7 @@ export function useChatComposerState({
     handleFileMentionsKeyDown,
   } = useFileMentions({
     selectedProject,
+    allProjects,
     input,
     setInput,
     textareaRef,

@@ -28,6 +28,7 @@ export default function AppContent() {
   } = useSessionProtection();
 
   const {
+    projects,
     selectedProject,
     selectedSession,
     activeTab,
@@ -191,6 +192,7 @@ export default function AppContent() {
           onReplaceTemporarySession={replaceTemporarySession}
           onNavigateToSession={(targetSessionId: string) => navigate(`/session/${targetSessionId}`)}
           onShowSettings={() => setShowSettings(true)}
+          allProjects={projects}
         />
       </div>
 

@@ -4,6 +4,7 @@ import { api } from '../../../utils/api';
 import { escapeRegExp } from '../utils/chatFormatting';
 import type { Project } from '../../../types/app';
 import { logger } from '../../../utils/logger';
+import { readProjectExcludePatterns, filterProjects, sortProjects, loadStarredProjects, readProjectSortOrder } from '../../sidebar/utils/utils';
 
 interface ProjectFileNode {
   name: string;
@@ -15,11 +16,13 @@ interface ProjectFileNode {
 export interface MentionableFile {
   name: string;
   path: string;
+  type: 'file' | 'project';
   relativePath?: string;
 }
 
 interface UseFileMentionsOptions {
   selectedProject: Project | null;
+  allProjects: Project[];
   input: string;
   setInput: Dispatch<SetStateAction<string>>;
   textareaRef: RefObject<HTMLTextAreaElement>;
@@ -39,6 +42,7 @@ const flattenFileTree = (files: ProjectFileNode[], basePath = ''): MentionableFi
       flattened.push({
         name: file.name,
         path: fullPath,
+        type: 'file',
         relativePath: file.path,
       });
     }
@@ -47,7 +51,7 @@ const flattenFileTree = (files: ProjectFileNode[], basePath = ''): MentionableFi
   return flattened;
 };
 
-export function useFileMentions({ selectedProject, input, setInput, textareaRef }: UseFileMentionsOptions) {
+export function useFileMentions({ selectedProject, allProjects, input, setInput, textareaRef }: UseFileMentionsOptions) {
   const [fileList, setFileList] = useState<MentionableFile[]>([]);
   const [fileMentions, setFileMentions] = useState<string[]>([]);
   const [filteredFiles, setFilteredFiles] = useState<MentionableFile[]>([]);
@@ -116,16 +120,32 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
         });
     }
 
+    const excludePatterns = readProjectExcludePatterns();
+    const visibleProjects = excludePatterns.length > 0 ? filterProjects(allProjects, '', excludePatterns) : allProjects;
+    const sortedProjects = sortProjects(visibleProjects, readProjectSortOrder(), loadStarredProjects(), {});
+    const matchingProjects = sortedProjects
+      .filter(
+        (project) =>
+          project.displayName.toLowerCase().includes(textAfterAt.toLowerCase()) ||
+          project.fullPath.toLowerCase().includes(textAfterAt.toLowerCase()),
+      )
+      .map((project) => ({
+        name: project.displayName,
+        path: project.fullPath,
+        type: 'project' as const,
+      }));
+
     const matchingFiles = fileList
       .filter(
         (file) =>
           file.name.toLowerCase().includes(textAfterAt.toLowerCase()) ||
           file.path.toLowerCase().includes(textAfterAt.toLowerCase()),
       )
-      .slice(0, 10);
+      .slice(0, 10)
+      .map((file) => ({ ...file, type: 'file' as const }));
 
-    setFilteredFiles(matchingFiles);
-  }, [input, cursorPosition, fileList, selectedProject?.name]);
+    setFilteredFiles([...matchingProjects, ...matchingFiles]);
+  }, [input, cursorPosition, fileList, selectedProject?.name, allProjects]);
 
   const activeFileMentions = useMemo(() => {
     if (!input || fileMentions.length === 0) {

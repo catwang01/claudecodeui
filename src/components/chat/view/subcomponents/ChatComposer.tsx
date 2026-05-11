@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import { useTranslation } from 'react-i18next';
 import type {
   ChangeEvent,
@@ -18,11 +19,7 @@ import ClaudeStatus from './ClaudeStatus';
 import ImageAttachment from './ImageAttachment';
 import PermissionRequestsBanner from './PermissionRequestsBanner';
 import ChatInputControls from './ChatInputControls';
-
-interface MentionableFile {
-  name: string;
-  path: string;
-}
+import type { MentionableFile } from '../../hooks/useFileMentions';
 
 interface SlashCommand {
   name: string;
@@ -292,28 +289,59 @@ export default function ChatComposer({
 
         {showFileDropdown && filteredFiles.length > 0 && (
           <div className="absolute bottom-full left-0 right-0 z-50 mb-2 max-h-48 overflow-y-auto rounded-xl border border-border/50 bg-card/95 shadow-lg backdrop-blur-md">
-            {filteredFiles.map((file, index) => (
-              <div
-                key={file.path}
-                className={`cursor-pointer touch-manipulation border-b border-border/30 px-4 py-3 last:border-b-0 ${
-                  index === selectedFileIndex
-                    ? 'bg-primary/8 text-primary'
-                    : 'text-foreground hover:bg-accent/50'
-                }`}
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                }}
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  onSelectFile(file);
-                }}
-              >
-                <div className="text-sm font-medium">{file.name}</div>
-                <div className="font-mono text-xs text-muted-foreground">{file.path}</div>
-              </div>
-            ))}
+            {filteredFiles.map((file, index) => {
+              const isProject = file.type === 'project';
+              const prevIsProject = index > 0 && filteredFiles[index - 1].type === 'project';
+              const showProjectsHeader = isProject && index === 0;
+              const showFilesHeader = !isProject && (index === 0 || prevIsProject);
+              return (
+                <Fragment key={`${file.type}-${file.path}`}>
+                  {showProjectsHeader && (
+                    <div className="px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground/70">
+                      Projects
+                    </div>
+                  )}
+                  {showFilesHeader && (
+                    <div className="px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground/70">
+                      Files
+                    </div>
+                  )}
+                  <div
+                    className={`cursor-pointer touch-manipulation border-b border-border/30 px-4 py-2.5 last:border-b-0 ${
+                      index === selectedFileIndex
+                        ? 'bg-primary/8 text-primary'
+                        : 'text-foreground hover:bg-accent/50'
+                    }`}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                    }}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onSelectFile(file);
+                    }}
+                  >
+                    <div className="flex items-center gap-2">
+                      {isProject ? (
+                        <svg className="h-3.5 w-3.5 shrink-0 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+                        </svg>
+                      ) : (
+                        <svg className="h-3.5 w-3.5 shrink-0 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                      )}
+                      <span className="text-sm font-medium">{file.name}</span>
+                      {isProject && (
+                        <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">Project</span>
+                      )}
+                    </div>
+                    <div className="mt-0.5 truncate pl-5 font-mono text-xs text-muted-foreground">{file.path}</div>
+                  </div>
+                </Fragment>
+              );
+            })}
           </div>
         )}
 

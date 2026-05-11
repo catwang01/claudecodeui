@@ -47,6 +47,7 @@ function MainContent({
   onReplaceTemporarySession,
   onNavigateToSession,
   onShowSettings,
+  allProjects = [],
 }: MainContentProps) {
   const { preferences } = useUiPreferences();
   const { autoExpandTools, showRawParameters, showThinking, showSubAgentInput, autoScrollToBottom, sendByCtrlEnter } = preferences;
@@ -126,6 +127,7 @@ function MainContent({
                 onReplaceTemporarySession={onReplaceTemporarySession}
                 onNavigateToSession={onNavigateToSession}
                 onShowSettings={onShowSettings}
+                allProjects={allProjects}
                 autoExpandTools={autoExpandTools}
                 showRawParameters={showRawParameters}
                 showThinking={showThinking}
