@@ -234,21 +234,25 @@ async function setupProjectsWatcher() {
                 let changedSessionId = null;
                 if (filePath.endsWith('.jsonl') && (eventType === 'change' || eventType === 'add')) {
                     try {
-                        changedSessionId = path.basename(filePath, '.jsonl');
-                        const adapter = getProvider(provider);
-                        if (adapter) {
-                            const opts = { limit: null, offset: 0 };
-                            // claude provider needs projectName derived from the parent directory
-                            if (provider === 'claude') {
-                                opts.projectName = path.basename(path.dirname(filePath));
-                            } else if (provider === 'cursor') {
-                                opts.projectPath = path.dirname(filePath);
+                        // Subagent files live in {sessionId}/subagents/ - they are not standalone
+                        // sessions, so skip them; their content surfaces via the parent session.
+                        if (path.basename(path.dirname(filePath)) !== 'subagents') {
+                            changedSessionId = path.basename(filePath, '.jsonl');
+                            const adapter = getProvider(provider);
+                            if (adapter) {
+                                const opts = { limit: null, offset: 0 };
+                                // claude provider needs projectName derived from the parent directory
+                                if (provider === 'claude') {
+                                    opts.projectName = path.basename(path.dirname(filePath));
+                                } else if (provider === 'cursor') {
+                                    opts.projectPath = path.dirname(filePath);
+                                }
+                                const result = await adapter.fetchHistory(changedSessionId, opts);
+                                const allMessages = result.messages || [];
+                                const lastCount = sessionMessageCount.get(changedSessionId) ?? allMessages.length;
+                                newMessages = allMessages.slice(lastCount);
+                                sessionMessageCount.set(changedSessionId, allMessages.length);
                             }
-                            const result = await adapter.fetchHistory(changedSessionId, opts);
-                            const allMessages = result.messages || [];
-                            const lastCount = sessionMessageCount.get(changedSessionId) ?? allMessages.length;
-                            newMessages = allMessages.slice(lastCount);
-                            sessionMessageCount.set(changedSessionId, allMessages.length);
                         }
                     } catch (err) {
                         console.error('[WARN] Failed to fetch message delta for', changedSessionId, err.message);
