@@ -27,6 +27,7 @@ interface UseChatSessionStateArgs {
   resetStreamingState: () => void;
   pendingViewSessionRef: MutableRefObject<PendingViewSession | null>;
   sessionStore: SessionStore;
+  newSessionToken?: number;
 }
 
 interface ScrollRestoreState {
@@ -100,6 +101,7 @@ export function useChatSessionState({
   resetStreamingState,
   pendingViewSessionRef,
   sessionStore,
+  newSessionToken,
 }: UseChatSessionStateArgs) {
   const [isLoading, setIsLoadingState] = useState(false);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(selectedSession?.id || null);
@@ -365,6 +367,7 @@ export function useChatSessionState({
       setCanAbortSession(false);
       setIsLoading(false);
       setCurrentSessionId(null);
+      setPendingUserMessage(null);
       sessionStorage.removeItem('cursorSessionId');
       messagesOffsetRef.current = 0;
       setHasMoreMessages(false);
@@ -483,6 +486,7 @@ export function useChatSessionState({
     sendMessage,
     ws,
     sessionStore,
+    newSessionToken,
   ]);
 
   // Search navigation target

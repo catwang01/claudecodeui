@@ -138,6 +138,7 @@ export function useProjectsState({
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [selectedSession, setSelectedSession] = useState<ProjectSession | null>(null);
   const [activeTab, setActiveTab] = useState<AppTab>(readPersistedTab);
+  const [newSessionToken, setNewSessionToken] = useState(0);
 
   useEffect(() => {
     try {
@@ -431,6 +432,7 @@ export function useProjectsState({
       setSelectedProject(project);
       setSelectedSession(null);
       setActiveTab('chat');
+      setNewSessionToken(t => t + 1);
       navigate('/');
 
       if (isMobile) {
@@ -568,6 +570,7 @@ export function useProjectsState({
     isInputFocused,
     showSettings,
     settingsInitialTab,
+    newSessionToken,
     setActiveTab,
     setSidebarOpen,
     setIsInputFocused,

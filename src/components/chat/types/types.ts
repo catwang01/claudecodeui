@@ -118,4 +118,5 @@ export interface ChatInterfaceProps {
   onTaskClick?: (...args: unknown[]) => void;
   onShowAllTasks?: (() => void) | null;
   allProjects?: Project[];
+  newSessionToken?: number;
 }

@@ -34,6 +34,7 @@ export default function AppContent() {
     activeTab,
     sidebarOpen,
     isLoadingProjects,
+    newSessionToken,
     setActiveTab,
     setSidebarOpen,
     setIsInputFocused,
@@ -193,6 +194,7 @@ export default function AppContent() {
           onNavigateToSession={(targetSessionId: string) => navigate(`/session/${targetSessionId}`)}
           onShowSettings={() => setShowSettings(true)}
           allProjects={projects}
+          newSessionToken={newSessionToken}
         />
       </div>
 

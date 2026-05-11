@@ -46,6 +46,7 @@ function ChatInterface({
   sendByCtrlEnter,
   onShowAllTasks,
   allProjects = [],
+  newSessionToken,
 }: ChatInterfaceProps) {
   const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings();
   const { t } = useTranslation('chat');
@@ -137,6 +138,7 @@ function ChatInterface({
     resetStreamingState,
     pendingViewSessionRef,
     sessionStore,
+    newSessionToken,
   });
 
   const {

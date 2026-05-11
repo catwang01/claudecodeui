@@ -54,6 +54,7 @@ export type MainContentProps = {
   onNavigateToSession: (targetSessionId: string) => void;
   onShowSettings: () => void;
   allProjects?: Project[];
+  newSessionToken?: number;
 };
 
 export type MainContentHeaderProps = {
