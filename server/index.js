@@ -226,8 +226,8 @@ async function setupProjectsWatcher() {
                 // Clear project directory cache when files change
                 clearProjectDirectoryCache();
 
-                // Get updated projects list
-                const updatedProjects = await getProjects(broadcastProgress);
+                // Get updated projects list (no progress broadcast — watcher updates are silent)
+                const updatedProjects = await getProjects();
 
                 // Compute message delta for .jsonl session file changes
                 let newMessages = [];
@@ -615,7 +615,8 @@ app.post('/api/system/update', authenticateToken, async (req, res) => {
 
 app.get('/api/projects', authenticateToken, async (req, res) => {
     try {
-        const projects = await getProjects(broadcastProgress);
+        const silent = req.query.silent === 'true';
+        const projects = await getProjects(silent ? undefined : broadcastProgress);
         res.json(projects);
     } catch (error) {
         res.status(500).json({ error: error.message });

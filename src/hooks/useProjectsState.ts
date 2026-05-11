@@ -157,12 +157,12 @@ export function useProjectsState({
 
   const loadingProgressTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const fetchProjects = useCallback(async ({ showLoadingState = true }: FetchProjectsOptions = {}) => {
+  const fetchProjects = useCallback(async ({ showLoadingState = true }: FetchProjectsOptions = {}): Promise<Project[] | undefined> => {
     try {
       if (showLoadingState) {
         setIsLoadingProjects(true);
       }
-      const response = await api.projects();
+      const response = await api.projects({ silent: !showLoadingState });
       const projectData = (await response.json()) as Project[];
 
       setProjects((prevProjects) => {
@@ -174,8 +174,11 @@ export function useProjectsState({
           ? projectData
           : prevProjects;
       });
+
+      return projectData;
     } catch (error) {
       logger.error('Error fetching projects:', error);
+      return undefined;
     } finally {
       if (showLoadingState) {
         setIsLoadingProjects(false);
@@ -465,12 +468,10 @@ export function useProjectsState({
 
   const handleSidebarRefresh = useCallback(async () => {
     try {
-      const response = await api.projects();
-      const freshProjects = (await response.json()) as Project[];
-
-      setProjects((prevProjects) =>
-        projectsHaveChanges(prevProjects, freshProjects, true) ? freshProjects : prevProjects,
-      );
+      const freshProjects = await fetchProjects({ showLoadingState: true });
+      if (!freshProjects) {
+        return;
+      }
 
       if (!selectedProject) {
         return;
@@ -507,7 +508,7 @@ export function useProjectsState({
     } catch (error) {
       logger.error('Error refreshing sidebar:', error);
     }
-  }, [selectedProject, selectedSession]);
+  }, [fetchProjects, selectedProject, selectedSession]);
 
   const handleProjectDelete = useCallback(
     (projectName: string) => {
