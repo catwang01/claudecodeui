@@ -149,6 +149,23 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         });
         break;
 
+      case 'file_download':
+        if (msg.filename && msg.downloadUrl) {
+          converted.push({
+            type: 'assistant',
+            content: '',
+            timestamp: msg.timestamp,
+            isFileDownload: true,
+            downloadMetadata: {
+              filename: msg.filename,
+              filepath: msg.filepath || '',
+              downloadUrl: msg.downloadUrl,
+              fileSize: msg.fileSize || 0,
+            },
+          });
+        }
+        break;
+
       case 'stream_delta':
         if (msg.content) {
           converted.push({

@@ -32,7 +32,8 @@ export type MessageKind =
   | 'permission_cancelled'
   | 'session_created'
   | 'interactive_prompt'
-  | 'task_notification';
+  | 'task_notification'
+  | 'file_download';
 
 export interface NormalizedMessage {
   id: string;
@@ -71,6 +72,11 @@ export interface NormalizedMessage {
   rowid?: number;
   // Maps this server message back to the frontend optimistic local_ id it corresponds to
   localMessageId?: string;
+  // file_download fields
+  filename?: string;
+  filepath?: string;
+  downloadUrl?: string;
+  fileSize?: number;
 }
 
 // ─── Per-session slot ────────────────────────────────────────────────────────

@@ -12,7 +12,8 @@
  * - WebSocket message streaming
  */
 
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
+import { z } from 'zod/v4';
 import { getTapSession } from './tap.js';
 import crypto from 'crypto';
 import { promises as fs } from 'fs';
@@ -31,6 +32,34 @@ import { appendMessage, appendMessageAsync } from './utils/localMessageWriter.js
 
 const activeSessions = new Map();
 const pendingToolApprovals = new Map();
+
+const downloadTool = tool(
+  'download',
+  'Make an existing file available for the user to download. Call this when the user asks you to generate or prepare a file for download. The file must already exist on disk.',
+  { filepath: z.string().describe('Absolute path to the file to make available for download') },
+  async (args) => {
+    const { filepath } = args;
+    const absolutePath = path.isAbsolute(filepath) ? filepath : path.join(process.cwd(), filepath);
+    await fs.access(absolutePath);
+    const stats = await fs.stat(absolutePath);
+    const filename = path.basename(absolutePath);
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          filepath: absolutePath,
+          filename,
+          downloadUrl: `/api/download?filepath=${encodeURIComponent(absolutePath)}`,
+          fileSize: stats.size,
+          message: `File "${filename}" is ready. IMPORTANT: Do NOT mention the downloadUrl, do NOT create any hyperlinks or markdown links, and do NOT instruct the user how to download. The UI will automatically display a download button — simply tell the user the file is ready.`
+        })
+      }]
+    };
+  },
+  { annotations: { readOnlyHint: true } }
+);
+
+const downloadServer = createSdkMcpServer({ name: 'download', version: '1.0.0', tools: [downloadTool] });
 
 const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 55000;
 
@@ -186,6 +215,11 @@ function mapCliOptionsToSDK(options = {}) {
   }
 
   sdkOptions.allowedTools = allowedTools;
+
+  // Always allow the built-in download MCP tool
+  if (!sdkOptions.allowedTools.includes('mcp__download__download')) {
+    sdkOptions.allowedTools.push('mcp__download__download');
+  }
 
   // Use the tools preset to make all default built-in tools available (including AskUserQuestion).
   // This was introduced in SDK 0.1.57. Omitting this preserves existing behavior (all tools available),
@@ -537,9 +571,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
     // Load MCP configuration
     const mcpServers = await loadMcpConfig(options.cwd);
-    if (mcpServers) {
-      sdkOptions.mcpServers = mcpServers;
-    }
+    sdkOptions.mcpServers = { ...(mcpServers || {}), download: downloadServer };
 
     // Handle images - save to temp files and modify prompt
     const imageResult = await handleImages(command, options.images, options.cwd);
@@ -675,6 +707,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
     // Process streaming messages
     appendToSessionLog(capturedSessionId || sessionId || 'unknown', `[${new Date().toISOString()}] Starting async generator loop for session: ${capturedSessionId || 'NEW'}`);
     let _msgCount = 0;
+    const pendingDownloadToolIds = new Set();
     for await (const message of queryInstance) {
       _msgCount++;
       const _sid = capturedSessionId || sessionId || 'unknown';
@@ -725,6 +758,39 @@ async function queryClaudeSDK(command, options = {}, ws) {
         ws.send(msg);
         // Persist each stream message to local JSONL as history
         appendMessage(capturedSessionId || sessionId || null, msg);
+
+        // Track download tool_use calls
+        if (msg.kind === 'tool_use' && msg.toolName === 'mcp__download__download') {
+          pendingDownloadToolIds.add(msg.toolId);
+        }
+
+        // Intercept download tool_result and emit a file_download card
+        if (msg.kind === 'tool_result' && pendingDownloadToolIds.has(msg.toolId)) {
+          pendingDownloadToolIds.delete(msg.toolId);
+          try {
+            let resultText = msg.content;
+            try {
+              const parsed = JSON.parse(resultText);
+              if (Array.isArray(parsed) && parsed[0]?.text) {
+                resultText = parsed[0].text;
+              }
+            } catch (_) {}
+            const resultData = JSON.parse(resultText);
+            const downloadMsg = createNormalizedMessage({
+              kind: 'file_download',
+              sessionId: capturedSessionId || sessionId || null,
+              provider: 'claude',
+              filename: resultData.filename,
+              filepath: resultData.filepath,
+              downloadUrl: resultData.downloadUrl,
+              fileSize: resultData.fileSize,
+            });
+            ws.send(downloadMsg);
+            appendMessage(capturedSessionId || sessionId || null, downloadMsg);
+          } catch (e) {
+            console.error('Failed to emit file_download message:', e);
+          }
+        }
       }
 
       // Extract and send token budget updates from result messages

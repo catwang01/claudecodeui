@@ -1111,6 +1111,31 @@ app.put('/api/projects/:projectName/file', authenticateToken, async (req, res) =
     }
 });
 
+app.get('/api/download', authenticateToken, async (req, res) => {
+    const { filepath } = req.query;
+    if (!filepath) {
+        return res.status(400).json({ error: 'filepath is required' });
+    }
+    const normalizedPath = path.normalize(filepath);
+    if (normalizedPath.includes('..')) {
+        return res.status(403).json({ error: 'Invalid path' });
+    }
+    try {
+        await fsPromises.access(normalizedPath);
+        const mimeType = mime.lookup(normalizedPath) || 'application/octet-stream';
+        const filename = path.basename(normalizedPath);
+        res.setHeader('Content-Type', mimeType);
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        fs.createReadStream(normalizedPath).pipe(res);
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            res.status(404).json({ error: 'File not found' });
+        } else {
+            res.status(500).json({ error: error.message });
+        }
+    }
+});
+
 app.get('/api/projects/:projectName/files', authenticateToken, async (req, res) => {
     try {
 

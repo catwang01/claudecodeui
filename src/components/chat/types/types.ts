@@ -47,6 +47,15 @@ export interface ChatMessage {
     currentToolIndex: number;
     isComplete: boolean;
   };
+  isFileDownload?: boolean;
+  downloadMetadata?: {
+    filename: string;
+    filepath: string;
+    downloadUrl: string;
+    fileSize: number;
+  };
+  isTaskNotification?: boolean;
+  taskStatus?: string;
   [key: string]: unknown;
 }
 

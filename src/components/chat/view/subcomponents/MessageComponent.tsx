@@ -13,6 +13,7 @@ import type { Project } from '../../../../types/app';
 import { ToolRenderer, shouldHideToolResult } from '../../tools';
 import { Markdown } from './Markdown';
 import MessageCopyControl from './MessageCopyControl';
+import { DownloadLink } from '../../tools/components/DownloadLink';
 
 type DiffLine = {
   type: string;
@@ -183,7 +184,9 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
 
           <div className="w-full">
 
-            {message.isToolUse ? (
+            {message.isFileDownload && message.downloadMetadata ? (
+              <DownloadLink {...message.downloadMetadata} />
+            ) : message.isToolUse ? (
               <>
                 <div className="flex flex-col">
                   <div className="flex flex-col">
