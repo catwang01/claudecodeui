@@ -15,6 +15,7 @@ import { useTTS } from '../../../hooks/useTTS';
 import { useVoiceConversation } from '../../../contexts/VoiceConversationContext';
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
+import { NewSessionLoadingModal } from './NewSessionLoadingModal';
 
 
 type PendingViewSession = {
@@ -127,6 +128,11 @@ function ChatInterface({
     scrollToBottomAndReset,
     handleScroll,
     flushPendingMessageToSession,
+    pendingUserMessage,
+    isCreatingSession,
+    sessionCreationError,
+    setSessionCreationError,
+    clearSessionCreation,
   } = useChatSessionState({
     selectedProject,
     selectedSession,
@@ -269,6 +275,18 @@ function ChatInterface({
     }
   }, [selectedProject, selectedSession, onNavigateToSession]);
 
+  const handleSessionCreationRetry = useCallback(() => {
+    if (pendingUserMessage?.content) {
+      setInput(pendingUserMessage.content);
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto';
+        textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+        textareaRef.current.focus();
+      }
+    }
+    clearSessionCreation();
+  }, [clearSessionCreation, pendingUserMessage, setInput, textareaRef]);
+
   // When the server reports a session is processing, override the local Date.now() estimate
   // with the server-recorded startTime so the timer is accurate even after page reload.
   const handleSessionProcessing = useCallback((sessionId?: string | null, provider?: string, startTime?: number | null) => {
@@ -303,6 +321,7 @@ function ChatInterface({
     onNavigateToSession,
     onWebSocketReconnect: handleWebSocketReconnect,
     onAssistantSpeech: speak,
+    onSessionCreationError: setSessionCreationError,
     sessionStore,
   });
 
@@ -546,6 +565,12 @@ function ChatInterface({
           </div>
         </div>
       )}
+
+      <NewSessionLoadingModal
+        isVisible={isCreatingSession}
+        error={sessionCreationError}
+        onRetry={handleSessionCreationRetry}
+      />
 
       {uploadError && (
         <div className="fixed bottom-28 left-1/2 z-[9999] -translate-x-1/2 animate-in slide-in-from-bottom-2 fade-in duration-200">

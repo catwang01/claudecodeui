@@ -160,6 +160,9 @@ export function useChatSessionState({
 
   const activeSessionId = selectedSession?.id || currentSessionId || null;
   const [pendingUserMessage, setPendingUserMessage] = useState<ChatMessage | null>(null);
+  const [isCreatingSession, setIsCreatingSession] = useState(false);
+  const [sessionCreationError, setSessionCreationError] = useState<string | null>(null);
+  const sessionCreationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Tell the store which session we're viewing so it only re-renders for this one
   const prevActiveForStoreRef = useRef<string | null>(null);
@@ -181,6 +184,12 @@ export function useChatSessionState({
       sessionStore.appendWsMessage(activeSessionId, normalized);
     }
     setPendingUserMessage(null);
+    setIsCreatingSession(false);
+    setSessionCreationError(null);
+    if (sessionCreationTimeoutRef.current) {
+      clearTimeout(sessionCreationTimeoutRef.current);
+      sessionCreationTimeoutRef.current = null;
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId, pendingUserMessage]);
 
@@ -211,6 +220,12 @@ export function useChatSessionState({
     if (!activeSessionId) {
       // No session yet — show as pending until the backend creates one
       setPendingUserMessage(msg);
+      setIsCreatingSession(true);
+      setSessionCreationError(null);
+      if (sessionCreationTimeoutRef.current) clearTimeout(sessionCreationTimeoutRef.current);
+      sessionCreationTimeoutRef.current = setTimeout(() => {
+        setSessionCreationError('Session creation timed out. Please try again.');
+      }, 30000);
       return;
     }
     const prov = (localStorage.getItem('selected-provider') as SessionProvider) || 'claude';
@@ -238,7 +253,23 @@ export function useChatSessionState({
       sessionStore.appendWsMessage(sessionId, normalized);
     }
     setPendingUserMessage(null);
+    setIsCreatingSession(false);
+    setSessionCreationError(null);
+    if (sessionCreationTimeoutRef.current) {
+      clearTimeout(sessionCreationTimeoutRef.current);
+      sessionCreationTimeoutRef.current = null;
+    }
   }, [pendingUserMessage, sessionStore]);
+
+  const clearSessionCreation = useCallback(() => {
+    setIsCreatingSession(false);
+    setSessionCreationError(null);
+    setPendingUserMessage(null);
+    if (sessionCreationTimeoutRef.current) {
+      clearTimeout(sessionCreationTimeoutRef.current);
+      sessionCreationTimeoutRef.current = null;
+    }
+  }, []);
 
   const rewindMessages = useCallback((count: number) => setViewHiddenCount(count), []);
 
@@ -511,14 +542,21 @@ export function useChatSessionState({
     }
   }, [selectedSession]);
 
+  // Ensure the timeout is always cleaned up on unmount
+  useEffect(() => () => {
+    if (sessionCreationTimeoutRef.current) clearTimeout(sessionCreationTimeoutRef.current);
+  }, []);
+
   useEffect(() => {
     if (!selectedSession?.id) return;
-    // Clear the pending session ref when a real session is selected.
     pendingViewSessionRef.current = null;
-    // Also discard any pending user message that belonged to a new-session flow.
-    // Either it was already flushed to the correct session (no-op), or the user navigated
-    // away before session_created fired — the message will be loaded from the server instead.
     setPendingUserMessage(null);
+    setIsCreatingSession(false);
+    setSessionCreationError(null);
+    if (sessionCreationTimeoutRef.current) {
+      clearTimeout(sessionCreationTimeoutRef.current);
+      sessionCreationTimeoutRef.current = null;
+    }
   }, [pendingViewSessionRef, selectedSession?.id]);
 
   // Scroll to search target
@@ -814,5 +852,10 @@ export function useChatSessionState({
     isNearBottom,
     handleScroll,
     flushPendingMessageToSession,
+    pendingUserMessage,
+    isCreatingSession,
+    sessionCreationError,
+    setSessionCreationError,
+    clearSessionCreation,
   };
 }

@@ -72,6 +72,7 @@ interface UseChatRealtimeHandlersArgs {
   onNavigateToSession?: (sessionId: string) => void;
   onWebSocketReconnect?: () => void;
   onAssistantSpeech?: (text: string) => void;
+  onSessionCreationError?: (error: string) => void;
   sessionStore: SessionStore;
 }
 
@@ -103,6 +104,7 @@ export function useChatRealtimeHandlers({
   onNavigateToSession,
   onWebSocketReconnect,
   onAssistantSpeech,
+  onSessionCreationError,
   sessionStore,
 }: UseChatRealtimeHandlersArgs) {
   const { setAwaitingPermission, clearByRequestId, clearSession } = useAwaitingPermissions();
@@ -334,6 +336,7 @@ export function useChatRealtimeHandlers({
         onSessionInactive?.(sid);
         if (sid) clearSession(sid);
         onSessionNotProcessing?.(sid);
+        onSessionCreationError?.(msg.error || 'Session creation failed');
         break;
       }
 

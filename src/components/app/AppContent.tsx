@@ -8,6 +8,8 @@ import { useDeviceSettings } from '../../hooks/useDeviceSettings';
 import { useSessionProtection } from '../../hooks/useSessionProtection';
 import { useProjectsState } from '../../hooks/useProjectsState';
 import { PermissionToastContainer } from '../common/PermissionToastContainer';
+import { useQuickSearch } from '../../hooks/useQuickSearch';
+import QuickSearchOverlay from '../quick-search/QuickSearchOverlay';
 
 export default function AppContent() {
   const navigate = useNavigate();
@@ -16,6 +18,7 @@ export default function AppContent() {
   const { isMobile } = useDeviceSettings({ trackPWA: false });
   const { ws, sendMessage, latestMessage, isConnected } = useWebSocket();
   const wasConnectedRef = useRef(false);
+  const { isOpen: isSearchOpen, close: closeSearch } = useQuickSearch();
 
   const {
     activeSessions,
@@ -44,6 +47,7 @@ export default function AppContent() {
     refreshProjectsSilently,
     sidebarSharedProps,
     handleSessionSelect,
+    handleProjectSelect,
   } = useProjectsState({
     sessionId,
     navigate,
@@ -229,6 +233,17 @@ export default function AppContent() {
           handleSessionSelect(session);
         }}
       />
+
+      {isSearchOpen && (
+        <QuickSearchOverlay
+          projects={projects}
+          onSessionSelect={(session) => {
+            handleSessionSelect(session);
+          }}
+          onProjectSelect={handleProjectSelect}
+          onClose={closeSearch}
+        />
+      )}
     </div>
   );
 }
