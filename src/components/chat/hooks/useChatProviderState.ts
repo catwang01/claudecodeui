@@ -4,6 +4,7 @@ import { CLAUDE_MODELS, CODEX_MODELS, CURSOR_MODELS, GEMINI_MODELS } from '../..
 import type { PendingPermissionRequest, PermissionMode } from '../types/types';
 import type { ProjectSession, SessionProvider } from '../../../types/app';
 import { logger } from '../../../utils/logger';
+import { useAwaitingPermissions } from '../../../contexts/AwaitingPermissionContext';
 
 interface UseChatProviderStateArgs {
   selectedSession: ProjectSession | null;
@@ -61,6 +62,22 @@ export function useChatProviderState({ selectedSession }: UseChatProviderStateAr
       previous.filter((request) => !request.sessionId || request.sessionId === selectedSession?.id),
     );
   }, [selectedSession?.id]);
+
+  const { clearByRequestId } = useAwaitingPermissions();
+  const prevPendingRef = useRef<PendingPermissionRequest[]>([]);
+
+  useEffect(() => {
+    const prev = prevPendingRef.current;
+    const removed = prev.filter(
+      (r) => !pendingPermissionRequests.some((c) => c.requestId === r.requestId),
+    );
+    for (const r of removed) {
+      if (r.requestId && (!r.sessionId || r.sessionId === selectedSession?.id)) {
+        clearByRequestId(r.requestId);
+      }
+    }
+    prevPendingRef.current = pendingPermissionRequests;
+  }, [pendingPermissionRequests, selectedSession?.id, clearByRequestId]);
 
   useEffect(() => {
     if (provider !== 'cursor') {
