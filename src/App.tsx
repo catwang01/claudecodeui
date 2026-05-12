@@ -5,6 +5,7 @@ import { AuthProvider, ProtectedRoute } from './components/auth';
 import { TaskMasterProvider } from './contexts/TaskMasterContext';
 import { TasksSettingsProvider } from './contexts/TasksSettingsContext';
 import { WebSocketProvider } from './contexts/WebSocketContext';
+import { AwaitingPermissionProvider } from './contexts/AwaitingPermissionContext';
 import { PluginsProvider } from './contexts/PluginsContext';
 import { TTSProvider } from './contexts/TTSContext';
 import { VoiceConversationProvider } from './contexts/VoiceConversationContext';
@@ -18,6 +19,7 @@ export default function App() {
       <ThemeProvider>
         <AuthProvider>
           <WebSocketProvider>
+            <AwaitingPermissionProvider>
             <PluginsProvider>
               <TasksSettingsProvider>
                 <TaskMasterProvider>
@@ -37,6 +39,7 @@ export default function App() {
                 </TaskMasterProvider>
               </TasksSettingsProvider>
             </PluginsProvider>
+            </AwaitingPermissionProvider>
           </WebSocketProvider>
         </AuthProvider>
       </ThemeProvider>
