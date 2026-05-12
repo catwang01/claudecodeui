@@ -6,7 +6,6 @@ import {
   AwaitingPermissionProvider,
   useAwaitingPermissions,
 } from '../../../contexts/AwaitingPermissionContext';
-import { act, renderHook } from '@testing-library/react';
 
 function Setup({ selectedSessionId, sessions }: {
   selectedSessionId: string | undefined;
@@ -30,6 +29,7 @@ function Seeder({ sessions }: { sessions: Array<{ id: string; toolName: string; 
     for (const s of sessions) {
       setAwaitingPermission(s.id, { toolName: s.toolName, requestId: s.requestId });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return null;
 }
