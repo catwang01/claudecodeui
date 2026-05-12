@@ -15,15 +15,14 @@ export function PermissionToast({ sessionName, toolName, onNavigate, onDismiss }
   onDismissRef.current = onDismiss;
 
   useEffect(() => {
+    let elapsed = 0;
     const interval = setInterval(() => {
-      setElapsed((prev) => {
-        const next = prev + 100;
-        if (next >= DURATION_MS) {
-          clearInterval(interval);
-          onDismissRef.current();
-        }
-        return next;
-      });
+      elapsed += 100;
+      setElapsed(elapsed);
+      if (elapsed >= DURATION_MS) {
+        clearInterval(interval);
+        onDismissRef.current();
+      }
     }, 100);
     return () => clearInterval(interval);
   }, []);
@@ -43,7 +42,7 @@ export function PermissionToast({ sessionName, toolName, onNavigate, onDismiss }
         role="button"
         tabIndex={0}
         onClick={onNavigate}
-        onKeyDown={(e) => e.key === 'Enter' && onNavigate()}
+        onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && onNavigate()}
         className="cursor-pointer px-4 pb-3 pt-3 pr-8"
       >
         <p className="text-xs font-semibold text-amber-400">{sessionName}</p>
