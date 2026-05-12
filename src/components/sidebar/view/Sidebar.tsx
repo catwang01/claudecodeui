@@ -37,6 +37,8 @@ function Sidebar({
   onCloseSettings,
   isMobile,
   processingSessions,
+  scrollToProjectToken = 0,
+  scrollToProjectName = null,
 }: SidebarProps) {
   const { t } = useTranslation(['sidebar', 'common']);
   const { isPWA } = useDeviceSettings({ trackMobile: false });
@@ -291,6 +293,8 @@ function Sidebar({
             onShowVersionModal={() => setShowVersionModal(true)}
             onShowSettings={onShowSettings}
             projectListProps={projectListProps}
+            scrollToProjectToken={scrollToProjectToken}
+            scrollToProjectName={scrollToProjectName}
             recentsTagLimit={recentsTagLimit}
             t={t}
           />

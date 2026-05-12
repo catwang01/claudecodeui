@@ -39,6 +39,8 @@ export type SidebarProps = {
   onCloseSettings: () => void;
   isMobile: boolean;
   processingSessions?: Set<string>;
+  scrollToProjectToken?: number;
+  scrollToProjectName?: string | null;
 };
 
 export type SessionViewModel = {

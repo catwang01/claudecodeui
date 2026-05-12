@@ -18,6 +18,8 @@ export interface ProjectSession {
   lastAutoDocAt?: string;
   __provider?: SessionProvider;
   __projectName?: string;
+  __searchTargetTimestamp?: string | null;
+  __searchTargetSnippet?: string | null;
   [key: string]: unknown;
 }
 

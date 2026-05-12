@@ -63,6 +63,8 @@ type SidebarContentProps = {
   onShowVersionModal: () => void;
   onShowSettings: () => void;
   projectListProps: SidebarProjectListProps;
+  scrollToProjectToken?: number;
+  scrollToProjectName?: string | null;
   recentsTagLimit?: number;
   t: TFunction;
 };
@@ -92,6 +94,8 @@ export default function SidebarContent({
   onShowVersionModal,
   onShowSettings,
   projectListProps,
+  scrollToProjectToken = 0,
+  scrollToProjectName = null,
   recentsTagLimit = 10,
   t,
 }: SidebarContentProps) {
@@ -123,6 +127,12 @@ export default function SidebarContent({
       });
     }
   }, [searchMode, scrollTargetProject]);
+
+  useEffect(() => {
+    if (!scrollToProjectName || scrollToProjectToken === 0) return;
+    onSearchModeChange('projects');
+    setScrollTargetProject(scrollToProjectName);
+  }, [scrollToProjectToken, scrollToProjectName]);
 
   const hideSession = useCallback(async (sessionId: string, provider: string, lastActivity: string) => {
     const key = `${sessionId}:${provider}`;

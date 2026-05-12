@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import Sidebar from '../sidebar/view/Sidebar';
@@ -10,6 +10,7 @@ import { useProjectsState } from '../../hooks/useProjectsState';
 import { PermissionToastContainer } from '../common/PermissionToastContainer';
 import { useQuickSearch } from '../../hooks/useQuickSearch';
 import QuickSearchOverlay from '../quick-search/QuickSearchOverlay';
+import type { Project } from '../../types/app';
 
 export default function AppContent() {
   const navigate = useNavigate();
@@ -55,6 +56,15 @@ export default function AppContent() {
     isMobile,
     activeSessions,
   });
+
+  const [scrollToProjectToken, setScrollToProjectToken] = useState(0);
+  const [scrollToProjectName, setScrollToProjectName] = useState<string | null>(null);
+
+  const handleProjectSelectWithScroll = useCallback((project: Project) => {
+    handleProjectSelect(project);
+    setScrollToProjectName(project.name);
+    setScrollToProjectToken(prev => prev + 1);
+  }, [handleProjectSelect]);
 
   useEffect(() => {
     // Expose a non-blocking refresh for chat/session flows.
@@ -147,7 +157,7 @@ export default function AppContent() {
     <div className="fixed inset-0 flex bg-background">
       {!isMobile ? (
         <div className="h-full flex-shrink-0 border-r border-border/50">
-          <Sidebar {...sidebarSharedProps} processingSessions={processingSessions} />
+          <Sidebar {...sidebarSharedProps} onProjectSelect={handleProjectSelectWithScroll} processingSessions={processingSessions} scrollToProjectToken={scrollToProjectToken} scrollToProjectName={scrollToProjectName} />
         </div>
       ) : (
         <div
@@ -173,7 +183,7 @@ export default function AppContent() {
             onClick={(event) => event.stopPropagation()}
             onTouchStart={(event) => event.stopPropagation()}
           >
-            <Sidebar {...sidebarSharedProps} processingSessions={processingSessions} />
+            <Sidebar {...sidebarSharedProps} onProjectSelect={handleProjectSelectWithScroll} processingSessions={processingSessions} scrollToProjectToken={scrollToProjectToken} scrollToProjectName={scrollToProjectName} />
           </div>
         </div>
       )}
@@ -240,7 +250,7 @@ export default function AppContent() {
           onSessionSelect={(session) => {
             handleSessionSelect(session);
           }}
-          onProjectSelect={handleProjectSelect}
+          onProjectSelect={handleProjectSelectWithScroll}
           onClose={closeSearch}
         />
       )}
