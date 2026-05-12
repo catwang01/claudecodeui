@@ -7,6 +7,7 @@ import type { Project, ProjectSession, SessionProvider } from '../../../../types
 import type { SessionWithProvider } from '../../types/types';
 import { createSessionViewModel } from '../../utils/utils';
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
+import { useAwaitingPermissions } from '../../../../contexts/AwaitingPermissionContext';
 
 type DefaultProps = {
   variant?: 'default';
@@ -58,6 +59,8 @@ type SidebarSessionItemProps = DefaultProps | RecentsProps;
 export default function SidebarSessionItem(props: SidebarSessionItemProps) {
   const { project, session, currentTime, isProcessing = false, t } = props;
   const sessionView = createSessionViewModel(session, currentTime, t, isProcessing);
+  const { awaitingPermissionSessions } = useAwaitingPermissions();
+  const isAwaitingPermission = session?.id ? awaitingPermissionSessions.has(session.id) : false;
 
   if (props.variant === 'recents') {
     const { projectColorDot, projectDisplayName, isRead = false, onSessionSelect, onHideSession, onDeleteSession, onProjectNavigate } = props;
@@ -92,6 +95,11 @@ export default function SidebarSessionItem(props: SidebarSessionItemProps) {
               )}
               {sessionView.sessionName}
             </span>
+            {isAwaitingPermission && (
+              <span className="ml-1 flex-shrink-0 rounded-full bg-amber-500 px-1.5 py-0.5 text-[9px] font-bold leading-none text-black">
+                waiting
+              </span>
+            )}
           </div>
           <div className="mt-0.5 flex items-center gap-1.5 pl-5">
             <button
