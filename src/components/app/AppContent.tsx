@@ -7,6 +7,7 @@ import { useWebSocket } from '../../contexts/WebSocketContext';
 import { useDeviceSettings } from '../../hooks/useDeviceSettings';
 import { useSessionProtection } from '../../hooks/useSessionProtection';
 import { useProjectsState } from '../../hooks/useProjectsState';
+import { PermissionToastContainer } from '../common/PermissionToastContainer';
 
 export default function AppContent() {
   const navigate = useNavigate();
@@ -42,6 +43,7 @@ export default function AppContent() {
     openSettings,
     refreshProjectsSilently,
     sidebarSharedProps,
+    handleSessionSelect,
   } = useProjectsState({
     sessionId,
     navigate,
@@ -198,6 +200,21 @@ export default function AppContent() {
         />
       </div>
 
+      <PermissionToastContainer
+        selectedSessionId={selectedSession?.id}
+        getSessionName={(id) => {
+          const session = projects
+            .flatMap((p) => p.sessions ?? [])
+            .find((s) => s.id === id);
+          return session?.title ?? id;
+        }}
+        onNavigate={(sessionId) => {
+          const session = projects
+            .flatMap((p) => p.sessions ?? [])
+            .find((s) => s.id === sessionId);
+          if (session) handleSessionSelect(session);
+        }}
+      />
     </div>
   );
 }
