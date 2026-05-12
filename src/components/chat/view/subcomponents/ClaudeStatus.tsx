@@ -107,7 +107,7 @@ export default function ClaudeStatus({
 
         {/* Right Side: Metrics & Actions */}
         <div className="flex items-center gap-2">
-          {isLoading && status?.can_interrupt !== false && onAbort && (
+          {isLoading && loadingStartTime != null && status?.can_interrupt !== false && onAbort && (
             <>
               <div className="hidden items-center rounded-md bg-muted/50 px-2 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground sm:flex">
                 {formatElapsedTime(elapsedTime)}
