@@ -136,10 +136,10 @@ Responsibilities:
 
 In `queryClaudeSDK()`, before building `sdkOptions`:
 1. Load user's `sensitive_mask_enabled` setting from db
-2. If enabled: pass `apiUrl: 'http://localhost:3099'` in `sdkOptions` (claude-agent-sdk option, avoids global env var mutation which would cause race conditions with concurrent sessions)
-3. Pass session ID via `sdkOptions.headers: { 'X-Mask-Session-Id': sessionId }` so the proxy can look up the correct session mapping
-
-Note: If `apiUrl` is not supported by the SDK version in use, fall back to setting `ANTHROPIC_BASE_URL` on the Anthropic client constructor level. Do NOT use `process.env` mutation as it is not concurrency-safe.
+2. If enabled: set `sdkOptions.env = { ...process.env, ANTHROPIC_BASE_URL: 'http://localhost:3099' }`
+   - The SDK replaces the child process env with `options.env` when provided, so spreading `process.env` first preserves all existing vars (API keys, PATH, etc.) while overriding only the base URL
+   - This is per-call isolated -- no global `process.env` mutation, no concurrency issues
+3. Pass session ID via `sdkOptions.env['X_MASK_SESSION_ID'] = sessionId` -- the proxy reads this from the request env context (or alternatively via a custom HTTP header injected through an env-driven mechanism)
 
 ### `server/routes/settings.js`
 
