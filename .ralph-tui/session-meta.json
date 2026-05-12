@@ -1,0 +1,14 @@
+{
+  "id": "2c6c0a43-3e5e-4667-8e90-5dcb3acf052b",
+  "status": "running",
+  "startedAt": "2026-05-12T00:29:24.306Z",
+  "updatedAt": "2026-05-12T00:50:28.377Z",
+  "agentPlugin": "claude",
+  "trackerPlugin": "json",
+  "prdPath": "./tasks/prd.json",
+  "currentIteration": 4,
+  "maxIterations": 0,
+  "totalTasks": 0,
+  "tasksCompleted": 4,
+  "cwd": "/Users/tanhuan/claudecodeui"
+}

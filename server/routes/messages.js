@@ -128,7 +128,11 @@ router.get('/:sessionId/messages', async (req, res) => {
                 break;
               }
             }
-            if (!placed) appendAtEnd.push(um);
+            if (!placed) {
+              // Orphan timestamp predates all server messages — prepend
+              if (!insertBefore.has(0)) insertBefore.set(0, []);
+              insertBefore.get(0).push(um);
+            }
           } else {
             appendAtEnd.push(um);
           }

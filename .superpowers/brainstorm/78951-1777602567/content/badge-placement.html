@@ -1,0 +1,118 @@
+<h2>Badge 放置位置</h2>
+<p class="subtitle">Project badge 在 Recent 列表里应该放在哪？</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="width:200px;background:#1e1e2e;border-radius:8px;padding:12px;font-family:monospace;font-size:11px;color:#cdd6f4;">
+        <div style="color:#89b4fa;margin-bottom:8px;font-size:10px;text-transform:uppercase;letter-spacing:1px;">Recent</div>
+        <!-- Badge bar -->
+        <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px;">
+          <span style="background:#7c3aed22;border:1px solid #7c3aed;color:#a78bfa;padding:2px 7px;border-radius:12px;font-size:9px;">claudecodeui <span style="opacity:0.7">4</span></span>
+          <span style="background:#0d948822;border:1px solid #0d9488;color:#2dd4bf;padding:2px 7px;border-radius:12px;font-size:9px;">myapp <span style="opacity:0.7">2</span></span>
+          <span style="background:#b4530922;border:1px solid #b45309;color:#fbbf24;padding:2px 7px;border-radius:12px;font-size:9px;">api-server <span style="opacity:0.7">1</span></span>
+        </div>
+        <!-- Sessions -->
+        <div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid #313244;">
+          <div style="width:6px;height:6px;border-radius:50%;background:#7c3aed;flex-shrink:0;"></div>
+          <div style="flex:1;overflow:hidden;">
+            <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10px;">Fix websocket reconnect...</div>
+            <div style="color:#6c7086;font-size:8px;">claudecodeui · 2m ago</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid #313244;">
+          <div style="width:6px;height:6px;border-radius:50%;background:#0d9488;flex-shrink:0;"></div>
+          <div style="flex:1;overflow:hidden;">
+            <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10px;">Add user auth</div>
+            <div style="color:#6c7086;font-size:8px;">myapp · 15m ago</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;padding:5px 0;">
+          <div style="width:6px;height:6px;border-radius:50%;background:#7c3aed;flex-shrink:0;"></div>
+          <div style="flex:1;overflow:hidden;">
+            <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10px;">Add voice feature</div>
+            <div style="color:#6c7086;font-size:8px;">claudecodeui · 1h ago</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A — Badge 区在列表上方</h3>
+      <p>Badge 横排显示在 session 列表顶部，彩色小点标记每个 session 所属的 project</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="width:200px;background:#1e1e2e;border-radius:8px;padding:12px;font-family:monospace;font-size:11px;color:#cdd6f4;">
+        <div style="color:#89b4fa;margin-bottom:8px;font-size:10px;text-transform:uppercase;letter-spacing:1px;">Recent</div>
+        <!-- Sessions with inline badges -->
+        <div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid #313244;">
+          <div style="flex:1;overflow:hidden;">
+            <div style="display:flex;align-items:center;gap:4px;margin-bottom:2px;">
+              <span style="background:#7c3aed22;border:1px solid #7c3aed55;color:#a78bfa;padding:1px 5px;border-radius:8px;font-size:8px;">claudecodeui</span>
+              <span style="color:#6c7086;font-size:8px;">2m ago</span>
+            </div>
+            <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10px;">Fix websocket reconnect...</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid #313244;">
+          <div style="flex:1;overflow:hidden;">
+            <div style="display:flex;align-items:center;gap:4px;margin-bottom:2px;">
+              <span style="background:#0d948822;border:1px solid #0d948855;color:#2dd4bf;padding:1px 5px;border-radius:8px;font-size:8px;">myapp</span>
+              <span style="color:#6c7086;font-size:8px;">15m ago</span>
+            </div>
+            <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10px;">Add user auth</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;padding:5px 0;">
+          <div style="flex:1;overflow:hidden;">
+            <div style="display:flex;align-items:center;gap:4px;margin-bottom:2px;">
+              <span style="background:#7c3aed22;border:1px solid #7c3aed55;color:#a78bfa;padding:1px 5px;border-radius:8px;font-size:8px;">claudecodeui</span>
+              <span style="color:#6c7086;font-size:8px;">1h ago</span>
+            </div>
+            <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10px;">Add voice feature</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B — Badge 内嵌在每个 Session 里</h3>
+      <p>每个 session 行内显示所属 project 的彩色 badge，没有单独的 badge 筛选区域（纯展示，不可点击过滤）</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="width:200px;background:#1e1e2e;border-radius:8px;padding:12px;font-family:monospace;font-size:11px;color:#cdd6f4;">
+        <div style="color:#89b4fa;margin-bottom:8px;font-size:10px;text-transform:uppercase;letter-spacing:1px;">Recent</div>
+        <!-- Both: badge bar + inline dots -->
+        <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px;">
+          <span style="background:#7c3aed;color:#fff;padding:2px 7px;border-radius:12px;font-size:9px;cursor:pointer;">claudecodeui 4 ✕</span>
+          <span style="background:#1e1e2e;border:1px solid #313244;color:#6c7086;padding:2px 7px;border-radius:12px;font-size:9px;cursor:pointer;">myapp 2</span>
+          <span style="background:#1e1e2e;border:1px solid #313244;color:#6c7086;padding:2px 7px;border-radius:12px;font-size:9px;cursor:pointer;">api-server 1</span>
+        </div>
+        <!-- Filtered sessions -->
+        <div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid #313244;">
+          <div style="width:6px;height:6px;border-radius:50%;background:#7c3aed;flex-shrink:0;"></div>
+          <div style="flex:1;overflow:hidden;">
+            <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10px;">Fix websocket reconnect...</div>
+            <div style="color:#6c7086;font-size:8px;">2m ago</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;padding:5px 0;">
+          <div style="width:6px;height:6px;border-radius:50%;background:#7c3aed;flex-shrink:0;"></div>
+          <div style="flex:1;overflow:hidden;">
+            <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10px;">Add voice feature</div>
+            <div style="color:#6c7086;font-size:8px;">1h ago</div>
+          </div>
+        </div>
+        <div style="color:#6c7086;font-size:9px;text-align:center;padding:4px;">已过滤：仅显示 claudecodeui</div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C — Badge 区 + 激活状态</h3>
+      <p>Badge 区在顶部，点击后 badge 变实心高亮（选中状态），同时过滤列表；彩色小点仍在每条 session 旁显示</p>
+    </div>
+  </div>
+</div>

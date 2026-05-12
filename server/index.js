@@ -100,11 +100,12 @@ const WATCHER_IGNORED_PATTERNS = [
     '**/.DS_Store'
 ];
 const WATCHER_DEBOUNCE_MS = 300;
+const WATCHER_CURSORS_PATH = path.join(__dirname, 'state', 'watcher-cursors.json');
+const WATCHER_FALLBACK_COUNT = 50;
 let projectsWatchers = [];
 let projectsWatcherDebounceTimer = null;
-// Persists across watcher restarts so we never re-send already-seen messages as deltas.
-// Key: sessionId, Value: number of messages seen on last projects_updated broadcast.
-const sessionMessageCount = new Map();
+// Persists across server restarts: key=sessionId, value=id of last broadcast message.
+const sessionUuidCursors = new Map();
 const connectedClients = new Set();
 let isGetProjectsRunning = false; // Flag to prevent reentrant calls
 
@@ -190,6 +191,30 @@ async function resolveLocalIdIfPending(filePath) {
     } catch { /* JSONL not readable — leave pending for next watcher event */ }
 }
 
+async function loadWatcherCursors() {
+    try {
+        await fsPromises.mkdir(path.dirname(WATCHER_CURSORS_PATH), { recursive: true });
+        const raw = await fsPromises.readFile(WATCHER_CURSORS_PATH, 'utf8');
+        const data = JSON.parse(raw);
+        for (const [sessionId, lastUuid] of Object.entries(data)) {
+            sessionUuidCursors.set(sessionId, lastUuid);
+        }
+    } catch (err) {
+        if (err.code !== 'ENOENT') {
+            console.warn('[WARN] Failed to load watcher-cursors.json:', err.message);
+        }
+    }
+}
+
+async function saveWatcherCursors() {
+    try {
+        const data = Object.fromEntries(sessionUuidCursors);
+        await fsPromises.writeFile(WATCHER_CURSORS_PATH, JSON.stringify(data, null, 2), 'utf8');
+    } catch (err) {
+        console.warn('[WARN] Failed to save watcher-cursors.json:', err.message);
+    }
+}
+
 async function setupProjectsWatcher() {
     const chokidar = (await import('chokidar')).default;
 
@@ -249,9 +274,21 @@ async function setupProjectsWatcher() {
                                 }
                                 const result = await adapter.fetchHistory(changedSessionId, opts);
                                 const allMessages = result.messages || [];
-                                const lastCount = sessionMessageCount.get(changedSessionId) ?? allMessages.length;
-                                newMessages = allMessages.slice(lastCount);
-                                sessionMessageCount.set(changedSessionId, allMessages.length);
+                                const lastUuid = sessionUuidCursors.get(changedSessionId);
+                                if (lastUuid === undefined) {
+                                    // First time this session is seen — no delta, just record cursor.
+                                    newMessages = [];
+                                } else {
+                                    const idx = lastUuid !== null
+                                        ? allMessages.findIndex(m => m.id === lastUuid)
+                                        : -1;
+                                    newMessages = idx !== -1
+                                        ? allMessages.slice(idx + 1)
+                                        : allMessages.slice(-WATCHER_FALLBACK_COUNT);
+                                }
+                                const lastMsg = allMessages[allMessages.length - 1];
+                                sessionUuidCursors.set(changedSessionId, lastMsg?.id ?? null);
+                                saveWatcherCursors(); // fire-and-forget; failures are warned inside
                             }
                         }
                     } catch (err) {
@@ -2724,6 +2761,7 @@ async function startServer() {
             console.log('');
 
             // Start watching the projects folder for changes
+            await loadWatcherCursors();
             await setupProjectsWatcher();
 
             // Start auto-doc background timer

@@ -35,7 +35,7 @@ export function normalizeMessage(raw, sessionId) {
   // ── History / full-message events ────────────────────────────────────────
   const messages = [];
   const ts = raw.timestamp || new Date().toISOString();
-  const baseId = raw.uuid || generateMessageId('claude');
+  const baseId = raw.id || raw.uuid || generateMessageId('claude');
 
   // User message
   if (raw.message?.role === 'user' && raw.message?.content) {

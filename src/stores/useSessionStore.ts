@@ -217,12 +217,19 @@ export function useSessionStore() {
         slot.tokenUsage = data.tokenUsage;
       }
 
-      notify(sessionId);
+      // Guard: only re-render if this session is still the active one.
+      // Stale responses for background sessions write slot data (so switching back
+      // shows fresh data) but must not trigger a re-render for the current session.
+      if (sessionId === activeSessionIdRef.current) {
+        notify(sessionId);
+      }
       return slot;
     } catch (error) {
       logger.error(`[SessionStore] fetch failed for ${sessionId}:`, error);
       slot.status = 'error';
-      notify(sessionId);
+      if (sessionId === activeSessionIdRef.current) {
+        notify(sessionId);
+      }
       return slot;
     }
   }, [getSlot, notify]);
@@ -411,6 +418,20 @@ export function useSessionStore() {
   }, [notify]);
 
   /**
+   * Clear a session slot before a new fetch begins.
+   * Sets messages to [], status to 'loading', resets hasMore/total so the UI
+   * shows a loading skeleton instead of stale messages from the previous session.
+   */
+  const clearSlot = useCallback((sessionId: string) => {
+    const slot = getSlot(sessionId);
+    slot.messages = [];
+    slot.status = 'loading';
+    slot.hasMore = false;
+    slot.total = 0;
+    notify(sessionId);
+  }, [getSlot, notify]);
+
+  /**
    * No-op: kept for API compatibility. refreshFromServer now replaces messages entirely.
    */
   const clearRealtime = useCallback((_sessionId: string) => {
@@ -444,6 +465,7 @@ export function useSessionStore() {
     isStale,
     updateStreaming,
     finalizeStreaming,
+    clearSlot,
     clearRealtime,
     getMessages,
     getSessionSlot,
@@ -451,7 +473,7 @@ export function useSessionStore() {
     getSlot, has, fetchFromServer, fetchMore,
     appendWsMessage, appendWsMessageBatch, refreshFromServer,
     setActiveSession, setStatus, isStale, updateStreaming, finalizeStreaming,
-    clearRealtime, getMessages, getSessionSlot,
+    clearSlot, clearRealtime, getMessages, getSessionSlot,
   ]);
 }
 

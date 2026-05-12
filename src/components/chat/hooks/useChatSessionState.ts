@@ -412,9 +412,12 @@ export function useChatSessionState({
     // Session already has messages but sessionKey changed (e.g. project metadata updated via
     // projects_updated while the same session is open).  Update the key and skip — no need
     // to re-fetch with a potentially different projectName that could return empty results.
-    // Only applies when the session ID itself hasn't changed (not a session switch).
-    const prevSessionId = lastLoadedSessionKeyRef.current?.split(':')[0] ?? null;
-    if (hasMessages && prevSessionId === selectedSession.id) {
+    // Only applies when the session ID itself hasn't changed (not a session switch), and
+    // the provider hasn't changed (provider switch requires a fresh fetch).
+    const prevKey = lastLoadedSessionKeyRef.current;
+    const prevSessionId = prevKey?.split(':')[0] ?? null;
+    const prevProvider = prevKey?.split(':')[2] ?? null;
+    if (hasMessages && prevSessionId === selectedSession.id && prevProvider === provider) {
       lastLoadedSessionKeyRef.current = sessionKey;
       logger.log('[mainEffect] → skip (same session, project key updated)');
       return;
@@ -453,6 +456,11 @@ export function useChatSessionState({
     }
 
     lastLoadedSessionKeyRef.current = sessionKey;
+
+    // Clear stale messages before fetching so no previous session's messages are visible
+    // during the loading window. This must happen before setIsLoadingSessionMessages so
+    // the cleared empty array and loading=true state batch into the same React render.
+    sessionStore.clearSlot(selectedSession.id);
 
     // Fetch from server → store updates → chatMessages re-derives automatically
     setIsLoadingSessionMessages(true);

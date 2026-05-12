@@ -57,7 +57,7 @@ function ChatInterface({
   const { registerSubmitCallback, notifyLoadingChange, status: voiceStatus, transcript: voiceTranscript, toggle: toggleVoice, isActive: isVoiceActive, supported: isVoiceSupported } = useVoiceConversation();
   const streamBufferRef = useRef('');
   const streamTimerRef = useRef<number | null>(null);
-  const accumulatedStreamRef = useRef('');
+  const accumulatedStreamMapRef = useRef<Map<string, string>>(new Map());
   const pendingViewSessionRef = useRef<PendingViewSession | null>(null);
 
   const resetStreamingState = useCallback(() => {
@@ -66,7 +66,7 @@ function ChatInterface({
       streamTimerRef.current = null;
     }
     streamBufferRef.current = '';
-    accumulatedStreamRef.current = '';
+    accumulatedStreamMapRef.current.clear();
   }, []);
 
   const [isForkingSession, setIsForkingSession] = useState(false);
@@ -294,7 +294,7 @@ function ChatInterface({
     pendingViewSessionRef,
     streamBufferRef,
     streamTimerRef,
-    accumulatedStreamRef,
+    accumulatedStreamMapRef,
     onSessionInactive,
     onSessionProcessing: handleSessionProcessing,
     onSessionNotProcessing,

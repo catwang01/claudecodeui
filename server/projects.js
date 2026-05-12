@@ -965,6 +965,12 @@ async function parseAgentTools(filePath) {
   return tools;
 }
 
+function generateStableMessageId(sessionId, timestamp, content) {
+  const str = typeof content === 'string' ? content : JSON.stringify(content ?? '');
+  const hash = crypto.createHash('md5').update(str).digest('hex').slice(0, 6);
+  return `${sessionId}_${(timestamp || '').replace(/[^0-9]/g, '').slice(0, 14)}_${hash}`;
+}
+
 // Get messages for a specific session with pagination support
 async function getSessionMessages(projectName, sessionId, limit = null, offset = 0) {
   const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
@@ -1064,6 +1070,24 @@ async function getSessionMessages(projectName, sessionId, limit = null, offset =
     const sortedMessages = messages.sort((a, b) =>
       new Date(a.timestamp || 0) - new Date(b.timestamp || 0)
     );
+
+    // Ensure every message has a stable id (JSONL entries use uuid, not id).
+    // Track used ids to handle content collisions (e.g. identical queue-operation entries).
+    const usedIds = new Set();
+    for (const msg of sortedMessages) {
+      if (!msg.id) {
+        let candidate = msg.uuid || generateStableMessageId(sessionId, msg.timestamp, msg.message?.content);
+        let suffix = 0;
+        while (usedIds.has(candidate)) {
+          suffix++;
+          candidate = `${msg.uuid || generateStableMessageId(sessionId, msg.timestamp, msg.message?.content)}_${suffix}`;
+        }
+        msg.id = candidate;
+        usedIds.add(candidate);
+      } else {
+        usedIds.add(msg.id);
+      }
+    }
 
     const total = sortedMessages.length;
 

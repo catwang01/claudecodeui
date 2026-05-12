@@ -62,7 +62,7 @@ interface UseChatRealtimeHandlersArgs {
   pendingViewSessionRef: MutableRefObject<PendingViewSession | null>;
   streamBufferRef: MutableRefObject<string>;
   streamTimerRef: MutableRefObject<number | null>;
-  accumulatedStreamRef: MutableRefObject<string>;
+  accumulatedStreamMapRef: MutableRefObject<Map<string, string>>;
   onSessionInactive?: (sessionId?: string | null) => void;
   onSessionProcessing?: (sessionId?: string | null, provider?: string, startTime?: number | null) => void;
   onSessionNotProcessing?: (sessionId?: string | null) => void;
@@ -93,7 +93,7 @@ export function useChatRealtimeHandlers({
   pendingViewSessionRef,
   streamBufferRef,
   streamTimerRef,
-  accumulatedStreamRef,
+  accumulatedStreamMapRef,
   onSessionInactive,
   onSessionProcessing,
   onSessionNotProcessing,
@@ -203,12 +203,15 @@ export function useChatRealtimeHandlers({
       const text = msg.content || '';
       if (!text) return;
       streamBufferRef.current += text;
-      accumulatedStreamRef.current += text;
+      if (sid) {
+        const prev = accumulatedStreamMapRef.current.get(sid) ?? '';
+        accumulatedStreamMapRef.current.set(sid, prev + text);
+      }
       if (!streamTimerRef.current) {
         streamTimerRef.current = window.setTimeout(() => {
           streamTimerRef.current = null;
           if (sid) {
-            sessionStore.updateStreaming(sid, accumulatedStreamRef.current, provider);
+            sessionStore.updateStreaming(sid, accumulatedStreamMapRef.current.get(sid) ?? '', provider);
           }
         }, 100);
       }
@@ -225,16 +228,16 @@ export function useChatRealtimeHandlers({
         streamTimerRef.current = null;
       }
       if (sid) {
-        if (accumulatedStreamRef.current) {
-          sessionStore.updateStreaming(sid, accumulatedStreamRef.current, provider);
+        const accumulated = accumulatedStreamMapRef.current.get(sid) ?? '';
+        if (accumulated) {
+          sessionStore.updateStreaming(sid, accumulated, provider);
         }
         sessionStore.finalizeStreaming(sid);
+        if (accumulated) {
+          onAssistantSpeech?.(accumulated);
+        }
+        accumulatedStreamMapRef.current.delete(sid);
       }
-      // Speak the full streamed response
-      if (accumulatedStreamRef.current) {
-        onAssistantSpeech?.(accumulatedStreamRef.current);
-      }
-      accumulatedStreamRef.current = '';
       streamBufferRef.current = '';
       return;
     }
@@ -273,11 +276,14 @@ export function useChatRealtimeHandlers({
           clearTimeout(streamTimerRef.current);
           streamTimerRef.current = null;
         }
-        if (sid && accumulatedStreamRef.current) {
-          sessionStore.updateStreaming(sid, accumulatedStreamRef.current, provider);
-          sessionStore.finalizeStreaming(sid);
+        if (sid) {
+          const accumulated = accumulatedStreamMapRef.current.get(sid) ?? '';
+          if (accumulated) {
+            sessionStore.updateStreaming(sid, accumulated, provider);
+            sessionStore.finalizeStreaming(sid);
+          }
+          accumulatedStreamMapRef.current.delete(sid);
         }
-        accumulatedStreamRef.current = '';
         streamBufferRef.current = '';
 
         setIsLoading(false);
@@ -385,7 +391,7 @@ export function useChatRealtimeHandlers({
     pendingViewSessionRef,
     streamBufferRef,
     streamTimerRef,
-    accumulatedStreamRef,
+    accumulatedStreamMapRef,
     onSessionInactive,
     onSessionProcessing,
     onSessionNotProcessing,
@@ -396,4 +402,14 @@ export function useChatRealtimeHandlers({
     onAssistantSpeech,
     sessionStore,
   ]);
+
+  // Clean up the accumulated stream map entry when the session changes or component unmounts
+  useEffect(() => {
+    const sid = currentSessionId;
+    return () => {
+      if (sid) {
+        accumulatedStreamMapRef.current.delete(sid);
+      }
+    };
+  }, [currentSessionId, accumulatedStreamMapRef]);
 }

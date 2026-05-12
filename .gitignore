@@ -140,5 +140,12 @@ tasks/
 # Git worktrees
 .worktrees/
 
+# Traces
+.traces/
+
 # Local startup scripts
 start.sh
+
+# Runtime state (regenerated on each run)
+server/state/watcher-cursors.json
+bun.lock
