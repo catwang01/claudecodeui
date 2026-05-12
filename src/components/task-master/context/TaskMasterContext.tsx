@@ -113,7 +113,7 @@ export function TaskMasterProvider({ children }: { children: React.ReactNode }) 
       setIsLoading(true);
       clearError();
 
-      const response = await api.get('/projects');
+      const response = await api.projects({ silent: true });
       if (!response.ok) {
         throw new Error(`Failed to fetch projects: ${response.status}`);
       }
