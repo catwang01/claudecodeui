@@ -1198,11 +1198,13 @@ async function forkSession(projectName, sessionId, forkAfterTimestamp = null) {
       } catch {}
     }
 
-    const newLines = sessionLines.map(line => {
+    const newLines = sessionLines.map((line, idx) => {
       const entry = JSON.parse(line);
       const newEntry = { ...entry, sessionId: newSessionId };
       if (entry.uuid && uuidMap.has(entry.uuid)) newEntry.uuid = uuidMap.get(entry.uuid);
       if (entry.parentUuid && uuidMap.has(entry.parentUuid)) newEntry.parentUuid = uuidMap.get(entry.parentUuid);
+      // Update the last entry's timestamp to now so the fork sorts to the top of the session list.
+      if (idx === sessionLines.length - 1 && newEntry.timestamp) newEntry.timestamp = now;
       return JSON.stringify(newEntry);
     });
 
