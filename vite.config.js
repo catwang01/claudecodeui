@@ -63,7 +63,8 @@ export default defineConfig(({ mode }) => {
       }),
     ],
     test: {
-      environment: 'node',
+      globals: true,
+      environment: 'jsdom',
       include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
     },
     server: {
