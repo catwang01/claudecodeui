@@ -135,7 +135,14 @@ export function useChatRealtimeHandlers({
           const isCurrentPermSession =
             permSessionId === currentSessionId || (selectedSession && permSessionId === selectedSession.id);
           if (permSessionId && !isCurrentPermSession) return;
-          setPendingPermissionRequests(msg.data || []);
+          const requests: PendingPermissionRequest[] = msg.data || [];
+          setPendingPermissionRequests(requests);
+          // Restore amber badge and toast after WS reconnect
+          for (const req of requests) {
+            if (req.sessionId && req.requestId) {
+              setAwaitingPermission(req.sessionId, { toolName: req.toolName || '', requestId: req.requestId });
+            }
+          }
           return;
         }
 
@@ -409,6 +416,9 @@ export function useChatRealtimeHandlers({
     onWebSocketReconnect,
     onAssistantSpeech,
     sessionStore,
+    setAwaitingPermission,
+    clearByRequestId,
+    clearSession,
   ]);
 
   // Clean up the accumulated stream map entry when the session changes or component unmounts

@@ -37,7 +37,7 @@ export function PermissionToastContainer({
         if (!firstEntry) return null;
         return (
           <PermissionToast
-            key={sessionId}
+            key={firstEntry.requestId}
             sessionName={getSessionName(sessionId)}
             toolName={firstEntry.toolName}
             onNavigate={() => onNavigate(sessionId)}
