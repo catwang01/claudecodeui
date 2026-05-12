@@ -60,7 +60,7 @@ export default function SidebarSessionItem(props: SidebarSessionItemProps) {
   const { project, session, currentTime, isProcessing = false, t } = props;
   const sessionView = createSessionViewModel(session, currentTime, t, isProcessing);
   const { awaitingPermissionSessions } = useAwaitingPermissions();
-  const isAwaitingPermission = session?.id ? awaitingPermissionSessions.has(session.id) : false;
+  const isAwaitingPermission = awaitingPermissionSessions.has(session.id);
 
   if (props.variant === 'recents') {
     const { projectColorDot, projectDisplayName, isRead = false, onSessionSelect, onHideSession, onDeleteSession, onProjectNavigate } = props;
@@ -96,7 +96,11 @@ export default function SidebarSessionItem(props: SidebarSessionItemProps) {
               {sessionView.sessionName}
             </span>
             {isAwaitingPermission && (
-              <span className="ml-1 flex-shrink-0 rounded-full bg-amber-500 px-1.5 py-0.5 text-[9px] font-bold leading-none text-black">
+              <span
+                aria-label="Permission request waiting for approval"
+                title="Permission request waiting for approval"
+                className="ml-1 flex-shrink-0 rounded-full bg-amber-500 px-1.5 py-0.5 text-[9px] font-bold leading-none text-black"
+              >
                 waiting
               </span>
             )}
