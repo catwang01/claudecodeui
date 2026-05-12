@@ -72,7 +72,7 @@ import sttRoutes from './routes/stt.js';
 import { createNormalizedMessage } from './providers/types.js';
 import { getProvider } from './providers/registry.js';
 import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
-import { initializeDatabase, sessionNamesDb, sessionDb, applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, applyLastAutoDocAt, appConfigDb } from './database/db.js';
+import { initializeDatabase, sessionNamesDb, sessionDb, applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, applyLastAutoDocAt, applyReadState, appConfigDb } from './database/db.js';
 import { startAutoDocTimer } from './auto-doc.js';
 import { stopAllTapSessions, tapViewerProxyForSession } from './tap.js';
 import { configureWebPush } from './services/vapid-keys.js';
@@ -674,6 +674,7 @@ app.get('/api/projects/:projectName/sessions', authenticateToken, async (req, re
         applyHiddenFromRecents(result.sessions, 'claude');
         applyAutoDocFlag(result.sessions, 'claude');
         applyLastAutoDocAt(result.sessions, 'claude');
+        applyReadState(result.sessions, 'claude');
         res.json(result);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -1916,6 +1917,11 @@ function handleChatConnection(ws, request) {
                     type: 'active-sessions',
                     sessions: activeSessions
                 });
+            } else if (data.type === 'mark_session_read') {
+                const { sessionId, provider } = data;
+                if (sessionId) {
+                    sessionDb.markSessionRead(sessionId, provider || 'claude');
+                }
             }
         } catch (error) {
             console.error('[ERROR] Chat WebSocket error:', error.message);

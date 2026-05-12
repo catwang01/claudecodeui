@@ -708,6 +708,23 @@ const sessionDb = {
     ).all(provider);
     return new Set(rows.map(r => r.session_id));
   },
+
+  markSessionRead: (sessionId, provider) => {
+    db.prepare(`
+      INSERT INTO session_read_state (session_id, provider)
+      VALUES (?, ?)
+      ON CONFLICT(session_id, provider) DO UPDATE SET read_at = CURRENT_TIMESTAMP
+    `).run(sessionId, provider || 'claude');
+  },
+
+  getReadSessionIds: (sessionIds, provider) => {
+    if (!sessionIds.length) return new Set();
+    const placeholders = sessionIds.map(() => '?').join(',');
+    const rows = db.prepare(
+      `SELECT session_id FROM session_read_state WHERE session_id IN (${placeholders}) AND provider = ?`
+    ).all(...sessionIds, provider || 'claude');
+    return new Set(rows.map(r => r.session_id));
+  },
 };
 
 // Apply hidden-from-recents flags; auto-unhides sessions with new activity
@@ -778,6 +795,23 @@ function filterHiddenAutoDocSessions(sessions) {
     }
   } catch (error) {
     console.warn('[DB] Failed to filter hidden auto-doc sessions:', error.message);
+  }
+}
+
+// Apply read state to sessions based on session_read_state table
+function applyReadState(sessions, provider) {
+  if (!sessions?.length) return;
+  try {
+    const ids = sessions.map(s => s.id);
+    const readIds = sessionDb.getReadSessionIds(ids, provider);
+    if (!readIds.size) return;
+    for (const session of sessions) {
+      if (readIds.has(session.id)) {
+        session.isRead = true;
+      }
+    }
+  } catch (error) {
+    console.warn(`[DB] Failed to apply read state for ${provider}:`, error.message);
   }
 }
 
@@ -892,6 +926,7 @@ export {
   applyAutoDocFlag,
   applyLastAutoDocAt,
   filterHiddenAutoDocSessions,
+  applyReadState,
   appConfigDb,
   userSettingsDb,
   githubTokensDb // Backward compatibility

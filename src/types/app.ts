@@ -14,6 +14,7 @@ export interface ProjectSession {
   messageCount?: number;
   hiddenFromRecents?: boolean;
   isAutoDoc?: boolean;
+  isRead?: boolean;
   lastAutoDocAt?: string;
   __provider?: SessionProvider;
   __projectName?: string;

@@ -39,6 +39,7 @@ type RecentsProps = {
   currentTime: Date;
   projectColorDot: string;
   projectDisplayName: string;
+  isRead?: boolean;
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
   onHideSession: () => void;
   onDeleteSession: (
@@ -59,7 +60,7 @@ export default function SidebarSessionItem(props: SidebarSessionItemProps) {
   const sessionView = createSessionViewModel(session, currentTime, t, isProcessing);
 
   if (props.variant === 'recents') {
-    const { projectColorDot, projectDisplayName, onSessionSelect, onHideSession, onDeleteSession, onProjectNavigate } = props;
+    const { projectColorDot, projectDisplayName, isRead = false, onSessionSelect, onHideSession, onDeleteSession, onProjectNavigate } = props;
     return (
       <div className="group relative">
         <div
@@ -73,7 +74,7 @@ export default function SidebarSessionItem(props: SidebarSessionItemProps) {
         )}
         {!sessionView.isProcessing && sessionView.isActive && (
           <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2">
-            <div className="h-2 w-2 rounded-full bg-blue-500" />
+            <div className={`h-2 w-2 rounded-full ${isRead ? 'bg-green-500' : 'bg-blue-500'}`} />
           </div>
         )}
         <div

@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDeviceSettings } from '../../../hooks/useDeviceSettings';
 import { useVersionCheck } from '../../../hooks/useVersionCheck';
@@ -6,6 +6,7 @@ import { useUiPreferences } from '../../../hooks/useUiPreferences';
 import { useSidebarController } from '../hooks/useSidebarController';
 import { useTaskMaster } from '../../../contexts/TaskMasterContext';
 import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
+import { useWebSocket } from '../../../contexts/WebSocketContext';
 import type { Project, SessionProvider } from '../../../types/app';
 import type { MCPServerStatus, SidebarProps } from '../types/types';
 import SidebarCollapsed from './subcomponents/SidebarCollapsed';
@@ -47,6 +48,8 @@ function Sidebar({
   const { sidebarVisible } = preferences;
   const { setCurrentProject, mcpServerStatus } = useTaskMaster() as TaskMasterSidebarContext;
   const { tasksEnabled } = useTasksSettings();
+  const { sendMessage } = useWebSocket();
+  const [readSessionIds, setReadSessionIds] = useState<Set<string>>(new Set());
 
   const setSidebarVisible = useCallback(
     (visible: boolean) => setPreference('sidebarVisible', visible),
@@ -170,7 +173,14 @@ function Sidebar({
       void saveProjectName(projectName);
     },
     onDeleteProject: requestProjectDelete,
-    onSessionSelect: handleSessionClick,
+    onSessionSelect: (session, projectName) => {
+      if (session.id) {
+        const provider = session.__provider || 'claude';
+        sendMessage({ type: 'mark_session_read', sessionId: session.id, provider });
+        setReadSessionIds(prev => { const next = new Set(prev); next.add(session.id); return next; });
+      }
+      handleSessionClick(session, projectName);
+    },
     onDeleteSession: showDeleteSessionConfirmation,
     onLoadMoreSessions: (project) => {
       void loadMoreSessions(project);
@@ -189,6 +199,7 @@ function Sidebar({
       void updateSessionSummary(projectName, sessionId, summary, provider);
     },
     processingSessions,
+    readSessionIds,
     t,
   };
 

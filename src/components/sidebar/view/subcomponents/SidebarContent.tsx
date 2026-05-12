@@ -286,6 +286,7 @@ export default function SidebarContent({
                 session={session}
                 currentTime={projectListProps.currentTime}
                 isProcessing={projectListProps.processingSessions?.has(session.id) ?? false}
+                isRead={session.isRead || (projectListProps.readSessionIds?.has(session.id) ?? false)}
                 projectColorDot={color.dot}
                 projectDisplayName={project.displayName || project.name}
                 onSessionSelect={projectListProps.onSessionSelect}

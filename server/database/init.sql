@@ -102,6 +102,16 @@ CREATE TABLE IF NOT EXISTS session_hidden_from_recents (
 
 CREATE INDEX IF NOT EXISTS idx_session_hidden_lookup ON session_hidden_from_recents(session_id, provider);
 
+-- Session read state (tracks which sessions have been opened by the user)
+CREATE TABLE IF NOT EXISTS session_read_state (
+  session_id TEXT NOT NULL,
+  provider   TEXT NOT NULL DEFAULT 'claude',
+  read_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(session_id, provider)
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_read_lookup ON session_read_state(session_id, provider);
+
 -- Session summary state (tracks when each session was last summarized)
 CREATE TABLE IF NOT EXISTS session_summary_state (
   session_id          TEXT NOT NULL,
