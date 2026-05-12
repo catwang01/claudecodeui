@@ -204,15 +204,29 @@ export default function AppContent() {
         selectedSessionId={selectedSession?.id}
         getSessionName={(id) => {
           const session = projects
-            .flatMap((p) => p.sessions ?? [])
+            .flatMap((p) => [
+              ...(p.sessions ?? []),
+              ...(p.cursorSessions ?? []),
+              ...(p.codexSessions ?? []),
+              ...(p.geminiSessions ?? []),
+            ])
             .find((s) => s.id === id);
           return session?.title ?? id;
         }}
         onNavigate={(sessionId) => {
           const session = projects
-            .flatMap((p) => p.sessions ?? [])
+            .flatMap((p) => [
+              ...(p.sessions ?? []),
+              ...(p.cursorSessions ?? []),
+              ...(p.codexSessions ?? []),
+              ...(p.geminiSessions ?? []),
+            ])
             .find((s) => s.id === sessionId);
-          if (session) handleSessionSelect(session);
+          if (!session) {
+            console.warn('[PermissionToastContainer] onNavigate: session not found for id', sessionId);
+            return;
+          }
+          handleSessionSelect(session);
         }}
       />
     </div>
