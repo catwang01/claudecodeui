@@ -1,3 +1,12 @@
+const IMAGE_EXTENSIONS = [
+  'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico',
+];
+
+export const isImageFile = (filename: string): boolean => {
+  const ext = filename.split('.').pop()?.toLowerCase();
+  return IMAGE_EXTENSIONS.includes(ext ?? '');
+};
+
 // Binary file extensions (images are handled by ImageViewer, not here)
 const BINARY_EXTENSIONS = [
   // Archives

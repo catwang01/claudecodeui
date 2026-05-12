@@ -38,7 +38,8 @@ export default function CodeEditor({
   const { t } = useTranslation('codeEditor');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showDiff, setShowDiff] = useState(Boolean(file.diffInfo));
-  const [markdownPreview, setMarkdownPreview] = useState(false);
+  const fileExt = file.name.split('.').pop()?.toLowerCase();
+  const [markdownPreview, setMarkdownPreview] = useState(fileExt === 'md' || fileExt === 'markdown');
 
   const {
     isDarkMode,
