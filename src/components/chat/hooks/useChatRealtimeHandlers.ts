@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useAwaitingPermissions } from '../../../contexts/AwaitingPermissionContext';
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import type { PendingPermissionRequest } from '../types/types';
 import type { Project, ProjectSession, SessionProvider } from '../../../types/app';
@@ -104,6 +105,7 @@ export function useChatRealtimeHandlers({
   onAssistantSpeech,
   sessionStore,
 }: UseChatRealtimeHandlersArgs) {
+  const { setAwaitingPermission, clearByRequestId, clearSession } = useAwaitingPermissions();
   const lastProcessedMessageRef = useRef<LatestChatMessage | null>(null);
 
   useEffect(() => {
@@ -291,6 +293,7 @@ export function useChatRealtimeHandlers({
         setClaudeStatus(null);
         setPendingPermissionRequests([]);
         onSessionInactive?.(sid);
+        if (sid) clearSession(sid);
         onSessionNotProcessing?.(sid);
 
         // Handle aborted case
@@ -322,6 +325,7 @@ export function useChatRealtimeHandlers({
         setCanAbortSession(false);
         setClaudeStatus(null);
         onSessionInactive?.(sid);
+        if (sid) clearSession(sid);
         onSessionNotProcessing?.(sid);
         break;
       }
@@ -339,6 +343,9 @@ export function useChatRealtimeHandlers({
             receivedAt: new Date(),
           }];
         });
+        if (sid) {
+          setAwaitingPermission(sid, { toolName: msg.toolName ?? '', requestId: msg.requestId ?? '' });
+        }
         setIsLoading(true);
         setCanAbortSession(true);
         setClaudeStatus({ text: 'Waiting for permission', tokens: 0, can_interrupt: true });
@@ -348,6 +355,7 @@ export function useChatRealtimeHandlers({
       case 'permission_cancelled': {
         if (msg.requestId) {
           setPendingPermissionRequests((prev) => prev.filter((r: PendingPermissionRequest) => r.requestId !== msg.requestId));
+          clearByRequestId(msg.requestId);
         }
         break;
       }
