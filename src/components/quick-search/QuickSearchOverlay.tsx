@@ -277,7 +277,7 @@ export default function QuickSearchOverlay({ projects, onSessionSelect, onProjec
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
         setSelectedIndex((i) => Math.max(i - 1, 0));
-      } else if (e.key === 'Enter' && results[selectedIndex]) {
+      } else if (e.key === 'Enter' && !e.nativeEvent.isComposing && results[selectedIndex]) {
         selectResult(results[selectedIndex]);
       }
     },
