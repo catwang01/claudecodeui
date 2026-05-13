@@ -136,6 +136,30 @@ function Sidebar({
     document.body.classList.toggle('pwa-mode', isPWA);
   }, [isPWA]);
 
+  // Sync readSessionIds with server isRead state on projects update
+  useEffect(() => {
+    if (!projects?.length) return;
+    setReadSessionIds(prev => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const project of projects) {
+        const allSessions = [
+          ...(project.sessions || []),
+          ...(project.cursorSessions || []),
+          ...(project.codexSessions || []),
+          ...(project.geminiSessions || []),
+        ];
+        for (const session of allSessions) {
+          if (session.id && session.isRead === false && next.has(session.id)) {
+            next.delete(session.id);
+            changed = true;
+          }
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [projects]);
+
   const handleProjectCreated = () => {
     if (window.refreshProjects) {
       void window.refreshProjects();
