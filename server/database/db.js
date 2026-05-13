@@ -709,21 +709,22 @@ const sessionDb = {
     return new Set(rows.map(r => r.session_id));
   },
 
-  markSessionRead: (sessionId, provider) => {
+  markSessionRead: (sessionId, provider, viewedAt) => {
+    const ts = viewedAt || new Date().toISOString();
     db.prepare(`
-      INSERT INTO session_read_state (session_id, provider)
-      VALUES (?, ?)
-      ON CONFLICT(session_id, provider) DO UPDATE SET read_at = CURRENT_TIMESTAMP
-    `).run(sessionId, provider || 'claude');
+      INSERT INTO session_read_state (session_id, provider, read_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(session_id, provider) DO UPDATE SET read_at = excluded.read_at
+    `).run(sessionId, provider || 'claude', ts);
   },
 
-  getReadSessionIds: (sessionIds, provider) => {
-    if (!sessionIds.length) return new Set();
+  getReadStateMap: (sessionIds, provider) => {
+    if (!sessionIds.length) return new Map();
     const placeholders = sessionIds.map(() => '?').join(',');
     const rows = db.prepare(
-      `SELECT session_id FROM session_read_state WHERE session_id IN (${placeholders}) AND provider = ?`
+      `SELECT session_id, read_at FROM session_read_state WHERE session_id IN (${placeholders}) AND provider = ?`
     ).all(...sessionIds, provider || 'claude');
-    return new Set(rows.map(r => r.session_id));
+    return new Map(rows.map(r => [r.session_id, r.read_at]));
   },
 };
 
@@ -803,11 +804,16 @@ function applyReadState(sessions, provider) {
   if (!sessions?.length) return;
   try {
     const ids = sessions.map(s => s.id);
-    const readIds = sessionDb.getReadSessionIds(ids, provider);
-    if (!readIds.size) return;
+    const readStateMap = sessionDb.getReadStateMap(ids, provider);
+    if (!readStateMap.size) return;
     for (const session of sessions) {
-      if (readIds.has(session.id)) {
-        session.isRead = true;
+      const readAt = readStateMap.get(session.id);
+      if (readAt) {
+        const readTime = new Date(readAt);
+        const lastActivity = session.lastActivity instanceof Date
+          ? session.lastActivity
+          : new Date(session.lastActivity);
+        session.isRead = readTime >= lastActivity;
       }
     }
   } catch (error) {

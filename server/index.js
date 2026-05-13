@@ -1918,9 +1918,9 @@ function handleChatConnection(ws, request) {
                     sessions: activeSessions
                 });
             } else if (data.type === 'mark_session_read') {
-                const { sessionId, provider } = data;
+                const { sessionId, provider, viewedAt } = data;
                 if (sessionId) {
-                    sessionDb.markSessionRead(sessionId, provider || 'claude');
+                    sessionDb.markSessionRead(sessionId, provider || 'claude', viewedAt);
                 }
             }
         } catch (error) {

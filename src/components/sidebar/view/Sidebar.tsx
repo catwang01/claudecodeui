@@ -178,7 +178,8 @@ function Sidebar({
     onSessionSelect: (session, projectName) => {
       if (session.id) {
         const provider = session.__provider || 'claude';
-        sendMessage({ type: 'mark_session_read', sessionId: session.id, provider });
+        const viewedAt = new Date().toISOString();
+        sendMessage({ type: 'mark_session_read', sessionId: session.id, provider, viewedAt });
         setReadSessionIds(prev => { const next = new Set(prev); next.add(session.id); return next; });
       }
       handleSessionClick(session, projectName);
