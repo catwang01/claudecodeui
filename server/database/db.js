@@ -808,7 +808,7 @@ function applyReadState(sessions, provider) {
     if (!readStateMap.size) return;
     for (const session of sessions) {
       const readAt = readStateMap.get(session.id);
-      if (readAt) {
+      if (readAt && session.lastActivity) {
         const readTime = new Date(readAt);
         const lastActivity = session.lastActivity instanceof Date
           ? session.lastActivity

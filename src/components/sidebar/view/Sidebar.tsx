@@ -150,9 +150,14 @@ function Sidebar({
           ...(project.geminiSessions || []),
         ];
         for (const session of allSessions) {
-          if (session.id && session.isRead === false && next.has(session.id)) {
-            next.delete(session.id);
-            changed = true;
+          if (session.id) {
+            if (session.isRead === false && next.has(session.id)) {
+              next.delete(session.id);
+              changed = true;
+            } else if (session.isRead === true && !next.has(session.id)) {
+              next.add(session.id);
+              changed = true;
+            }
           }
         }
       }
