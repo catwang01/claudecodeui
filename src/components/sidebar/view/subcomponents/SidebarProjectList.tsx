@@ -92,6 +92,7 @@ export default function SidebarProjectList({
   onCancelEditingSession,
   onSaveEditingSession,
   processingSessions,
+  readSessionIds,
   t,
 }: SidebarProjectListProps) {
   const state = (
@@ -155,6 +156,7 @@ export default function SidebarProjectList({
               onCancelEditingSession={onCancelEditingSession}
               onSaveEditingSession={onSaveEditingSession}
               processingSessions={processingSessions}
+              readSessionIds={readSessionIds}
               t={t}
             />
           ))}

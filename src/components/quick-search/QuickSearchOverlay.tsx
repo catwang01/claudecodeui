@@ -7,7 +7,7 @@ import type { Project, ProjectSession, SessionProvider } from '../../types/app';
 type Highlight = { start: number; end: number };
 
 type ResultItem =
-  | { kind: 'project'; project: Project }
+  | { kind: 'project'; project: Project; highlights?: Highlight[]; matchScore?: number }
   | {
       kind: 'conversation';
       sessionId: string;
@@ -32,6 +32,50 @@ type FlatSession = {
   projectName: string;
   projectDisplayName: string;
 };
+
+function fuzzyMatch(
+  query: string,
+  target: string,
+): { matched: boolean; score: number; highlights: Highlight[] } {
+  const q = query.toLowerCase();
+  const t = target.toLowerCase();
+  if (!q) return { matched: true, score: 0, highlights: [] };
+
+  const highlights: Highlight[] = [];
+  let qi = 0;
+  let score = 0;
+  let consecutiveCount = 0;
+  let lastMatchIdx = -1;
+
+  for (let ti = 0; ti < t.length && qi < q.length; ti++) {
+    if (t[ti] === q[qi]) {
+      if (lastMatchIdx === ti - 1) {
+        consecutiveCount++;
+        score += consecutiveCount * 2;
+      } else {
+        consecutiveCount = 1;
+        if (ti === 0 || /[\s\-_/\\.@]/.test(t[ti - 1])) {
+          score += 5; // word boundary bonus
+        }
+      }
+      score += 1;
+      highlights.push({ start: ti, end: ti + 1 });
+      lastMatchIdx = ti;
+      qi++;
+    }
+  }
+
+  const merged: Highlight[] = [];
+  for (const h of highlights) {
+    if (merged.length && merged[merged.length - 1].end === h.start) {
+      merged[merged.length - 1].end = h.end;
+    } else {
+      merged.push({ ...h });
+    }
+  }
+
+  return { matched: qi === q.length, score, highlights: merged };
+}
 
 function getAllSessions(projects: Project[]): FlatSession[] {
   const sessions: FlatSession[] = [];
@@ -144,16 +188,16 @@ export default function QuickSearchOverlay({ projects, onSessionSelect, onProjec
       return;
     }
 
-    const lower = trimmed.toLowerCase();
-
     const projectMatches: ResultItem[] = projectsRef.current
-      .filter(
-        (p) =>
-          p.name.toLowerCase().includes(lower) ||
-          (p.displayName ?? '').toLowerCase().includes(lower),
-      )
-      .slice(0, 5)
-      .map((project) => ({ kind: 'project', project }));
+      .flatMap((p) => {
+        const nameResult = fuzzyMatch(trimmed, p.name);
+        const displayResult = fuzzyMatch(trimmed, p.displayName ?? p.name);
+        const best = nameResult.score >= displayResult.score ? nameResult : displayResult;
+        if (!nameResult.matched && !displayResult.matched) return [];
+        return [{ kind: 'project' as const, project: p, highlights: best.highlights, matchScore: best.score }];
+      })
+      .sort((a, b) => (b.matchScore ?? 0) - (a.matchScore ?? 0))
+      .slice(0, 5);
 
     setResults(projectMatches);
     setSelectedIndex(0);
@@ -323,7 +367,11 @@ export default function QuickSearchOverlay({ projects, onSessionSelect, onProjec
           <ul className="max-h-80 overflow-y-auto py-1">
             {results.map((result, index) => {
               const { primary, secondary } = getResultLabel(result);
-              const highlights = result.kind === 'conversation' && result.snippet ? result.highlights : undefined;
+              const highlights = result.kind === 'conversation' && result.snippet
+                ? result.highlights
+                : result.kind === 'project'
+                  ? result.highlights
+                  : undefined;
               return (
                 <li
                   key={getResultKey(result)}

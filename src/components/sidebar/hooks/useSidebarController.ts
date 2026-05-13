@@ -560,7 +560,7 @@ export function useSidebarController({
       try {
         const currentSessionCount =
           (project.sessions?.length || 0) + (additionalSessions[project.name]?.length || 0);
-        const response = await api.sessions(project.name, 5, currentSessionCount);
+        const response = await api.sessions(project.name, 15, currentSessionCount);
 
         if (!response.ok) {
           return;

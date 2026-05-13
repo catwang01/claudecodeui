@@ -29,6 +29,7 @@ type DefaultProps = {
     sessionTitle: string,
     provider: SessionProvider,
   ) => void;
+  isRead?: boolean;
   isProcessing?: boolean;
   t: TFunction;
 };
@@ -166,6 +167,7 @@ export default function SidebarSessionItem(props: SidebarSessionItemProps) {
     onProjectSelect,
     onSessionSelect,
     onDeleteSession,
+    isRead = false,
   } = props;
   const isSelected = selectedSession?.id === session.id;
 
@@ -191,7 +193,7 @@ export default function SidebarSessionItem(props: SidebarSessionItemProps) {
       )}
       {!sessionView.isProcessing && sessionView.isActive && (
         <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2 transform">
-          <div className="h-2 w-2 rounded-full bg-blue-500" />
+          <div className={`h-2 w-2 rounded-full ${isRead ? 'bg-green-500' : 'bg-blue-500'}`} />
         </div>
       )}
 

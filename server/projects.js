@@ -471,7 +471,7 @@ async function getProjects(progressCallback = null) {
       // Everything else accesses different directories and can run in parallel.
       const [sessionResult, cursorSessions, codexSessions, geminiResult, taskMasterResult, gitBranchResult] =
         await Promise.allSettled([
-          getSessions(entry.name, 5, 0, autoDocPreFilter),
+          getSessions(entry.name, 15, 0, autoDocPreFilter),
           getCursorSessions(actualProjectDir),
           getCodexSessions(actualProjectDir, { indexRef: codexSessionsIndexRef }),
           (async () => {

@@ -47,6 +47,7 @@ type SidebarProjectItemProps = {
   onCancelEditingSession: () => void;
   onSaveEditingSession: (projectName: string, sessionId: string, summary: string, provider: SessionProvider) => void;
   processingSessions?: Set<string>;
+  readSessionIds?: Set<string>;
   t: TFunction;
 };
 
@@ -93,6 +94,7 @@ export default function SidebarProjectItem({
   onCancelEditingSession,
   onSaveEditingSession,
   processingSessions,
+  readSessionIds,
   t,
 }: SidebarProjectItemProps) {
   const isSelected = selectedProject?.name === project.name;
@@ -425,6 +427,7 @@ export default function SidebarProjectItem({
         onLoadMoreSessions={onLoadMoreSessions}
         onNewSession={onNewSession}
         processingSessions={processingSessions}
+        readSessionIds={readSessionIds}
         t={t}
       />
     </div>
