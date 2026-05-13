@@ -354,7 +354,7 @@ export default function QuickSearchOverlay({ projects, onSessionSelect, onProjec
     >
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" aria-hidden="true" />
       <div
-        className="relative w-full max-w-xl bg-card border border-border/50 rounded-xl shadow-2xl overflow-hidden"
+        className="relative w-[90vw] max-w-xl bg-card border border-border/50 rounded-xl shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-3 px-4 py-3 border-b border-border/50">
