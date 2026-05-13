@@ -106,7 +106,7 @@ CREATE INDEX IF NOT EXISTS idx_session_hidden_lookup ON session_hidden_from_rece
 CREATE TABLE IF NOT EXISTS session_read_state (
   session_id TEXT NOT NULL,
   provider   TEXT NOT NULL DEFAULT 'claude',
-  read_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+  read_at    DATETIME NOT NULL,
   UNIQUE(session_id, provider)
 );
 

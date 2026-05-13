@@ -714,7 +714,7 @@ const sessionDb = {
     db.prepare(`
       INSERT INTO session_read_state (session_id, provider, read_at)
       VALUES (?, ?, ?)
-      ON CONFLICT(session_id, provider) DO UPDATE SET read_at = excluded.read_at
+      ON CONFLICT(session_id, provider) DO UPDATE SET read_at = MAX(session_read_state.read_at, excluded.read_at)
     `).run(sessionId, provider || 'claude', ts);
   },
 
@@ -808,12 +808,16 @@ function applyReadState(sessions, provider) {
     if (!readStateMap.size) return;
     for (const session of sessions) {
       const readAt = readStateMap.get(session.id);
-      if (readAt && session.lastActivity) {
-        const readTime = new Date(readAt);
-        const lastActivity = session.lastActivity instanceof Date
-          ? session.lastActivity
-          : new Date(session.lastActivity);
-        session.isRead = readTime >= lastActivity;
+      if (readAt) {
+        if (!session.lastActivity) {
+          session.isRead = true;
+        } else {
+          const readTime = new Date(readAt);
+          const lastActivity = session.lastActivity instanceof Date
+            ? session.lastActivity
+            : new Date(session.lastActivity);
+          session.isRead = readTime >= lastActivity;
+        }
       }
     }
   } catch (error) {
