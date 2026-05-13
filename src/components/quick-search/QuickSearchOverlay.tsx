@@ -188,13 +188,28 @@ export default function QuickSearchOverlay({ projects, onSessionSelect, onProjec
       return;
     }
 
+    const words = trimmed.split(/\s+/).filter(Boolean);
+    const fuzzyMatchWords = (target: string) => {
+      let totalScore = 0;
+      const allHighlights: Highlight[] = [];
+      for (const word of words) {
+        const result = fuzzyMatch(word, target);
+        if (result.matched) {
+          totalScore += result.score;
+          allHighlights.push(...result.highlights);
+        }
+      }
+      return totalScore > 0 ? { score: totalScore, highlights: allHighlights } : null;
+    };
+
     const projectMatches: ResultItem[] = projectsRef.current
       .flatMap((p) => {
-        const nameResult = fuzzyMatch(trimmed, p.name);
-        const displayResult = fuzzyMatch(trimmed, p.displayName ?? p.name);
-        const best = nameResult.score >= displayResult.score ? nameResult : displayResult;
-        if (!nameResult.matched && !displayResult.matched) return [];
-        return [{ kind: 'project' as const, project: p, highlights: best.highlights, matchScore: best.score }];
+        const primaryText = p.displayName ?? p.name;
+        const primaryResult = fuzzyMatchWords(primaryText);
+        const pathResult = p.fullPath ? fuzzyMatchWords(p.fullPath) : null;
+        const bestScore = Math.max(primaryResult?.score ?? 0, pathResult?.score ?? 0);
+        if (bestScore === 0) return [];
+        return [{ kind: 'project' as const, project: p, highlights: primaryResult?.highlights ?? [], matchScore: bestScore }];
       })
       .sort((a, b) => (b.matchScore ?? 0) - (a.matchScore ?? 0))
       .slice(0, 5);
