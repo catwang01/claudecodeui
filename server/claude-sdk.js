@@ -59,7 +59,9 @@ const downloadTool = tool(
   { annotations: { readOnlyHint: true } }
 );
 
-const downloadServer = createSdkMcpServer({ name: 'download', version: '1.0.0', tools: [downloadTool] });
+function createDownloadServer() {
+  return createSdkMcpServer({ name: 'download', version: '1.0.0', tools: [downloadTool] });
+}
 
 const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 55000;
 
@@ -571,7 +573,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
     // Load MCP configuration
     const mcpServers = await loadMcpConfig(options.cwd);
-    sdkOptions.mcpServers = { ...(mcpServers || {}), download: downloadServer };
+    sdkOptions.mcpServers = { ...(mcpServers || {}), download: createDownloadServer() };
 
     // Handle images - save to temp files and modify prompt
     const imageResult = await handleImages(command, options.images, options.cwd);
