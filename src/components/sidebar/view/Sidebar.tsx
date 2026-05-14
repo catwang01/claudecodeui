@@ -165,14 +165,9 @@ function Sidebar({
     });
   }, [projects]);
 
-  const handleProjectCreated = () => {
-    if (window.refreshProjects) {
-      void window.refreshProjects();
-      return;
-    }
-
-    window.location.reload();
-  };
+  const handleProjectCreated = useCallback(() => {
+    void onRefresh();
+  }, [onRefresh]);
 
   const projectListProps: SidebarProjectListProps = {
     projects,
