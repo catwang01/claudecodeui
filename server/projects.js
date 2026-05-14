@@ -1218,49 +1218,11 @@ async function forkSession(projectName, sessionId, forkAfterTimestamp = null) {
 
 async function deleteSession(projectName, sessionId) {
   const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
+  const sessionFile = path.join(projectDir, `${sessionId}.jsonl`);
 
   try {
-    const files = await fs.readdir(projectDir);
-    const jsonlFiles = files.filter(file => file.endsWith('.jsonl'));
-
-    if (jsonlFiles.length === 0) {
-      throw new Error('No session files found for this project');
-    }
-
-    // Check all JSONL files to find which one contains the session
-    for (const file of jsonlFiles) {
-      const jsonlFile = path.join(projectDir, file);
-      const content = await fs.readFile(jsonlFile, 'utf8');
-      const lines = content.split('\n').filter(line => line.trim());
-
-      // Check if this file contains the session
-      const hasSession = lines.some(line => {
-        try {
-          const data = JSON.parse(line);
-          return data.sessionId === sessionId;
-        } catch {
-          return false;
-        }
-      });
-
-      if (hasSession) {
-        // Filter out all entries for this session
-        const filteredLines = lines.filter(line => {
-          try {
-            const data = JSON.parse(line);
-            return data.sessionId !== sessionId;
-          } catch {
-            return true; // Keep malformed lines
-          }
-        });
-
-        // Write back the filtered content
-        await fs.writeFile(jsonlFile, filteredLines.join('\n') + (filteredLines.length > 0 ? '\n' : ''));
-        return true;
-      }
-    }
-
-    throw new Error(`Session ${sessionId} not found in any files`);
+    await fs.unlink(sessionFile);
+    return true;
   } catch (error) {
     console.error(`Error deleting session ${sessionId} from project ${projectName}:`, error);
     throw error;
