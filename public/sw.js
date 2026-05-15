@@ -53,7 +53,11 @@ self.addEventListener('fetch', event => {
 
   // Everything else — network-first
   event.respondWith(
-    fetch(event.request).catch(() => caches.match(event.request))
+    fetch(event.request).catch(() =>
+      caches.match(event.request).then(cached =>
+        cached || new Response('Network error', { status: 503, statusText: 'Service Unavailable' })
+      )
+    )
   );
 });
 
