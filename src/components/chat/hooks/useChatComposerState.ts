@@ -363,6 +363,7 @@ export function useChatComposerState({
     handleCommandMenuKeyDown,
   } = useSlashCommands({
     selectedProject,
+    provider,
     input,
     setInput,
     textareaRef,

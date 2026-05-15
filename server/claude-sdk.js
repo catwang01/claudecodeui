@@ -267,6 +267,9 @@ function mapCliOptionsToSDK(options = {}) {
 
   sdkOptions.env = env;
 
+  // Use CLAUDE_CLI_PATH if explicitly set, otherwise fall back to 'claude' on PATH.
+  sdkOptions.pathToClaudeCodeExecutable = process.env.CLAUDE_CLI_PATH || 'claude';
+
   // If a per-session claude-tap proxy is running, override ANTHROPIC_BASE_URL via extraArgs.settings.
   const tapSession = sessionId ? getTapSession(sessionId) : null;
   if (tapSession) {
