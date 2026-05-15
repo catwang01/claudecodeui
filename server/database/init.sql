@@ -136,6 +136,21 @@ CREATE TABLE IF NOT EXISTS auto_doc_sessions (
 CREATE INDEX IF NOT EXISTS idx_auto_doc_sessions_source ON auto_doc_sessions(source_session_id);
 CREATE INDEX IF NOT EXISTS idx_auto_doc_sessions_forked ON auto_doc_sessions(forked_session_id);
 
+-- Session file metadata cache for incremental .jsonl scanning
+CREATE TABLE IF NOT EXISTS session_file_cache (
+  file_path TEXT PRIMARY KEY,
+  file_size INTEGER NOT NULL,
+  session_id TEXT,
+  cwd TEXT,
+  message_count INTEGER NOT NULL DEFAULT 0,
+  last_activity TEXT,
+  last_user_message TEXT,
+  last_assistant_message TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_file_cache_session ON session_file_cache(session_id);
+
 -- App configuration table (auto-generated secrets, settings, etc.)
 CREATE TABLE IF NOT EXISTS app_config (
     key TEXT PRIMARY KEY,

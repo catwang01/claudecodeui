@@ -200,6 +200,20 @@ const runMigrations = () => {
     });
     runLegacyMigration();
 
+    // Session file metadata cache for incremental .jsonl scanning
+    db.exec(`CREATE TABLE IF NOT EXISTS session_file_cache (
+      file_path TEXT PRIMARY KEY,
+      file_size INTEGER NOT NULL,
+      session_id TEXT,
+      cwd TEXT,
+      message_count INTEGER NOT NULL DEFAULT 0,
+      last_activity TEXT,
+      last_user_message TEXT,
+      last_assistant_message TEXT,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_session_file_cache_session ON session_file_cache(session_id)');
+
     console.log('Database migrations completed successfully');
   } catch (error) {
     console.error('Error running migrations:', error.message);
@@ -902,6 +916,32 @@ const appConfigDb = {
   }
 };
 
+// Session file metadata cache — incremental .jsonl scan results keyed by file path
+const sessionFileCache = {
+  get: (filePath) =>
+    db.prepare('SELECT * FROM session_file_cache WHERE file_path = ?').get(filePath),
+
+  upsert: (data) =>
+    db.prepare(`
+      INSERT INTO session_file_cache
+        (file_path, file_size, session_id, cwd, message_count, last_activity, last_user_message, last_assistant_message, updated_at)
+      VALUES
+        (@file_path, @file_size, @session_id, @cwd, @message_count, @last_activity, @last_user_message, @last_assistant_message, CURRENT_TIMESTAMP)
+      ON CONFLICT(file_path) DO UPDATE SET
+        file_size            = excluded.file_size,
+        session_id           = COALESCE(excluded.session_id, session_id),
+        cwd                  = COALESCE(excluded.cwd, cwd),
+        message_count        = excluded.message_count,
+        last_activity        = excluded.last_activity,
+        last_user_message    = COALESCE(excluded.last_user_message, last_user_message),
+        last_assistant_message = COALESCE(excluded.last_assistant_message, last_assistant_message),
+        updated_at           = CURRENT_TIMESTAMP
+    `).run(data),
+
+  delete: (filePath) =>
+    db.prepare('DELETE FROM session_file_cache WHERE file_path = ?').run(filePath),
+};
+
 // Backward compatibility - keep old names pointing to new system
 const githubTokensDb = {
   createGithubToken: (userId, tokenName, githubToken, description = null) => {
@@ -931,6 +971,7 @@ export {
   pushSubscriptionsDb,
   sessionNamesDb,
   sessionDb,
+  sessionFileCache,
   applyCustomSessionNames,
   applyHiddenFromRecents,
   applyAutoDocFlag,

@@ -67,7 +67,7 @@ import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import os from 'os';
 import sessionManager from './sessionManager.js';
-import { applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, applyLastAutoDocAt, filterHiddenAutoDocSessions, applyReadState, appConfigDb, sessionDb } from './database/db.js';
+import { applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, applyLastAutoDocAt, filterHiddenAutoDocSessions, applyReadState, appConfigDb, sessionDb, sessionFileCache } from './database/db.js';
 
 async function getProjectGitBranch(projectPath) {
   const run = (args) => new Promise((resolve, reject) => {
@@ -624,129 +624,59 @@ async function getSessions(projectName, limit = 5, offset = 0, preFilter = null)
 
   try {
     const files = await fs.readdir(projectDir);
-    // agent-*.jsonl files contain session start data at this point. This needs to be revisited
-    // periodically to make sure only accurate data is there and no new functionality is added there
     const jsonlFiles = files.filter(file => file.endsWith('.jsonl') && !file.startsWith('agent-'));
 
     if (jsonlFiles.length === 0) {
       return { sessions: [], hasMore: false, total: 0 };
     }
 
-    // Sort files by modification time (newest first)
-    const filesWithStats = await Promise.all(
+    // Get mtime for all files (needed for sort), then sort newest-first.
+    // getSessionFileMeta also calls stat internally, but we need mtime for sort
+    // before we know which files to read — accept the double-stat trade-off.
+    const filesWithMtime = await Promise.all(
       jsonlFiles.map(async (file) => {
         const filePath = path.join(projectDir, file);
         const stats = await fs.stat(filePath);
-        return { file, mtime: stats.mtime };
+        return { file, filePath, mtime: stats.mtime };
       })
     );
-    filesWithStats.sort((a, b) => b.mtime - a.mtime);
+    filesWithMtime.sort((a, b) => b.mtime - a.mtime);
 
     const allSessions = new Map();
-    const allEntries = [];
-    const uuidToSessionMap = new Map();
 
-    // Collect all sessions and entries from all files
-    for (const { file } of filesWithStats) {
-      const jsonlFile = path.join(projectDir, file);
-      const result = await parseJsonlSessions(jsonlFile);
+    // Read files newest-first, stop once we have enough sessions for this page
+    for (const { filePath } of filesWithMtime) {
+      const meta = await getSessionFileMeta(filePath);
+      if (!meta.sessionId) continue;
 
-      result.sessions.forEach(session => {
-        if (!allSessions.has(session.id)) {
-          allSessions.set(session.id, session);
-        }
-      });
-
-      allEntries.push(...result.entries);
-
-      // Early exit optimization: stop when we have enough sessions *after* filtering.
-      // Use basic summary filter + preFilter inline so that filtered-out sessions
-      // (e.g. auto-doc sessions) don't count toward the target.
-      const basicFiltered = Array.from(allSessions.values())
-        .filter(s => !s.summary.startsWith('{ "'));
-      const effectiveCount = preFilter ? preFilter(basicFiltered).length : basicFiltered.length;
-      if (effectiveCount >= (limit + offset) * 2) {
-        break;
+      if (!allSessions.has(meta.sessionId)) {
+        allSessions.set(meta.sessionId, {
+          id: meta.sessionId,
+          summary: meta.lastUserMessage || 'New Session',
+          messageCount: meta.messageCount,
+          lastActivity: meta.lastActivity ? new Date(meta.lastActivity) : meta.mtime,
+          cwd: meta.cwd || '',
+          lastUserMessage: meta.lastUserMessage,
+          lastAssistantMessage: meta.lastAssistantMessage,
+        });
       }
+
+      // Early exit: stop reading more files once we have enough sessions
+      const effectiveCount = preFilter
+        ? preFilter(Array.from(allSessions.values())).length
+        : allSessions.size;
+      if (effectiveCount >= (limit + offset) * 2) break;
     }
 
-    // Build UUID-to-session mapping for timeline detection
-    allEntries.forEach(entry => {
-      if (entry.uuid && entry.sessionId) {
-        uuidToSessionMap.set(entry.uuid, entry.sessionId);
-      }
-    });
-
-    // Group sessions by first user message ID
-    const sessionGroups = new Map(); // firstUserMsgId -> { latestSession, allSessions[] }
-    const sessionToFirstUserMsgId = new Map(); // sessionId -> firstUserMsgId
-
-    // Find the first user message for each session
-    allEntries.forEach(entry => {
-      if (entry.sessionId && entry.type === 'user' && entry.parentUuid === null && entry.uuid) {
-        // This is a first user message in a session (parentUuid is null)
-        const firstUserMsgId = entry.uuid;
-
-        if (!sessionToFirstUserMsgId.has(entry.sessionId)) {
-          sessionToFirstUserMsgId.set(entry.sessionId, firstUserMsgId);
-
-          const session = allSessions.get(entry.sessionId);
-          if (session) {
-            if (!sessionGroups.has(firstUserMsgId)) {
-              sessionGroups.set(firstUserMsgId, {
-                latestSession: session,
-                allSessions: [session]
-              });
-            } else {
-              const group = sessionGroups.get(firstUserMsgId);
-              group.allSessions.push(session);
-
-              // Update latest session if this one is more recent
-              if (new Date(session.lastActivity) > new Date(group.latestSession.lastActivity)) {
-                group.latestSession = session;
-              }
-            }
-          }
-        }
-      }
-    });
-
-    // Collect all sessions that don't belong to any group (standalone sessions)
-    const groupedSessionIds = new Set();
-    sessionGroups.forEach(group => {
-      group.allSessions.forEach(session => groupedSessionIds.add(session.id));
-    });
-
-    const standaloneSessionsArray = Array.from(allSessions.values())
-      .filter(session => !groupedSessionIds.has(session.id));
-
-    // Combine grouped sessions (only show latest from each group) + standalone sessions
-    const latestFromGroups = Array.from(sessionGroups.values()).map(group => {
-      const session = { ...group.latestSession };
-      // Add metadata about grouping
-      if (group.allSessions.length > 1) {
-        session.isGrouped = true;
-        session.groupSize = group.allSessions.length;
-        session.groupSessions = group.allSessions.map(s => s.id);
-      }
-      return session;
-    });
-    const visibleSessions = [...latestFromGroups, ...standaloneSessionsArray]
-      .filter(session => !session.summary.startsWith('{ "'))
+    const sessions = Array.from(allSessions.values())
       .sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
 
-    const filteredSessions = preFilter ? preFilter(visibleSessions) : visibleSessions;
+    const filteredSessions = preFilter ? preFilter(sessions) : sessions;
     const total = filteredSessions.length;
     const paginatedSessions = filteredSessions.slice(offset, offset + limit);
     const hasMore = offset + limit < total;
 
-    return {
-      sessions: paginatedSessions,
-      hasMore,
-      total,
-      offset,
-      limit
-    };
+    return { sessions: paginatedSessions, hasMore, total, offset, limit };
   } catch (error) {
     console.error(`Error reading sessions for project ${projectName}:`, error);
     return { sessions: [], hasMore: false, total: 0 };
@@ -762,157 +692,131 @@ function isSubAgentEntry(entry) {
   return Boolean(entry.parentToolUseId || entry.isMeta);
 }
 
-async function parseJsonlSessions(filePath) {
-  const sessions = new Map();
-  const entries = [];
-  const pendingSummaries = new Map(); // leafUuid -> summary for entries without sessionId
+// Incremental .jsonl metadata scan with SQLite cache.
+// Reads only the bytes appended since the last scan (append-only assumption).
+// Returns { sessionId, cwd, messageCount, lastActivity, lastUserMessage, lastAssistantMessage, mtime }
+async function getSessionFileMeta(filePath) {
+  const stat = await fs.stat(filePath);
+  const currentSize = stat.size;
 
-  try {
-    const fileStream = fsSync.createReadStream(filePath);
-    const rl = readline.createInterface({
-      input: fileStream,
-      crlfDelay: Infinity
-    });
+  const cached = sessionFileCache.get(filePath);
 
-    for await (const line of rl) {
-      if (line.trim()) {
-        try {
-          const entry = JSON.parse(line);
-          entries.push(entry);
-
-          // Handle summary entries that don't have sessionId yet
-          if (entry.type === 'summary' && entry.summary && !entry.sessionId && entry.leafUuid) {
-            pendingSummaries.set(entry.leafUuid, entry.summary);
-          }
-
-          if (entry.sessionId) {
-            if (!sessions.has(entry.sessionId)) {
-              sessions.set(entry.sessionId, {
-                id: entry.sessionId,
-                summary: 'New Session',
-                messageCount: 0,
-                lastActivity: new Date(),
-                cwd: entry.cwd || '',
-                lastUserMessage: null,
-                lastAssistantMessage: null
-              });
-            }
-
-            const session = sessions.get(entry.sessionId);
-
-            // Apply pending summary if this entry has a parentUuid that matches a pending summary
-            if (session.summary === 'New Session' && entry.parentUuid && pendingSummaries.has(entry.parentUuid)) {
-              session.summary = pendingSummaries.get(entry.parentUuid);
-            }
-
-            // Update summary from summary entries with sessionId
-            if (entry.type === 'summary' && entry.summary) {
-              session.summary = entry.summary;
-            }
-
-            // Track last user and assistant messages (skip system messages)
-            if (entry.message?.role === 'user' && entry.message?.content) {
-              const content = entry.message.content;
-
-              // Extract text from array format if needed
-              let textContent = content;
-              if (Array.isArray(content) && content.length > 0 && content[0].type === 'text') {
-                textContent = content[0].text;
-              }
-
-              const isSystemMessage = typeof textContent === 'string' && (
-                textContent.startsWith('<command-name>') ||
-                textContent.startsWith('<command-message>') ||
-                textContent.startsWith('<command-args>') ||
-                textContent.startsWith('<local-command-stdout>') ||
-                textContent.startsWith('<system-reminder>') ||
-                textContent.startsWith('Caveat:') ||
-                textContent.startsWith('This session is being continued from a previous') ||
-                textContent.startsWith('Invalid API key') ||
-                textContent.includes('{"subtasks":') || // Filter Task Master prompts
-                textContent.includes('CRITICAL: You MUST respond with ONLY a JSON') || // Filter Task Master system prompts
-                textContent === 'Warmup' // Explicitly filter out "Warmup"
-              );
-
-              if (typeof textContent === 'string' && textContent.length > 0 && !isSystemMessage && !isSubAgentEntry(entry)) {
-                session.lastUserMessage = textContent;
-              }
-            } else if (entry.message?.role === 'assistant' && entry.message?.content) {
-              // Skip API error messages using the isApiErrorMessage flag
-              if (entry.isApiErrorMessage === true) {
-                // Skip this message entirely
-              } else {
-                // Track last assistant text message
-                let assistantText = null;
-
-                if (Array.isArray(entry.message.content)) {
-                  for (const part of entry.message.content) {
-                    if (part.type === 'text' && part.text) {
-                      assistantText = part.text;
-                    }
-                  }
-                } else if (typeof entry.message.content === 'string') {
-                  assistantText = entry.message.content;
-                }
-
-                // Additional filter for assistant messages with system content
-                const isSystemAssistantMessage = typeof assistantText === 'string' && (
-                  assistantText.startsWith('Invalid API key') ||
-                  assistantText.includes('{"subtasks":') ||
-                  assistantText.includes('CRITICAL: You MUST respond with ONLY a JSON')
-                );
-
-                if (assistantText && !isSystemAssistantMessage) {
-                  session.lastAssistantMessage = assistantText;
-                }
-              }
-            }
-
-            session.messageCount++;
-
-            if (entry.timestamp) {
-              session.lastActivity = new Date(entry.timestamp);
-            }
-          }
-        } catch (parseError) {
-          // Skip malformed lines silently
-        }
-      }
-    }
-
-    // After processing all entries, set final summary based on last message if no summary exists
-    for (const session of sessions.values()) {
-      if (session.summary === 'New Session') {
-        // Prefer last user message, fall back to last assistant message
-        const lastMessage = session.lastUserMessage || session.lastAssistantMessage;
-        if (lastMessage) {
-          session.summary = lastMessage.length > 50 ? lastMessage.substring(0, 50) + '...' : lastMessage;
-        }
-      }
-    }
-
-    // Filter out sessions that contain JSON responses (Task Master errors)
-    const allSessions = Array.from(sessions.values());
-    const filteredSessions = allSessions.filter(session => {
-      const shouldFilter = session.summary.startsWith('{ "');
-      if (shouldFilter) {
-      }
-      // Log a sample of summaries to debug
-      if (Math.random() < 0.01) { // Log 1% of sessions
-      }
-      return !shouldFilter;
-    });
-
-
+  // Cache hit — file unchanged
+  if (cached && cached.file_size === currentSize) {
     return {
-      sessions: filteredSessions,
-      entries: entries
+      sessionId: cached.session_id,
+      cwd: cached.cwd,
+      messageCount: cached.message_count,
+      lastActivity: cached.last_activity,
+      lastUserMessage: cached.last_user_message,
+      lastAssistantMessage: cached.last_assistant_message,
+      mtime: stat.mtime,
     };
-
-  } catch (error) {
-    console.error('Error reading JSONL file:', error);
-    return { sessions: [], entries: [] };
   }
+
+  // Determine read range: read only the delta if file grew, full scan otherwise.
+  // When file shrank (replaced), startOffset=0 and we must NOT inherit old cached values.
+  const isIncremental = cached && cached.file_size < currentSize;
+  const startOffset = isIncremental ? cached.file_size : 0;
+  const readSize = currentSize - startOffset;
+
+  let meta = {
+    sessionId: isIncremental ? (cached?.session_id ?? null) : null,
+    cwd: isIncremental ? (cached?.cwd ?? null) : null,
+    messageCount: isIncremental ? (cached?.message_count ?? 0) : 0,
+    lastActivity: isIncremental ? (cached?.last_activity ?? null) : null,
+    lastUserMessage: isIncremental ? (cached?.last_user_message ?? null) : null,
+    lastAssistantMessage: isIncremental ? (cached?.last_assistant_message ?? null) : null,
+  };
+
+  if (readSize > 0) {
+    const buf = Buffer.allocUnsafe(readSize);
+    const fh = await fs.open(filePath, 'r');
+    try {
+      await fh.read(buf, 0, readSize, startOffset);
+    } finally {
+      await fh.close();
+    }
+
+    // Count newlines for messageCount
+    for (let i = 0; i < buf.length; i++) {
+      if (buf[i] === 0x0a) meta.messageCount++;
+    }
+
+    // Parse lines in delta for metadata
+    const text = buf.toString('utf8');
+    const lines = text.split('\n');
+
+    // Forward scan: grab sessionId/cwd from first parseable entry if not yet known
+    if (!meta.sessionId) {
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const e = JSON.parse(line);
+          if (e.sessionId) { meta.sessionId = e.sessionId; meta.cwd = e.cwd || null; break; }
+        } catch { /* skip malformed */ }
+      }
+    }
+
+    // Backward scan: grab latest lastActivity, lastUserMessage, lastAssistantMessage from delta
+    let needActivity = true;
+    let needUser = true;
+    let needAssistant = true;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      try {
+        const e = JSON.parse(line);
+        if (needActivity && e.timestamp) {
+          meta.lastActivity = e.timestamp;
+          needActivity = false;
+        }
+        if (needUser && e.message?.role === 'user' && e.message?.content) {
+          let text = e.message.content;
+          if (Array.isArray(text) && text.length > 0 && text[0].type === 'text') text = text[0].text;
+          if (typeof text === 'string' && text.length > 0 && !isSubAgentEntry(e)) {
+            const isSystem = text.startsWith('<command-name>') || text.startsWith('<system-reminder>') ||
+              text.startsWith('Caveat:') || text.startsWith('This session is being continued') ||
+              text.includes('{"subtasks":') || text === 'Warmup';
+            if (!isSystem) { meta.lastUserMessage = text.slice(0, 500); needUser = false; }
+          }
+        }
+        if (needAssistant && e.message?.role === 'assistant' && e.message?.content && !e.isApiErrorMessage) {
+          let assistantText = null;
+          if (Array.isArray(e.message.content)) {
+            for (const part of e.message.content) {
+              if (part.type === 'text' && part.text) assistantText = part.text;
+            }
+          } else if (typeof e.message.content === 'string') {
+            assistantText = e.message.content;
+          }
+          if (assistantText && !assistantText.includes('{"subtasks":')) {
+            meta.lastAssistantMessage = assistantText.slice(0, 500);
+            needAssistant = false;
+          }
+        }
+        if (!needActivity && !needUser && !needAssistant) break;
+      } catch { /* skip malformed */ }
+    }
+  }
+
+  // Persist updated metadata to SQLite cache
+  try {
+    sessionFileCache.upsert({
+      file_path: filePath,
+      file_size: currentSize,
+      session_id: meta.sessionId,
+      cwd: meta.cwd,
+      message_count: meta.messageCount,
+      last_activity: meta.lastActivity,
+      last_user_message: meta.lastUserMessage,
+      last_assistant_message: meta.lastAssistantMessage,
+    });
+  } catch (err) {
+    console.warn('[WARN] session_file_cache upsert failed:', err.message);
+  }
+
+  return { ...meta, mtime: stat.mtime };
 }
 
 // Parse an agent JSONL file and extract tool uses
@@ -2648,7 +2552,7 @@ export {
   getProjects,
   getSessions,
   getSessionMessages,
-  parseJsonlSessions,
+  getSessionFileMeta,
   renameProject,
   deleteSession,
   forkSession,
