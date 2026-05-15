@@ -46,10 +46,14 @@ claudecodeui/
 │   ├── lib/          # Shared frontend libraries
 │   ├── types/        # TypeScript type definitions
 │   └── utils/        # Frontend utilities
-├── server/           # Express backend
+├── server/           # Express backend (mixed JS/TS)
 │   ├── routes/       # API route handlers
 │   ├── middleware/    # Express middleware
-│   ├── database/     # SQLite database layer
+│   ├── database/     # Legacy database layer (re-exports from modules)
+│   ├── modules/
+│   │   └── database/ # TypeScript database repositories (primary)
+│   ├── shared/       # Shared types and utilities
+│   ├── services/     # Business logic services
 │   └── tools/        # CLI tool integrations
 ├── shared/           # Code shared between client and server
 └── public/           # Static assets, icons, PWA manifest
@@ -58,9 +62,11 @@ claudecodeui/
 ## Development Workflow
 
 - `npm run dev` — Start both the frontend and backend in development mode
-- `npm run build` — Create a production build
-- `npm run server` — Start only the backend server
+- `npm run build` — Create a production build (client + server)
+- `npm run server` — Start only the backend server (via tsx)
 - `npm run client` — Start only the Vite dev server
+- `npm run typecheck` — Run TypeScript type checking (frontend + backend)
+- `npm run build:server` — Compile server TypeScript (tsc + tsc-alias)
 
 ## Making Changes
 

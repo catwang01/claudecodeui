@@ -1,5 +1,6 @@
 import express from 'express';
-import { apiKeysDb, credentialsDb, notificationPreferencesDb, pushSubscriptionsDb, appConfigDb, userSettingsDb } from '../database/db.js';
+import { apiKeysDb, credentialsDb, notificationPreferencesDb, pushSubscriptionsDb, appConfigDb } from '../modules/database/index.js';
+import { userSettingsDb } from '../database/db.js';
 import { getPublicKey } from '../services/vapid-keys.js';
 import { createNotificationEvent, notifyUserIfEnabled } from '../services/notification-orchestrator.js';
 import { startTapForSession, stopTapForSession, getTapSession, listTapSessions, resolveAnthropicBaseUrl } from '../tap.js';

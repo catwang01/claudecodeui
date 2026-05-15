@@ -68,6 +68,7 @@ import { open } from 'sqlite';
 import os from 'os';
 import sessionManager from './sessionManager.js';
 import { applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, applyLastAutoDocAt, filterHiddenAutoDocSessions, applyReadState, appConfigDb, sessionDb, sessionFileCache } from './database/db.js';
+import { projectsDb } from './modules/database/index.js';
 
 async function getProjectGitBranch(projectPath) {
   const run = (args) => new Promise((resolve, reject) => {
@@ -335,14 +336,15 @@ async function extractProjectDirectory(projectName) {
     return projectDirectoryCache.get(projectName);
   }
 
-  // Check project config for originalPath (manually added projects via UI or platform)
-  // This handles projects with dashes in their directory names correctly
-  const config = await loadProjectConfig();
-  if (config[projectName]?.originalPath) {
-    const originalPath = config[projectName].originalPath;
-    projectDirectoryCache.set(projectName, originalPath);
-    return originalPath;
-  }
+  // Check DB for manually added projects
+  try {
+    const dbProjects = projectsDb.getAllProjects();
+    const match = dbProjects.find(p => p.project_path.replace(/[\\/:\s~_]/g, '-') === projectName);
+    if (match) {
+      projectDirectoryCache.set(projectName, match.project_path);
+      return match.project_path;
+    }
+  } catch { /* DB not ready, ignore */ }
 
   const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
   let extractedPath;
@@ -417,7 +419,6 @@ function buildExcludedSessionIds(provider = 'claude') {
 
 async function getProjects(progressCallback = null) {
   const claudeDir = path.join(os.homedir(), '.claude', 'projects');
-  const config = await loadProjectConfig();
   const projects = [];
   const existingProjects = new Set();
   const codexSessionsIndexRef = { sessionsByProject: null };
@@ -433,16 +434,17 @@ async function getProjects(progressCallback = null) {
 
   const isUUID = (name) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(name);
 
+  let dbProjects = [];
+  try { dbProjects = projectsDb.getAllProjects(); } catch { /* ignore */ }
+
   try {
     await fs.access(claudeDir);
     const entries = await fs.readdir(claudeDir, { withFileTypes: true });
     directories = entries.filter(e => e.isDirectory() && !isUUID(e.name));
     directories.forEach(e => existingProjects.add(e.name));
 
-    const manualProjectsCount = Object.entries(config)
-      .filter(([name, cfg]) => cfg.manuallyAdded && !existingProjects.has(name))
-      .length;
-    totalProjects = directories.length + manualProjectsCount;
+    const manualDbCount = dbProjects.filter(p => !existingProjects.has(p.project_path.replace(/[\\/:\s~_]/g, '-'))).length;
+    totalProjects = directories.length + manualDbCount;
 
     for (const entry of directories) {
       processedProjects++;
@@ -451,7 +453,7 @@ async function getProjects(progressCallback = null) {
       }
 
       const actualProjectDir = await extractProjectDirectory(entry.name);
-      const customName = config[entry.name]?.displayName;
+      const customName = projectsDb.getProjectPath(actualProjectDir)?.custom_project_name || null;
       const autoDisplayName = await generateDisplayName(entry.name, actualProjectDir);
 
       const project = {
@@ -536,32 +538,27 @@ async function getProjects(progressCallback = null) {
     if (error.code !== 'ENOENT') {
       console.error('Error reading projects directory:', error);
     }
-    totalProjects = Object.entries(config).filter(([name, cfg]) => cfg.manuallyAdded).length;
+    totalProjects = dbProjects.filter(p => !existingProjects.has(p.project_path.replace(/[\\/:\s~_]/g, '-'))).length;
   }
 
-  // Add manually configured projects that don't exist as folders yet
-  for (const [projectName, projectConfig] of Object.entries(config)) {
-    if (!existingProjects.has(projectName) && projectConfig.manuallyAdded) {
+  // Load manually-added projects from DB (not already in file system)
+  try {
+    for (const dbProject of dbProjects) {
+      const encodedName = dbProject.project_path.replace(/[\\/:\s~_]/g, '-');
+      if (existingProjects.has(encodedName)) continue;
+
       processedProjects++;
       if (progressCallback) {
-        progressCallback({ phase: 'loading', current: processedProjects, total: totalProjects, currentProject: projectName });
+        progressCallback({ phase: 'loading', current: processedProjects, total: totalProjects, currentProject: encodedName });
       }
 
-      let actualProjectDir = projectConfig.originalPath;
-      if (!actualProjectDir) {
-        try {
-          actualProjectDir = await extractProjectDirectory(projectName);
-        } catch {
-          actualProjectDir = projectName.replace(/-/g, '/');
-        }
-      }
-
+      const actualProjectDir = dbProject.project_path;
       const project = {
-        name: projectName,
+        name: encodedName,
         path: actualProjectDir,
-        displayName: projectConfig.displayName || await generateDisplayName(projectName, actualProjectDir),
+        displayName: dbProject.custom_project_name || await generateDisplayName(encodedName, actualProjectDir),
         fullPath: actualProjectDir,
-        isCustomName: !!projectConfig.displayName,
+        isCustomName: !!dbProject.custom_project_name,
         isManuallyAdded: true,
         sessions: [],
         geminiSessions: [],
@@ -604,12 +601,14 @@ async function getProjects(progressCallback = null) {
         if (r.hasTaskmaster && r.hasEssentialFiles) taskMasterStatus = 'taskmaster-only';
         project.taskmaster = { status: taskMasterStatus, hasTaskmaster: r.hasTaskmaster, hasEssentialFiles: r.hasEssentialFiles, metadata: r.metadata };
       } else {
-        console.warn(`TaskMaster detection failed for manual project ${projectName}:`, taskMasterResult.reason?.message);
+        console.warn(`TaskMaster detection failed for DB project ${encodedName}:`, taskMasterResult.reason?.message);
         project.taskmaster = { status: 'error', hasTaskmaster: false, hasEssentialFiles: false, error: taskMasterResult.reason?.message };
       }
 
       projects.push(project);
     }
+  } catch (err) {
+    console.warn('[projectsDb] Failed to load DB projects:', err.message);
   }
 
   if (progressCallback) {
@@ -1031,22 +1030,11 @@ async function getSessionMessages(projectName, sessionId, limit = null, offset =
 
 // Rename a project's display name
 async function renameProject(projectName, newDisplayName) {
-  const config = await loadProjectConfig();
+  const actualPath = await extractProjectDirectory(projectName).catch(() => null);
+  if (!actualPath) return false;
 
-  if (!newDisplayName || newDisplayName.trim() === '') {
-    // Remove custom name if empty, will fall back to auto-generated
-    if (config[projectName]) {
-      delete config[projectName].displayName;
-    }
-  } else {
-    // Set custom display name, preserving other properties (manuallyAdded, originalPath)
-    config[projectName] = {
-      ...config[projectName],
-      displayName: newDisplayName.trim()
-    };
-  }
-
-  await saveProjectConfig(config);
+  const trimmed = newDisplayName?.trim() || null;
+  projectsDb.updateProjectCustomName(actualPath, trimmed);
   return true;
 }
 
@@ -1156,13 +1144,7 @@ async function deleteProject(projectName, force = false) {
       throw new Error('Cannot delete project with existing sessions');
     }
 
-    const config = await loadProjectConfig();
-    let projectPath = config[projectName]?.path || config[projectName]?.originalPath;
-
-    // Fallback to extractProjectDirectory if projectPath is not in config
-    if (!projectPath) {
-      projectPath = await extractProjectDirectory(projectName);
-    }
+    const projectPath = await extractProjectDirectory(projectName).catch(() => null);
 
     // Remove the project directory (includes all Claude sessions)
     await fs.rm(projectDir, { recursive: true, force: true });
@@ -1190,11 +1172,9 @@ async function deleteProject(projectName, force = false) {
       } catch (err) {
         // Cursor dir may not exist, ignore
       }
-    }
 
-    // Remove from project config
-    delete config[projectName];
-    await saveProjectConfig(config);
+      projectsDb.archiveProject(projectPath);
+    }
 
     return true;
   } catch (error) {
@@ -1208,38 +1188,23 @@ async function addProjectManually(projectPath, displayName = null) {
   const absolutePath = path.resolve(projectPath);
 
   try {
-    // Check if the path exists
     await fs.access(absolutePath);
   } catch (error) {
     throw new Error(`Path does not exist: ${absolutePath}`);
   }
 
-  // Generate project name (encode path for use as directory name)
   const projectName = absolutePath.replace(/[\\/:\s~_]/g, '-');
 
-  // Check if project already exists in config
-  const config = await loadProjectConfig();
-  const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
-
-  if (config[projectName]) {
+  // Check for conflict in DB
+  const existing = projectsDb.getProjectPath(absolutePath);
+  if (existing && !existing.isArchived) {
     throw new Error(`Project already configured for path: ${absolutePath}`);
   }
 
-  // Allow adding projects even if the directory exists - this enables tracking
-  // existing Claude Code or Cursor projects in the UI
-
-  // Add to config as manually added project
-  config[projectName] = {
-    manuallyAdded: true,
-    originalPath: absolutePath
-  };
-
-  if (displayName) {
-    config[projectName].displayName = displayName;
+  const result = projectsDb.createProjectPath(absolutePath, displayName);
+  if (result.outcome === 'active_conflict') {
+    throw new Error(`Project already configured for path: ${absolutePath}`);
   }
-
-  await saveProjectConfig(config);
-
 
   return {
     name: projectName,
@@ -1892,7 +1857,6 @@ async function searchConversations(query, limit = 50, onProjectResult = null, si
   const safeQuery = typeof query === 'string' ? query.trim() : '';
   const safeLimit = Math.max(1, Math.min(Number.isFinite(limit) ? limit : 50, 200));
   const claudeDir = path.join(os.homedir(), '.claude', 'projects');
-  const config = await loadProjectConfig();
   const results = [];
   let totalMatches = 0;
   const words = safeQuery.toLowerCase().split(/\s+/).filter(w => w.length > 0);
@@ -1988,7 +1952,8 @@ async function searchConversations(query, limit = 50, onProjectResult = null, si
 
       const projectName = projectEntry.name;
       const projectDir = path.join(claudeDir, projectName);
-      const displayName = config[projectName]?.displayName
+      const actualDir = await extractProjectDirectory(projectName).catch(() => null);
+      const displayName = (actualDir && projectsDb.getProjectPath(actualDir)?.custom_project_name)
         || await generateDisplayName(projectName);
 
       let files;

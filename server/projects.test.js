@@ -3,7 +3,6 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
-
 // We test getSessionFileMeta + getSessions via a temp project directory.
 // The SQLite DB used is the real app DB (process.env.DATABASE_PATH from load-env).
 // Each test uses a unique project name to avoid collision.
@@ -227,5 +226,192 @@ describe('getSessions', () => {
     const ids2 = page2.sessions.map(s => s.id);
     expect(ids1.some(id => ids2.includes(id))).toBe(false);
     expect(page1.hasMore).toBe(true);
+  });
+});
+
+// ─── Project management (projectsDb integration) ─────────────────────────────
+
+describe('addProjectManually', () => {
+  let addProjectManually;
+  let projectsDb;
+  let clearProjectDirectoryCache;
+  let tmpProjectDir;
+
+  beforeEach(async () => {
+    tmpProjectDir = path.join(os.tmpdir(), `__test_proj_${Date.now()}`);
+    await fs.mkdir(tmpProjectDir, { recursive: true });
+
+    const mod = await import('./projects.js');
+    addProjectManually = mod.addProjectManually;
+    clearProjectDirectoryCache = mod.clearProjectDirectoryCache;
+    const dbMod = await import('./modules/database/index.js');
+    projectsDb = dbMod.projectsDb;
+  });
+
+  afterEach(async () => {
+    projectsDb.deleteProject(tmpProjectDir);
+    clearProjectDirectoryCache();
+    await fs.rm(tmpProjectDir, { recursive: true, force: true });
+  });
+
+  it('stores project path in DB', async () => {
+    await addProjectManually(tmpProjectDir);
+    const row = projectsDb.getProjectPath(tmpProjectDir);
+    expect(row).not.toBeNull();
+    expect(row.project_path).toBe(tmpProjectDir);
+    expect(row.isArchived).toBe(0);
+  });
+
+  it('stores custom display name in DB', async () => {
+    await addProjectManually(tmpProjectDir, 'My Custom Name');
+    const row = projectsDb.getProjectPath(tmpProjectDir);
+    expect(row.custom_project_name).toBe('My Custom Name');
+  });
+
+  it('throws when path does not exist', async () => {
+    await expect(addProjectManually('/nonexistent/path/xyz')).rejects.toThrow('Path does not exist');
+  });
+
+  it('throws when project already exists in DB', async () => {
+    await addProjectManually(tmpProjectDir);
+    await expect(addProjectManually(tmpProjectDir)).rejects.toThrow('already configured');
+  });
+
+  it('returns project object with correct fields', async () => {
+    const result = await addProjectManually(tmpProjectDir, 'Test Project');
+    expect(result.path).toBe(tmpProjectDir);
+    expect(result.fullPath).toBe(tmpProjectDir);
+    expect(result.displayName).toBe('Test Project');
+    expect(result.isManuallyAdded).toBe(true);
+  });
+});
+
+describe('extractProjectDirectory (DB-backed)', () => {
+  let extractProjectDirectory;
+  let projectsDb;
+  let clearProjectDirectoryCache;
+  let tmpProjectDir;
+
+  beforeEach(async () => {
+    tmpProjectDir = path.join(os.tmpdir(), `__test_extract_${Date.now()}`);
+    await fs.mkdir(tmpProjectDir, { recursive: true });
+
+    const mod = await import('./projects.js');
+    extractProjectDirectory = mod.extractProjectDirectory;
+    clearProjectDirectoryCache = mod.clearProjectDirectoryCache;
+    const dbMod = await import('./modules/database/index.js');
+    projectsDb = dbMod.projectsDb;
+    clearProjectDirectoryCache();
+  });
+
+  afterEach(async () => {
+    projectsDb.deleteProject(tmpProjectDir);
+    clearProjectDirectoryCache();
+    await fs.rm(tmpProjectDir, { recursive: true, force: true });
+  });
+
+  it('resolves originalPath from DB for manually added project', async () => {
+    projectsDb.createProjectPath(tmpProjectDir);
+    const encodedName = tmpProjectDir.replace(/[\\/:\s~_]/g, '-');
+    const result = await extractProjectDirectory(encodedName);
+    expect(result).toBe(tmpProjectDir);
+  });
+
+  it('caches the result on second call', async () => {
+    projectsDb.createProjectPath(tmpProjectDir);
+    const encodedName = tmpProjectDir.replace(/[\\/:\s~_]/g, '-');
+    await extractProjectDirectory(encodedName);
+    // Delete from DB — second call should still return from cache
+    projectsDb.deleteProject(tmpProjectDir);
+    const result = await extractProjectDirectory(encodedName);
+    expect(result).toBe(tmpProjectDir);
+  });
+});
+
+describe('renameProject', () => {
+  let renameProject;
+  let projectsDb;
+  let clearProjectDirectoryCache;
+  let tmpProjectDir;
+
+  beforeEach(async () => {
+    tmpProjectDir = path.join(os.tmpdir(), `__test_rename_${Date.now()}`);
+    await fs.mkdir(tmpProjectDir, { recursive: true });
+
+    const mod = await import('./projects.js');
+    renameProject = mod.renameProject;
+    clearProjectDirectoryCache = mod.clearProjectDirectoryCache;
+    const dbMod = await import('./modules/database/index.js');
+    projectsDb = dbMod.projectsDb;
+
+    projectsDb.createProjectPath(tmpProjectDir);
+    clearProjectDirectoryCache();
+  });
+
+  afterEach(async () => {
+    projectsDb.deleteProject(tmpProjectDir);
+    clearProjectDirectoryCache();
+    await fs.rm(tmpProjectDir, { recursive: true, force: true });
+  });
+
+  it('updates custom_project_name in DB', async () => {
+    const encodedName = tmpProjectDir.replace(/[\\/:\s~_]/g, '-');
+    await renameProject(encodedName, 'Renamed Project');
+    const row = projectsDb.getProjectPath(tmpProjectDir);
+    expect(row.custom_project_name).toBe('Renamed Project');
+  });
+
+  it('clears custom name when empty string passed', async () => {
+    const encodedName = tmpProjectDir.replace(/[\\/:\s~_]/g, '-');
+    await renameProject(encodedName, 'Initial Name');
+    await renameProject(encodedName, '');
+    const row = projectsDb.getProjectPath(tmpProjectDir);
+    expect(row.custom_project_name).toBeNull();
+  });
+});
+
+describe('deleteProject', () => {
+  let deleteProject;
+  let projectsDb;
+  let clearProjectDirectoryCache;
+  let tmpProjectDir;
+  let claudeProjectDir;
+
+  beforeEach(async () => {
+    tmpProjectDir = path.join(os.tmpdir(), `__test_delete_target_${Date.now()}`);
+    await fs.mkdir(tmpProjectDir, { recursive: true });
+
+    const encodedName = tmpProjectDir.replace(/[\\/:\s~_]/g, '-');
+    claudeProjectDir = path.join(os.homedir(), '.claude', 'projects', encodedName);
+    await fs.mkdir(claudeProjectDir, { recursive: true });
+
+    const mod = await import('./projects.js');
+    deleteProject = mod.deleteProject;
+    clearProjectDirectoryCache = mod.clearProjectDirectoryCache;
+    const dbMod = await import('./modules/database/index.js');
+    projectsDb = dbMod.projectsDb;
+
+    projectsDb.createProjectPath(tmpProjectDir);
+    clearProjectDirectoryCache();
+  });
+
+  afterEach(async () => {
+    projectsDb.deleteProject(tmpProjectDir);
+    clearProjectDirectoryCache();
+    await fs.rm(tmpProjectDir, { recursive: true, force: true });
+    await fs.rm(claudeProjectDir, { recursive: true, force: true });
+  });
+
+  it('archives project in DB after deletion', async () => {
+    const encodedName = tmpProjectDir.replace(/[\\/:\s~_]/g, '-');
+    await deleteProject(encodedName, true);
+    const row = projectsDb.getProjectPath(tmpProjectDir);
+    expect(row.isArchived).toBe(1);
+  });
+
+  it('removes project directory from file system', async () => {
+    const encodedName = tmpProjectDir.replace(/[\\/:\s~_]/g, '-');
+    await deleteProject(encodedName, true);
+    await expect(fs.access(claudeProjectDir)).rejects.toThrow();
   });
 });

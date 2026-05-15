@@ -70,6 +70,9 @@ export default defineConfig(({ mode }) => {
       environmentMatchGlobs: [
         ['server/**/*.test.js', 'node'],
       ],
+      alias: [
+        { find: /^@\/(.*)/, replacement: resolve('./server/$1') },
+      ],
     },
     server: {
       host,

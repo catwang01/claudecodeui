@@ -1,0 +1,13 @@
+export { getConnection, closeConnection } from '@/modules/database/connection.js';
+export * from '@/modules/database/repositories/users.js';
+export * from '@/modules/database/repositories/api-keys.js';
+export * from '@/modules/database/repositories/sessions.db.js';
+export * from '@/modules/database/repositories/projects.db.js';
+export * from '@/modules/database/repositories/credentials.js';
+export * from '@/modules/database/repositories/github-tokens.js';
+export * from '@/modules/database/repositories/notification-preferences.js';
+export * from '@/modules/database/repositories/push-subscriptions.js';
+export * from '@/modules/database/repositories/vapid-keys.js';
+export * from '@/modules/database/repositories/app-config.js';
+export * from '@/modules/database/repositories/scan-state.db.js';
+export { backfillSessionsFromFileSystem } from '@/modules/database/backfill.js';
