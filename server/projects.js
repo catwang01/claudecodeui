@@ -652,7 +652,9 @@ async function getSessions(projectName, limit = 5, offset = 0, preFilter = null)
       if (!allSessions.has(meta.sessionId)) {
         allSessions.set(meta.sessionId, {
           id: meta.sessionId,
-          summary: meta.lastUserMessage || 'New Session',
+          summary: meta.lastUserMessage
+            ? (meta.lastUserMessage.length > 50 ? meta.lastUserMessage.slice(0, 50) + '...' : meta.lastUserMessage)
+            : 'New Session',
           messageCount: meta.messageCount,
           lastActivity: meta.lastActivity ? new Date(meta.lastActivity) : meta.mtime,
           cwd: meta.cwd || '',

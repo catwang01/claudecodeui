@@ -90,7 +90,7 @@ export default function SidebarSessionItem(props: SidebarSessionItemProps) {
         >
           <div className="flex items-center gap-2 min-w-0">
             <SessionProviderLogo provider={session.__provider} className="h-3 w-3 flex-shrink-0" />
-            <span className="truncate text-xs font-medium text-foreground flex-1 flex items-center gap-1">
+            <span className="min-w-0 truncate text-xs font-medium text-foreground flex-1 flex items-center gap-1">
               {session.isAutoDoc && (
                 <Sparkles className="h-2.5 w-2.5 flex-shrink-0 text-amber-500" title="Auto Doc" />
               )}
@@ -221,7 +221,7 @@ export default function SidebarSessionItem(props: SidebarSessionItemProps) {
             </div>
 
             <div className="min-w-0 flex-1">
-              <div className="truncate text-xs font-medium text-foreground flex items-center gap-1">
+              <div className="min-w-0 truncate text-xs font-medium text-foreground flex items-center gap-1">
                 {session.isAutoDoc && (
                   <Sparkles className="h-2.5 w-2.5 flex-shrink-0 text-amber-500" title="Auto Doc" />
                 )}
@@ -278,7 +278,7 @@ export default function SidebarSessionItem(props: SidebarSessionItemProps) {
           <div className="flex w-full min-w-0 items-start gap-2">
             <SessionProviderLogo provider={session.__provider} className="mt-0.5 h-3 w-3 flex-shrink-0" />
             <div className="min-w-0 flex-1">
-              <div className="truncate text-xs font-medium text-foreground flex items-center gap-1">
+              <div className="min-w-0 truncate text-xs font-medium text-foreground flex items-center gap-1">
                 {session.isAutoDoc && (
                   <Sparkles className="h-2.5 w-2.5 flex-shrink-0 text-amber-500" title="Auto Doc" />
                 )}
