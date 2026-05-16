@@ -100,7 +100,8 @@
     "notifications": "通知",
     "plugins": "プラグイン",
     "autoDoc": "自動ドキュメント生成",
-    "about": "概要"
+    "about": "概要",
+    "privacy": "プライバシー"
   },
   "notifications": {
     "title": "通知",

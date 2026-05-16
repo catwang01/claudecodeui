@@ -99,7 +99,8 @@
     "tasks": "Задачи",
     "plugins": "Плагины",
     "autoDoc": "Авто-генерация документов",
-    "about": "О программе"
+    "about": "О программе",
+    "privacy": "Конфиденциальность"
   },
   "appearanceSettings": {
     "darkMode": {

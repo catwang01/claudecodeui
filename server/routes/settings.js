@@ -423,4 +423,43 @@ router.put('/user-preferences/:key', (req, res) => {
   res.json({ success: true });
 });
 
+// ---------------------------------------------------------------------------
+// PII Proxy Settings
+// ---------------------------------------------------------------------------
+
+router.get('/pii-proxy', (req, res) => {
+  const value = appConfigDb.get('pii_proxy_enabled');
+  res.json({ enabled: value === null || value === 'true' });
+});
+
+router.put('/pii-proxy', (req, res) => {
+  const { enabled } = req.body;
+  if (typeof enabled !== 'boolean') {
+    return res.status(400).json({ error: 'enabled must be a boolean' });
+  }
+  appConfigDb.set('pii_proxy_enabled', String(enabled));
+  res.json({ enabled });
+});
+
+const PII_PROXY_BASE = `http://127.0.0.1:${process.env.PII_PROXY_PORT || 18090}`;
+
+router.get('/pii-proxy/logs', async (req, res) => {
+  try {
+    const r = await fetch(`${PII_PROXY_BASE}/logs`);
+    const data = await r.json();
+    res.json(data);
+  } catch {
+    res.json({ entries: [] });
+  }
+});
+
+router.delete('/pii-proxy/logs', async (req, res) => {
+  try {
+    await fetch(`${PII_PROXY_BASE}/logs`, { method: 'DELETE' });
+    res.json({ ok: true });
+  } catch {
+    res.status(500).json({ error: 'proxy unreachable' });
+  }
+});
+
 export default router;

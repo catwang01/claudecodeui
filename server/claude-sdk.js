@@ -29,6 +29,7 @@ import {
 import { claudeAdapter } from './providers/claude/adapter.js';
 import { createNormalizedMessage } from './providers/types.js';
 import { appendMessage, appendMessageAsync } from './utils/localMessageWriter.js';
+import { appConfigDb } from './modules/database/index.js';
 
 const activeSessions = new Map();
 const pendingToolApprovals = new Map();
@@ -282,6 +283,19 @@ function mapCliOptionsToSDK(options = {}) {
     console.log(`[tap] session ${sessionId.slice(0, 8)}: ANTHROPIC_BASE_URL=${tapUrl}`);
   }
 
+  // If PII proxy is running (PII_PROXY_PORT is set), inject ANTHROPIC_BASE_URL unless tap already did.
+  const piiProxyPort = process.env.PII_PROXY_PORT;
+  const piiEnabled = appConfigDb.get('pii_proxy_enabled');
+  if (piiProxyPort && !tapSession && (piiEnabled === null || piiEnabled === 'true')) {
+    const piiUrl = `http://127.0.0.1:${piiProxyPort}`;
+    sdkOptions.extraArgs = {
+      settings: JSON.stringify({
+        env: { ANTHROPIC_BASE_URL: piiUrl }
+      })
+    };
+    console.log(`[pii-proxy] ANTHROPIC_BASE_URL=${piiUrl}`);
+  }
+
   return sdkOptions;
 }
 
@@ -292,14 +306,15 @@ function mapCliOptionsToSDK(options = {}) {
  * @param {Array<string>} tempImagePaths - Temp image file paths for cleanup
  * @param {string} tempDir - Temp directory for cleanup
  */
-function addSession(sessionId, queryInstance, tempImagePaths = [], tempDir = null, writer = null) {
+function addSession(sessionId, queryInstance, tempImagePaths = [], tempDir = null, writer = null, abortController = null) {
   activeSessions.set(sessionId, {
     instance: queryInstance,
     startTime: Date.now(),
     status: 'active',
     tempImagePaths,
     tempDir,
-    writer
+    writer,
+    abortController,
   });
 }
 
@@ -676,44 +691,57 @@ async function queryClaudeSDK(command, options = {}, ws) {
       return { behavior: 'deny', message: decision.message ?? 'User denied tool use' };
     };
 
-    // Set stream-close timeout for interactive tools (Query constructor reads it synchronously). Claude Agent SDK has a default of 5s and this overrides it
-    const prevStreamTimeout = process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT;
-    process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = '300000';
+    const STALL_TIMEOUT_MS = options.stallTimeoutMs ?? 120000;
+    const MAX_STALL_RETRIES = 3;
+    let stallRetryCount = 0;
 
-    let queryInstance;
-    try {
-      queryInstance = query({
-        prompt: finalCommand,
-        options: sdkOptions
-      });
-    } catch (hookError) {
-      // Older/newer SDK versions may not accept hook shapes yet.
-      // Keep notification behavior operational via runtime events even if hook registration fails.
-      console.warn('Failed to initialize Claude query with hooks, retrying without hooks:', hookError?.message || hookError);
-      delete sdkOptions.hooks;
-      queryInstance = query({
-        prompt: finalCommand,
-        options: sdkOptions
-      });
-    }
-
-    // Restore immediately — Query constructor already captured the value
-    if (prevStreamTimeout !== undefined) {
-      process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = prevStreamTimeout;
-    } else {
-      delete process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT;
-    }
-
-    // Track the query instance for abort capability
-    if (capturedSessionId) {
-      addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws);
-    }
-
-    // Process streaming messages
-    appendToSessionLog(capturedSessionId || sessionId || 'unknown', `[${new Date().toISOString()}] Starting async generator loop for session: ${capturedSessionId || 'NEW'}`);
     let _msgCount = 0;
     const pendingDownloadToolIds = new Set();
-    for await (const message of queryInstance) {
+
+    while (true) {
+      const abortController = new AbortController();
+      const queryEnv = {
+        ...sdkOptions.env,
+        CLAUDE_ENABLE_STREAM_WATCHDOG: '1',
+        CLAUDE_STREAM_IDLE_TIMEOUT_MS: String(STALL_TIMEOUT_MS),
+      };
+
+      // On retry, resume the session from disk; first run uses the original prompt.
+      const isRetry = stallRetryCount > 0 && capturedSessionId;
+      const queryOpts = {
+        ...sdkOptions,
+        abortController,
+        env: queryEnv,
+        ...(isRetry ? { resume: capturedSessionId, prompt: undefined } : {}),
+      };
+
+      let queryInstance;
+      try {
+        queryInstance = query({
+          prompt: isRetry ? '' : finalCommand,
+          options: queryOpts,
+        });
+      } catch (hookError) {
+        // Older/newer SDK versions may not accept hook shapes yet.
+        // Keep notification behavior operational via runtime events even if hook registration fails.
+        console.warn('Failed to initialize Claude query with hooks, retrying without hooks:', hookError?.message || hookError);
+        delete queryOpts.hooks;
+        queryInstance = query({
+          prompt: isRetry ? '' : finalCommand,
+          options: queryOpts,
+        });
+      }
+
+      // Track the query instance for abort capability
+      if (capturedSessionId) {
+        addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws, abortController);
+      }
+
+      // Process streaming messages
+      appendToSessionLog(capturedSessionId || sessionId || 'unknown', `[${new Date().toISOString()}] Starting async generator loop for session: ${capturedSessionId || 'NEW'}${isRetry ? ` (stall retry #${stallRetryCount})` : ''}`);
+      let forAwaitError = null;
+      try {
+      for await (const message of queryInstance) {
       _msgCount++;
       const _sid = capturedSessionId || sessionId || 'unknown';
       appendToSessionLog(_sid, `[${new Date().toISOString()}] [SDK] msg#${_msgCount} ${JSON.stringify(message, null, 2)}`);
@@ -809,7 +837,33 @@ async function queryClaudeSDK(command, options = {}, ws) {
           ws.send(createNormalizedMessage({ kind: 'status', text: 'token_budget', tokenBudget: tokenBudgetData, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
         }
       }
-    }
+      } // close for await
+      } catch (err) {
+        forAwaitError = err;
+      }
+
+      if (forAwaitError) {
+        // Distinguish stall abort (watchdog fired) from user-initiated abort.
+        // User abort sets session.status = 'aborted' before calling interrupt().
+        // If the session was removed or marked aborted, don't retry.
+        const sessionSnap = getSession(capturedSessionId);
+        const isUserAbort = !sessionSnap || sessionSnap.status === 'aborted';
+        const isStall = forAwaitError.name === 'AbortError' && !isUserAbort;
+
+        if (isStall && stallRetryCount < MAX_STALL_RETRIES) {
+          stallRetryCount++;
+          console.warn(`[STALL-RETRY] Session ${capturedSessionId} stalled (no stream activity for ${STALL_TIMEOUT_MS}ms), retry ${stallRetryCount}/${MAX_STALL_RETRIES}`);
+          ws.send(createNormalizedMessage({ kind: 'status', text: 'stall_retry', retryCount: stallRetryCount, maxRetries: MAX_STALL_RETRIES, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+          continue; // retry with resume
+        }
+
+        // Non-retryable: propagate to outer catch
+        throw forAwaitError;
+      }
+
+      // for await completed normally — exit retry loop
+      break;
+    } // end while (retry loop)
 
     // Clean up session on completion
     if (capturedSessionId) {
@@ -876,8 +930,12 @@ async function abortClaudeSDKSession(sessionId) {
 
     // Mark as aborted and remove immediately so polling stops returning isProcessing: true.
     // This lets the caller send complete{aborted:true} without waiting for the API to respond.
+    // Setting status BEFORE abort/interrupt ensures the stall-retry logic sees it and does not retry.
     session.status = 'aborted';
     removeSession(sessionId);
+
+    // Signal the AbortController (used by CLAUDE_ENABLE_STREAM_WATCHDOG and SDK internals).
+    session.abortController?.abort();
 
     // Call interrupt() and cleanup in background — do NOT await so the caller returns
     // immediately and the client gets visual feedback right away.

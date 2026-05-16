@@ -101,7 +101,8 @@
     "plugins": "Plugins",
     "autoDoc": "Auto Doc Generation",
     "about": "About",
-    "debug": "Debug"
+    "debug": "Debug",
+    "privacy": "Privacy"
   },
   "notifications": {
     "title": "Notifications",

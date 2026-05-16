@@ -15,6 +15,7 @@ import PluginSettingsTab from '../../plugins/view/PluginSettingsTab';
 import AboutTab from '../view/tabs/AboutTab';
 import AutomationsSettingsTab from '../view/tabs/AutomationsSettingsTab';
 import DebugSettingsTab from '../view/tabs/DebugSettingsTab';
+import PrivacySettingsTab from '../view/tabs/PrivacySettingsTab';
 import { useSettingsController } from '../hooks/useSettingsController';
 import { useWebPush } from '../../../hooks/useWebPush';
 import type { SettingsProps } from '../types/types';
@@ -219,6 +220,8 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
               {activeTab === 'plugins' && <PluginSettingsTab />}
 
               {activeTab === 'auto-doc' && <AutomationsSettingsTab />}
+
+              {activeTab === 'privacy' && <PrivacySettingsTab />}
 
               {activeTab === 'about' && <AboutTab />}
 

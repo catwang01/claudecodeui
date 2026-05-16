@@ -23,7 +23,7 @@
     "url": "https://github.com/siteboon/claudecodeui/issues"
   },
   "scripts": {
-    "dev": "concurrently --kill-others \"npm run server:dev\" \"npm run client\"",
+    "dev": "PII_PROXY_PORT=18090 concurrently --kill-others \"npm run server:dev\" \"npm run client\" \"npm run pii-proxy\"",
     "server:dev": "tsx --tsconfig server/tsconfig.json server/index.js",
     "server:dev-watch": "tsx watch --tsconfig server/tsconfig.json server/index.js",
     "server:prod": "node dist-server/server/index.js",
@@ -37,7 +37,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p server/tsconfig.json",
     "lint": "eslint src/ server/",
     "lint:fix": "eslint src/ server/ --fix",
-    "start": "npm run build && npm run server:prod",
+    "start": "npm run build && PII_PROXY_PORT=18090 concurrently --kill-others \"npm run server:prod\" \"npm run pii-proxy\"",
+    "pii-proxy": "cd server/pii-proxy && python3 -m uvicorn pii_proxy:app --host 127.0.0.1 --port ${PII_PROXY_PORT:-18090} --log-level info",
     "release": "./release.sh",
     "prepublishOnly": "npm run build",
     "postinstall": "node scripts/fix-node-pty.js",

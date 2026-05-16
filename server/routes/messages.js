@@ -38,6 +38,7 @@ router.get('/:sessionId/messages', async (req, res) => {
       ? parseInt(limitParam, 10)
       : null;
     const offset = parseInt(req.query.offset || '0', 10);
+    const afterId = req.query.after_id || null;
 
     const adapter = getProvider(provider);
     if (!adapter) {
@@ -151,9 +152,22 @@ router.get('/:sessionId/messages', async (req, res) => {
     }
 
     // Now apply pagination on the fully-merged message list.
+    // If after_id is specified, return only messages after that ID (incremental fetch).
+    const allMessages = fullResult.messages;
+    if (afterId) {
+      const idx = allMessages.findIndex(m => m.id === afterId);
+      const newMessages = idx !== -1 ? allMessages.slice(idx + 1) : [];
+      return res.json({
+        messages: newMessages,
+        total: allMessages.length,
+        hasMore: false,
+        offset: 0,
+        limit: newMessages.length,
+      });
+    }
+
     // Tail-based: offset=0 returns the newest messages; higher offsets go further back.
     // This matches the frontend's fetchMore expectation (prepend older messages on scroll-up).
-    const allMessages = fullResult.messages;
     const total = allMessages.length;
     const start = limit !== null ? Math.max(0, total - offset - limit) : 0;
     const end = limit !== null ? Math.max(0, total - offset) : total;

@@ -99,7 +99,8 @@
     "tasks": "Aufgaben",
     "plugins": "Plugins",
     "autoDoc": "Auto-Doku-Generierung",
-    "about": "Info"
+    "about": "Info",
+    "privacy": "Datenschutz"
   },
   "appearanceSettings": {
     "darkMode": {

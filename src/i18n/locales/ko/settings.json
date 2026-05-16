@@ -100,7 +100,8 @@
     "notifications": "알림",
     "plugins": "플러그인",
     "autoDoc": "자동 문서 생성",
-    "about": "정보"
+    "about": "정보",
+    "privacy": "개인정보"
   },
   "notifications": {
     "title": "알림",

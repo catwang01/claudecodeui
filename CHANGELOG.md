@@ -7,6 +7,11 @@ All notable changes to CloudCLI UI will be documented in this file.
 
 ### New Features
 
+* **messages:** sessionStorage message caching with incremental fetch — session switch no longer re-fetches all messages; `after_id` backend API enables delta-only sync
+* **privacy:** add PII anonymization proxy with Presidio + detect-secrets + AES-256 deterministic encryption (transparent request/response interception)
+* **privacy:** custom PasswordValueRecognizer for structured and natural-language password detection (EN + ZH)
+* **privacy:** add Privacy settings tab with PII proxy toggle and debug log viewer
+* **privacy:** debug log viewer with request grouping, expandable git-style unified diffs, and syntax highlighting
 * **auto-doc:** background auto doc generation — periodically forks recent sessions and runs an agent to organize project documentation
 * **settings:** add Auto Doc Generation settings tab with interval, prompt, and hide toggle
 * **sidebar:** option to hide auto-generated sessions from recents and project views
@@ -16,6 +21,10 @@ All notable changes to CloudCLI UI will be documented in this file.
 
 * **auto-doc:** fix `maxTurns: 1` causing premature termination — agent needs multiple turns for file I/O, increased to 20
 * **auto-doc:** fix concurrent batch execution — await batch completion before scheduling next timer tick
+
+### Known Issues
+
+* **search:** QuickSearch (`searchConversations`) does not respect `projectExcludePatterns` — excluded projects still appear in search results (fix pending: frontend filter in QuickSearchOverlay)
 
 ### Refactoring
 

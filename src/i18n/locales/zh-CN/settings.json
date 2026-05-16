@@ -101,7 +101,8 @@
     "plugins": "插件",
     "autoDoc": "自动文档生成",
     "about": "关于",
-    "debug": "调试"
+    "debug": "调试",
+    "privacy": "隐私"
   },
   "notifications": {
     "title": "通知",
