@@ -22,7 +22,7 @@ export const CLAUDE_MODELS = {
     { value: "opus[1m]", label: "Opus [1M]" },
   ],
 
-  DEFAULT: "opus",
+  DEFAULT: "sonnet[1m]",
 };
 
 /**
