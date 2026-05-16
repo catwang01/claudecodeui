@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS projects (
   project_id TEXT PRIMARY KEY NOT NULL,
   project_path TEXT NOT NULL UNIQUE,
   custom_project_name TEXT DEFAULT NULL,
+  claude_dir_name TEXT DEFAULT NULL,
   isStarred BOOLEAN DEFAULT 0,
   isArchived BOOLEAN DEFAULT 0
 );`;
@@ -98,8 +99,8 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 export const LAST_SCANNED_AT_SQL = `
 CREATE TABLE IF NOT EXISTS scan_state (
-  id INTEGER PRIMARY KEY NOT NULL,
-  last_scanned_at TIMESTAMP NOT NULL
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  last_scanned_at TIMESTAMP NULL
 );`;
 
 export const GITHUB_TOKENS_TABLE_SCHEMA_SQL = `

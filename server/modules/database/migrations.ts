@@ -111,6 +111,7 @@ export function runMigrations(): void {
   addColumnIfMissing(db, 'users', 'git_name', 'TEXT');
   addColumnIfMissing(db, 'users', 'git_email', 'TEXT');
   addColumnIfMissing(db, 'users', 'has_completed_onboarding', 'BOOLEAN DEFAULT 0');
+  addColumnIfMissing(db, 'projects', 'claude_dir_name', 'TEXT DEFAULT NULL');
 
   // Data migrations
   migrateLegacySessionNames(db);

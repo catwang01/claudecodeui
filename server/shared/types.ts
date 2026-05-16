@@ -27,6 +27,7 @@ export type ProjectRepositoryRow = {
   project_id: string;
   project_path: string;
   custom_project_name: string | null;
+  claude_dir_name: string | null;
   isStarred: number;
   isArchived: number;
 };

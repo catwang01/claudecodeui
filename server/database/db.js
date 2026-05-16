@@ -1,5 +1,6 @@
 import { getConnection } from '../modules/database/connection.js';
 import { initializeDatabase } from '../modules/database/init-db.js';
+import { runMigrations } from '../modules/database/migrations.js';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
@@ -10,6 +11,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const db = getConnection();
+runMigrations();
 
 // Show app installation path prominently
 const appInstallPath = path.join(__dirname, '../..');

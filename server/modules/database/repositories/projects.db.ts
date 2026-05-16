@@ -36,14 +36,14 @@ export const projectsDb = {
     const db = getConnection();
     const normalized = normalizeProjectPath(projectPath);
     return db.prepare(
-      'SELECT project_id, project_path, custom_project_name, isStarred, isArchived FROM projects WHERE project_path = ?'
+      'SELECT project_id, project_path, custom_project_name, claude_dir_name, isStarred, isArchived FROM projects WHERE project_path = ?'
     ).get(normalized) as ProjectRepositoryRow | null ?? null;
   },
 
   getProjectById(projectId: string): ProjectRepositoryRow | null {
     const db = getConnection();
     return db.prepare(
-      'SELECT project_id, project_path, custom_project_name, isStarred, isArchived FROM projects WHERE project_id = ?'
+      'SELECT project_id, project_path, custom_project_name, claude_dir_name, isStarred, isArchived FROM projects WHERE project_id = ?'
     ).get(projectId) as ProjectRepositoryRow | null ?? null;
   },
 
@@ -55,7 +55,7 @@ export const projectsDb = {
   getAllProjects(): ProjectRepositoryRow[] {
     const db = getConnection();
     return db.prepare(
-      'SELECT project_id, project_path, custom_project_name, isStarred, isArchived FROM projects WHERE isArchived = 0'
+      'SELECT project_id, project_path, custom_project_name, claude_dir_name, isStarred, isArchived FROM projects WHERE isArchived = 0'
     ).all() as ProjectRepositoryRow[];
   },
 
@@ -69,6 +69,13 @@ export const projectsDb = {
     const db = getConnection();
     db.prepare('UPDATE projects SET custom_project_name = ? WHERE project_path = ?')
       .run(customName, normalizeProjectPath(projectPath));
+  },
+
+  updateClaudeDirName(projectPath: string, claudeDirName: string): void {
+    const db = getConnection();
+    db.prepare(
+      'UPDATE projects SET claude_dir_name = ? WHERE project_path = ?'
+    ).run(claudeDirName, normalizeProjectPath(projectPath));
   },
 
   archiveProject(projectPath: string): void {

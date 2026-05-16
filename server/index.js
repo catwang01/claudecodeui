@@ -76,6 +76,7 @@ import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './util
 import { initializeDatabase, sessionNamesDb, sessionDb, applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, applyLastAutoDocAt, applyReadState, appConfigDb } from './database/db.js';
 import { startAutoDocTimer } from './auto-doc.js';
 import { stopAllTapSessions, tapViewerProxyForSession } from './tap.js';
+import { sessionSynchronizerService } from './modules/providers/index.js';
 import { configureWebPush } from './services/vapid-keys.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
 import { IS_PLATFORM } from './constants/config.js';
@@ -101,12 +102,8 @@ const WATCHER_IGNORED_PATTERNS = [
     '**/.DS_Store'
 ];
 const WATCHER_DEBOUNCE_MS = 300;
-const WATCHER_CURSORS_PATH = path.join(__dirname, 'state', 'watcher-cursors.json');
-const WATCHER_FALLBACK_COUNT = 50;
 let projectsWatchers = [];
 let projectsWatcherDebounceTimer = null;
-// Persists across server restarts: key=sessionId, value=id of last broadcast message.
-const sessionUuidCursors = new Map();
 const connectedClients = new Set();
 let isGetProjectsRunning = false; // Flag to prevent reentrant calls
 
@@ -192,30 +189,6 @@ async function resolveLocalIdIfPending(filePath) {
     } catch { /* JSONL not readable — leave pending for next watcher event */ }
 }
 
-async function loadWatcherCursors() {
-    try {
-        await fsPromises.mkdir(path.dirname(WATCHER_CURSORS_PATH), { recursive: true });
-        const raw = await fsPromises.readFile(WATCHER_CURSORS_PATH, 'utf8');
-        const data = JSON.parse(raw);
-        for (const [sessionId, lastUuid] of Object.entries(data)) {
-            sessionUuidCursors.set(sessionId, lastUuid);
-        }
-    } catch (err) {
-        if (err.code !== 'ENOENT') {
-            console.warn('[WARN] Failed to load watcher-cursors.json:', err.message);
-        }
-    }
-}
-
-async function saveWatcherCursors() {
-    try {
-        const data = Object.fromEntries(sessionUuidCursors);
-        await fsPromises.writeFile(WATCHER_CURSORS_PATH, JSON.stringify(data, null, 2), 'utf8');
-    } catch (err) {
-        console.warn('[WARN] Failed to save watcher-cursors.json:', err.message);
-    }
-}
-
 async function setupProjectsWatcher() {
     const chokidar = (await import('chokidar')).default;
 
@@ -249,53 +222,17 @@ async function setupProjectsWatcher() {
             try {
                 isGetProjectsRunning = true;
 
+                // Sync changed file to sessions DB so getProjects()/getSessions() read up-to-date data
+                if (filePath.endsWith('.jsonl') || filePath.endsWith('.json')) {
+                    sessionSynchronizerService.synchronizeProviderFile(provider, filePath)
+                        .catch(err => console.error('[WARN] DB sync failed for', filePath, err));
+                }
+
                 // Clear project directory cache when files change
                 clearProjectDirectoryCache();
 
                 // Get updated projects list (no progress broadcast — watcher updates are silent)
                 const updatedProjects = await getProjects();
-
-                // Compute message delta for .jsonl session file changes
-                let newMessages = [];
-                let changedSessionId = null;
-                if (filePath.endsWith('.jsonl') && (eventType === 'change' || eventType === 'add')) {
-                    try {
-                        // Subagent files live in {sessionId}/subagents/ - they are not standalone
-                        // sessions, so skip them; their content surfaces via the parent session.
-                        if (path.basename(path.dirname(filePath)) !== 'subagents') {
-                            changedSessionId = path.basename(filePath, '.jsonl');
-                            const adapter = getProvider(provider);
-                            if (adapter) {
-                                const opts = { limit: null, offset: 0 };
-                                // claude provider needs projectName derived from the parent directory
-                                if (provider === 'claude') {
-                                    opts.projectName = path.basename(path.dirname(filePath));
-                                } else if (provider === 'cursor') {
-                                    opts.projectPath = path.dirname(filePath);
-                                }
-                                const result = await adapter.fetchHistory(changedSessionId, opts);
-                                const allMessages = result.messages || [];
-                                const lastUuid = sessionUuidCursors.get(changedSessionId);
-                                if (lastUuid === undefined) {
-                                    // First time this session is seen — no delta, just record cursor.
-                                    newMessages = [];
-                                } else {
-                                    const idx = lastUuid !== null
-                                        ? allMessages.findIndex(m => m.id === lastUuid)
-                                        : -1;
-                                    newMessages = idx !== -1
-                                        ? allMessages.slice(idx + 1)
-                                        : allMessages.slice(-WATCHER_FALLBACK_COUNT);
-                                }
-                                const lastMsg = allMessages[allMessages.length - 1];
-                                sessionUuidCursors.set(changedSessionId, lastMsg?.id ?? null);
-                                saveWatcherCursors(); // fire-and-forget; failures are warned inside
-                            }
-                        }
-                    } catch (err) {
-                        console.error('[WARN] Failed to fetch message delta for', changedSessionId, err.message);
-                    }
-                }
 
                 // Notify all connected clients about the project changes
                 const updateMessage = JSON.stringify({
@@ -305,7 +242,6 @@ async function setupProjectsWatcher() {
                     changeType: eventType,
                     changedFile: path.relative(rootPath, filePath),
                     watchProvider: provider,
-                    ...(newMessages.length > 0 && { newMessages, changedSessionId }),
                 });
 
                 connectedClients.forEach(client => {
@@ -2769,8 +2705,12 @@ async function startServer() {
             console.log('');
 
             // Start watching the projects folder for changes
-            await loadWatcherCursors();
             await setupProjectsWatcher();
+
+            // Sync all provider sessions to DB on startup (non-blocking)
+            sessionSynchronizerService.synchronizeSessions().catch(err => {
+                console.error('[sessions-sync] Initial sync failed:', err);
+            });
 
             // Start auto-doc background timer
             startAutoDocTimer();

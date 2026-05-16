@@ -68,7 +68,8 @@ import { open } from 'sqlite';
 import os from 'os';
 import sessionManager from './sessionManager.js';
 import { applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, applyLastAutoDocAt, filterHiddenAutoDocSessions, applyReadState, appConfigDb, sessionDb, sessionFileCache } from './database/db.js';
-import { projectsDb } from './modules/database/index.js';
+import { projectsDb, sessionsDb } from './modules/database/index.js';
+import { claudeSessionSynchronizer } from './modules/providers/list/claude/claude-session-synchronizer.provider.js';
 
 async function getProjectGitBranch(projectPath) {
   const run = (args) => new Promise((resolve, reject) => {
@@ -329,6 +330,12 @@ function readFirstCwdFromJsonl(filePath) {
   });
 }
 
+// Converts an absolute project path to the Claude directory name.
+// e.g. /Users/foo/myproject → Users-foo-myproject
+function pathToClaudeProjectName(absolutePath) {
+  return absolutePath.replace(/^\//, '').replace(/[/\\]/g, '-');
+}
+
 // Extract the actual project directory from JSONL sessions (with caching)
 async function extractProjectDirectory(projectName) {
   // Check cache first
@@ -418,6 +425,150 @@ function buildExcludedSessionIds(provider = 'claude') {
 }
 
 async function getProjects(progressCallback = null) {
+  const projects = [];
+  const codexSessionsIndexRef = { sessionsByProject: null };
+
+  const excludedSessionIds = buildExcludedSessionIds('claude');
+  const autoDocPreFilter = excludedSessionIds.size > 0
+    ? (sessions) => sessions.filter(s => !excludedSessionIds.has(s.id))
+    : null;
+
+  let dbProjects = [];
+  try {
+    dbProjects = projectsDb.getAllProjects();
+  } catch (err) {
+    console.warn('[getProjects] Failed to load DB projects:', err.message);
+  }
+
+  // If DB is empty (synchronizer hasn't run yet), fall back to filesystem scan
+  if (dbProjects.length === 0) {
+    return getProjectsLegacy(progressCallback);
+  }
+
+  const totalProjects = dbProjects.length;
+
+  for (let i = 0; i < dbProjects.length; i++) {
+    const dbProject = dbProjects[i];
+    const projectPath = dbProject.project_path;
+    const claudeDirName = dbProject.claude_dir_name || pathToClaudeProjectName(projectPath);
+
+    if (progressCallback) {
+      progressCallback({
+        phase: 'loading',
+        current: i + 1,
+        total: totalProjects,
+        currentProject: path.basename(projectPath),
+      });
+    }
+
+    const autoDisplayName = await generateDisplayName(claudeDirName, projectPath);
+
+    const project = {
+      name: claudeDirName,
+      path: projectPath,
+      displayName: dbProject.custom_project_name || autoDisplayName,
+      fullPath: projectPath,
+      isCustomName: !!dbProject.custom_project_name,
+      sessions: [],
+      geminiSessions: [],
+      cursorSessions: [],
+      codexSessions: [],
+      sessionMeta: { hasMore: false, total: 0 },
+    };
+
+    // Claude sessions: query DB index directly, enrich via session_file_cache
+    const claudeRows = sessionsDb.getSessionsByProjectPath(projectPath)
+      .filter(row => row.provider === 'claude' && row.jsonl_path);
+    const claudeSessions = [];
+    for (const row of claudeRows) {
+      const meta = await getSessionFileMeta(row.jsonl_path).catch(() => null);
+      if (!meta?.sessionId) continue;
+      const lastActivity = meta.lastActivity ? new Date(meta.lastActivity) : meta.mtime;
+      claudeSessions.push({
+        id: row.session_id,
+        summary: row.custom_name
+          || (meta.lastUserMessage
+            ? (meta.lastUserMessage.length > 50
+              ? meta.lastUserMessage.slice(0, 50) + '...'
+              : meta.lastUserMessage)
+            : 'New Session'),
+        messageCount: meta.messageCount,
+        lastActivity,
+        cwd: meta.cwd || '',
+        lastUserMessage: meta.lastUserMessage,
+        lastAssistantMessage: meta.lastAssistantMessage,
+      });
+    }
+    claudeSessions.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
+
+    const filteredClaude = autoDocPreFilter ? autoDocPreFilter(claudeSessions) : claudeSessions;
+    applyCustomSessionNames(filteredClaude, 'claude');
+    applyHiddenFromRecents(filteredClaude, 'claude');
+    applyAutoDocFlag(filteredClaude, 'claude');
+    applyLastAutoDocAt(filteredClaude, 'claude');
+    filterHiddenAutoDocSessions(filteredClaude);
+    applyReadState(filteredClaude, 'claude');
+    project.sessions = filteredClaude.slice(0, 15);
+    project.sessionMeta = {
+      hasMore: filteredClaude.length > 15,
+      total: sessionsDb.countSessionsByProjectPath(projectPath),
+    };
+
+    // Non-Claude providers: keep existing functions
+    const [cursorResult, codexResult, geminiResult, taskMasterResult, gitBranchResult] =
+      await Promise.allSettled([
+        getCursorSessions(projectPath),
+        getCodexSessions(projectPath, { indexRef: codexSessionsIndexRef }),
+        (async () => {
+          const uiSessions = sessionManager.getProjectSessions(projectPath) || [];
+          const cliSessions = await getGeminiCliSessions(projectPath);
+          const uiIds = new Set(uiSessions.map(s => s.id));
+          return [...uiSessions, ...cliSessions.filter(s => !uiIds.has(s.id))];
+        })(),
+        detectTaskMasterFolder(projectPath),
+        getProjectGitBranch(projectPath),
+      ]);
+
+    project.cursorSessions = cursorResult.status === 'fulfilled' ? cursorResult.value : [];
+    applyCustomSessionNames(project.cursorSessions, 'cursor');
+    applyHiddenFromRecents(project.cursorSessions, 'cursor');
+    applyReadState(project.cursorSessions, 'cursor');
+
+    project.codexSessions = codexResult.status === 'fulfilled' ? codexResult.value : [];
+    applyCustomSessionNames(project.codexSessions, 'codex');
+    applyHiddenFromRecents(project.codexSessions, 'codex');
+    applyReadState(project.codexSessions, 'codex');
+
+    project.geminiSessions = geminiResult.status === 'fulfilled' ? geminiResult.value : [];
+    applyCustomSessionNames(project.geminiSessions, 'gemini');
+    applyHiddenFromRecents(project.geminiSessions, 'gemini');
+    applyReadState(project.geminiSessions, 'gemini');
+
+    if (taskMasterResult.status === 'fulfilled') {
+      const r = taskMasterResult.value;
+      project.taskmaster = {
+        hasTaskmaster: r.hasTaskmaster,
+        hasEssentialFiles: r.hasEssentialFiles,
+        metadata: r.metadata,
+        status: r.hasTaskmaster && r.hasEssentialFiles ? 'configured' : 'not-configured',
+      };
+    } else {
+      project.taskmaster = { hasTaskmaster: false, hasEssentialFiles: false, metadata: null, status: 'error' };
+    }
+
+    project.currentBranch = gitBranchResult.status === 'fulfilled' ? gitBranchResult.value : null;
+
+    projects.push(project);
+  }
+
+  if (progressCallback) {
+    progressCallback({ phase: 'complete', current: totalProjects, total: totalProjects });
+  }
+
+  return projects;
+}
+
+async function getProjectsLegacy(progressCallback = null) {
   const claudeDir = path.join(os.homedir(), '.claude', 'projects');
   const projects = [];
   const existingProjects = new Set();
@@ -426,7 +577,6 @@ async function getProjects(progressCallback = null) {
   let processedProjects = 0;
   let directories = [];
 
-  // Pre-fetch excluded session IDs once — shared rule with searchConversations
   const excludedSessionIds = buildExcludedSessionIds('claude');
   const autoDocPreFilter = excludedSessionIds.size > 0
     ? (sessions) => sessions.filter(s => !excludedSessionIds.has(s.id))
@@ -466,11 +616,9 @@ async function getProjects(progressCallback = null) {
         geminiSessions: [],
         cursorSessions: [],
         codexSessions: [],
-        sessionMeta: { hasMore: false, total: 0 }
+        sessionMeta: { hasMore: false, total: 0 },
       };
 
-      // getSessions reads .jsonl files — keep sequential to avoid I/O contention.
-      // Everything else accesses different directories and can run in parallel.
       const [sessionResult, cursorSessions, codexSessions, geminiResult, taskMasterResult, gitBranchResult] =
         await Promise.allSettled([
           getSessions(entry.name, 15, 0, autoDocPreFilter),
@@ -500,19 +648,16 @@ async function getProjects(progressCallback = null) {
       applyReadState(project.sessions, 'claude');
 
       project.cursorSessions = cursorSessions.status === 'fulfilled' ? cursorSessions.value : [];
-      if (cursorSessions.status === 'rejected') console.warn(`Could not load Cursor sessions for project ${entry.name}:`, cursorSessions.reason?.message);
       applyCustomSessionNames(project.cursorSessions, 'cursor');
       applyHiddenFromRecents(project.cursorSessions, 'cursor');
       applyReadState(project.cursorSessions, 'cursor');
 
       project.codexSessions = codexSessions.status === 'fulfilled' ? codexSessions.value : [];
-      if (codexSessions.status === 'rejected') console.warn(`Could not load Codex sessions for project ${entry.name}:`, codexSessions.reason?.message);
       applyCustomSessionNames(project.codexSessions, 'codex');
       applyHiddenFromRecents(project.codexSessions, 'codex');
       applyReadState(project.codexSessions, 'codex');
 
       project.geminiSessions = geminiResult.status === 'fulfilled' ? geminiResult.value : [];
-      if (geminiResult.status === 'rejected') console.warn(`Could not load Gemini sessions for project ${entry.name}:`, geminiResult.reason?.message);
       applyCustomSessionNames(project.geminiSessions, 'gemini');
       applyHiddenFromRecents(project.geminiSessions, 'gemini');
       applyReadState(project.geminiSessions, 'gemini');
@@ -523,10 +668,9 @@ async function getProjects(progressCallback = null) {
           hasTaskmaster: r.hasTaskmaster,
           hasEssentialFiles: r.hasEssentialFiles,
           metadata: r.metadata,
-          status: r.hasTaskmaster && r.hasEssentialFiles ? 'configured' : 'not-configured'
+          status: r.hasTaskmaster && r.hasEssentialFiles ? 'configured' : 'not-configured',
         };
       } else {
-        console.warn(`Could not detect TaskMaster for project ${entry.name}:`, taskMasterResult.reason?.message);
         project.taskmaster = { hasTaskmaster: false, hasEssentialFiles: false, metadata: null, status: 'error' };
       }
 
@@ -564,7 +708,7 @@ async function getProjects(progressCallback = null) {
         geminiSessions: [],
         sessionMeta: { hasMore: false, total: 0 },
         cursorSessions: [],
-        codexSessions: []
+        codexSessions: [],
       };
 
       const [cursorSessions, codexSessions, geminiResult, taskMasterResult] =
@@ -597,12 +741,9 @@ async function getProjects(progressCallback = null) {
 
       if (taskMasterResult.status === 'fulfilled') {
         const r = taskMasterResult.value;
-        let taskMasterStatus = 'not-configured';
-        if (r.hasTaskmaster && r.hasEssentialFiles) taskMasterStatus = 'taskmaster-only';
-        project.taskmaster = { status: taskMasterStatus, hasTaskmaster: r.hasTaskmaster, hasEssentialFiles: r.hasEssentialFiles, metadata: r.metadata };
+        project.taskmaster = { status: r.hasTaskmaster && r.hasEssentialFiles ? 'taskmaster-only' : 'not-configured', hasTaskmaster: r.hasTaskmaster, hasEssentialFiles: r.hasEssentialFiles, metadata: r.metadata };
       } else {
-        console.warn(`TaskMaster detection failed for DB project ${encodedName}:`, taskMasterResult.reason?.message);
-        project.taskmaster = { status: 'error', hasTaskmaster: false, hasEssentialFiles: false, error: taskMasterResult.reason?.message };
+        project.taskmaster = { status: 'error', hasTaskmaster: false, hasEssentialFiles: false };
       }
 
       projects.push(project);
@@ -619,6 +760,72 @@ async function getProjects(progressCallback = null) {
 }
 
 async function getSessions(projectName, limit = 5, offset = 0, preFilter = null) {
+  try {
+    const actualProjectDir = await extractProjectDirectory(projectName);
+    const claudeProjectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
+
+    // DB-backed: get session rows (index only) sorted by updated_at DESC
+    const pageSize = Math.max((limit + offset) * 3, 30);
+    let sessionRows = sessionsDb.getSessionsByProjectPathPage(actualProjectDir, pageSize, 0)
+      .filter(row => row.provider === 'claude' && row.jsonl_path);
+
+    // Sync-on-miss: if DB is empty, try to sync filesystem and re-query
+    if (sessionRows.length === 0) {
+      try {
+        const files = await fs.readdir(claudeProjectDir);
+        for (const file of files) {
+          if (!file.endsWith('.jsonl') || file.startsWith('agent-')) continue;
+          await claudeSessionSynchronizer.synchronizeFile(path.join(claudeProjectDir, file));
+        }
+        sessionRows = sessionsDb.getSessionsByProjectPathPage(actualProjectDir, pageSize, 0)
+          .filter(row => row.provider === 'claude' && row.jsonl_path);
+      } catch { /* directory doesn't exist */ }
+    }
+
+    // Legacy fallback: if sync still produced nothing (e.g. JSONL files lack cwd field),
+    // fall back to the old filesystem scan for backward compatibility
+    if (sessionRows.length === 0) {
+      return getSessionsLegacy(projectName, limit, offset, preFilter);
+    }
+
+    // Enrich each session with file metadata (via session_file_cache)
+    const sessions = [];
+    for (const row of sessionRows) {
+      const meta = await getSessionFileMeta(row.jsonl_path).catch(() => null);
+      if (!meta?.sessionId) continue;
+
+      const lastActivity = meta.lastActivity ? new Date(meta.lastActivity) : meta.mtime;
+      sessions.push({
+        id: row.session_id,
+        summary: row.custom_name
+          || (meta.lastUserMessage
+            ? (meta.lastUserMessage.length > 50
+              ? meta.lastUserMessage.slice(0, 50) + '...'
+              : meta.lastUserMessage)
+            : 'New Session'),
+        messageCount: meta.messageCount,
+        lastActivity,
+        cwd: meta.cwd || '',
+        lastUserMessage: meta.lastUserMessage,
+        lastAssistantMessage: meta.lastAssistantMessage,
+      });
+    }
+
+    sessions.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
+
+    const filteredSessions = preFilter ? preFilter(sessions) : sessions;
+    const total = sessionsDb.countSessionsByProjectPath(actualProjectDir);
+    const paginatedSessions = filteredSessions.slice(offset, offset + limit);
+    const hasMore = offset + limit < total;
+
+    return { sessions: paginatedSessions, hasMore, total, offset, limit };
+  } catch (error) {
+    console.error(`Error getting sessions for project ${projectName}:`, error);
+    return { sessions: [], hasMore: false, total: 0 };
+  }
+}
+
+async function getSessionsLegacy(projectName, limit = 5, offset = 0, preFilter = null) {
   const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
 
   try {
@@ -629,9 +836,6 @@ async function getSessions(projectName, limit = 5, offset = 0, preFilter = null)
       return { sessions: [], hasMore: false, total: 0 };
     }
 
-    // Get mtime for all files (needed for sort), then sort newest-first.
-    // getSessionFileMeta also calls stat internally, but we need mtime for sort
-    // before we know which files to read — accept the double-stat trade-off.
     const filesWithMtime = await Promise.all(
       jsonlFiles.map(async (file) => {
         const filePath = path.join(projectDir, file);
@@ -643,7 +847,6 @@ async function getSessions(projectName, limit = 5, offset = 0, preFilter = null)
 
     const allSessions = new Map();
 
-    // Read files newest-first, stop once we have enough sessions for this page
     for (const { filePath } of filesWithMtime) {
       const meta = await getSessionFileMeta(filePath);
       if (!meta.sessionId) continue;
@@ -662,7 +865,6 @@ async function getSessions(projectName, limit = 5, offset = 0, preFilter = null)
         });
       }
 
-      // Early exit: stop reading more files once we have enough sessions
       const effectiveCount = preFilter
         ? preFilter(Array.from(allSessions.values())).length
         : allSessions.size;
