@@ -585,6 +585,8 @@ async function queryClaudeSDK(command, options = {}, ws) {
     });
   };
 
+  let userAborted = false;
+
   try {
     // Map CLI options to SDK format
     const sdkOptions = mapCliOptionsToSDK(options);
@@ -848,6 +850,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
         // If the session was removed or marked aborted, don't retry.
         const sessionSnap = getSession(capturedSessionId);
         const isUserAbort = !sessionSnap || sessionSnap.status === 'aborted';
+        if (isUserAbort) userAborted = true;
         const isStall = forAwaitError.name === 'AbortError' && !isUserAbort;
 
         if (isStall && stallRetryCount < MAX_STALL_RETRIES) {
@@ -898,8 +901,10 @@ async function queryClaudeSDK(command, options = {}, ws) {
     // Clean up temporary image files on error
     await cleanupTempFiles(tempImagePaths, tempDir);
 
-    // Send error to WebSocket
-    ws.send(createNormalizedMessage({ kind: 'error', content: error.message, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+    // Send error to WebSocket (skip for user-initiated aborts — they're not real errors)
+    if (!userAborted) {
+      ws.send(createNormalizedMessage({ kind: 'error', content: error.message, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+    }
     notifyRunFailed({
       userId: ws?.userId || null,
       provider: 'claude',

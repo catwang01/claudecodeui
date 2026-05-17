@@ -60,25 +60,26 @@ def test_deanonymize_no_tags_returns_unchanged():
 
 
 def test_anonymize_deanonymize_roundtrip(monkeypatch):
-    from pii_proxy import _analyzer
+    from pii_proxy import _analyzer, anonymize_text as _anon
 
-    _s = "Hello, my name is John Doe!"
-    _start = _s.index("John Doe")
-    _end = _start + len("John Doe")
+    _s = "My password is s3cr3tVal!"
+    _start = _s.index("s3cr3tVal")
+    _end = _start + len("s3cr3tVal")
 
+    _anon.cache_clear()
     monkeypatch.setattr(
         _analyzer,
         "analyze",
         lambda text, language, entities: [
-            _RecognizerResult(entity_type="PERSON", start=_start, end=_end, score=0.85)
-        ] if "John Doe" in text else [],
+            _RecognizerResult(entity_type="PASSWORD", start=_start, end=_end, score=0.85)
+        ] if "s3cr3tVal" in text else [],
     )
 
     original = _s
     anonymized = anonymize_text(original)
 
-    assert "John Doe" not in anonymized
-    assert "<PII:PERSON>" in anonymized
+    assert "s3cr3tVal" not in anonymized
+    assert "<PII:PASSWORD>" in anonymized
 
     restored = deanonymize_text(anonymized)
     assert restored == original
@@ -116,30 +117,31 @@ def test_proxy_anonymizes_messages_before_forwarding(monkeypatch):
         mock_resp.aclose = aclose
         return mock_resp
 
+    pii_proxy.anonymize_text.cache_clear()
     monkeypatch.setattr(pii_proxy._client, "send", mock_send)
     monkeypatch.setattr(
         pii_proxy._analyzer,
         "analyze",
         lambda text, language, entities: [
             _RecognizerResult(
-                entity_type="PERSON",
-                start=text.index("Jane"),
-                end=text.index("Jane") + 4,
+                entity_type="PASSWORD",
+                start=text.index("hunter2"),
+                end=text.index("hunter2") + 7,
                 score=0.9,
             )
-        ] if "Jane" in text else [],
+        ] if "hunter2" in text else [],
     )
 
     resp = client.post(
         "/v1/messages",
-        json={"messages": [{"role": "user", "content": "Hi, I am Jane."}]},
+        json={"messages": [{"role": "user", "content": "my password is hunter2"}]},
         headers={"x-api-key": "test-key"},
     )
 
     assert resp.status_code == 200
     sent_content = captured["body"]["messages"][0]["content"]
-    assert "Jane" not in sent_content
-    assert "<PII:PERSON>" in sent_content
+    assert "hunter2" not in sent_content
+    assert "<PII:PASSWORD>" in sent_content
 
 
 def test_proxy_deanonymizes_json_response(monkeypatch):
@@ -180,7 +182,7 @@ def test_proxy_deanonymizes_json_response(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_proxy_passes_through_sse(monkeypatch):
-    """SSE 响应直接透传，不做任何处理。"""
+    """SSE 无 PII tag 时原样透传。"""
     import pii_proxy
 
     async def mock_send(req, stream=False):
@@ -206,6 +208,103 @@ def test_proxy_passes_through_sse(monkeypatch):
         assert resp.status_code == 200
         chunks = list(resp.iter_bytes())
         assert b"data: {}" in b"".join(chunks)
+
+
+def test_proxy_sse_deanonymizes_complete_tag_in_single_chunk(monkeypatch):
+    """SSE 单个 chunk 内包含完整 PII tag，应被解密还原。"""
+    import pii_proxy
+
+    encrypted = pii_proxy._encrypt("Alice")
+    tag = f"<PII:PERSON>{encrypted}</PII>".encode()
+
+    async def mock_send(req, stream=False):
+        mock_resp = MagicMock()
+        mock_resp.headers = {"content-type": "text/event-stream"}
+        mock_resp.status_code = 200
+
+        async def aiter_bytes():
+            yield b"data: Hello " + tag + b"\n\n"
+
+        mock_resp.aiter_bytes = aiter_bytes
+        async def aclose(): pass
+        mock_resp.aclose = aclose
+        return mock_resp
+
+    monkeypatch.setattr(pii_proxy._client, "send", mock_send)
+    monkeypatch.setattr(pii_proxy._analyzer, "analyze", lambda *a, **kw: [])
+
+    with client.stream("POST", "/v1/messages", json={"messages": []}, headers={"x-api-key": "k"}) as resp:
+        assert resp.status_code == 200
+        body = b"".join(resp.iter_bytes())
+        assert b"Alice" in body
+        assert b"<PII:PERSON>" not in body
+
+
+def test_proxy_sse_deanonymizes_tag_split_across_chunks(monkeypatch):
+    """SSE tag 被切成两段跨 chunk，仍能正确缓冲后解密还原。"""
+    import pii_proxy
+
+    encrypted = pii_proxy._encrypt("Bob")
+    full_tag = f"<PII:PERSON>{encrypted}</PII>"
+    # 在 <PII: 之后切断，模拟跨 chunk 情况
+    split_at = full_tag.index(":") + 3
+    chunk1 = ("data: Hello " + full_tag[:split_at]).encode()
+    chunk2 = (full_tag[split_at:] + "\n\n").encode()
+
+    async def mock_send(req, stream=False):
+        mock_resp = MagicMock()
+        mock_resp.headers = {"content-type": "text/event-stream"}
+        mock_resp.status_code = 200
+
+        async def aiter_bytes():
+            yield chunk1
+            yield chunk2
+
+        mock_resp.aiter_bytes = aiter_bytes
+        async def aclose(): pass
+        mock_resp.aclose = aclose
+        return mock_resp
+
+    monkeypatch.setattr(pii_proxy._client, "send", mock_send)
+    monkeypatch.setattr(pii_proxy._analyzer, "analyze", lambda *a, **kw: [])
+
+    with client.stream("POST", "/v1/messages", json={"messages": []}, headers={"x-api-key": "k"}) as resp:
+        assert resp.status_code == 200
+        body = b"".join(resp.iter_bytes())
+        assert b"Bob" in body
+        assert b"<PII:PERSON>" not in body
+
+
+def test_proxy_sse_deanonymizes_multiple_tags(monkeypatch):
+    """SSE 单次流中包含多个 PII tag，全部解密还原。"""
+    import pii_proxy
+
+    enc1 = pii_proxy._encrypt("Carol")
+    enc2 = pii_proxy._encrypt("Dave")
+    line = f"data: <PII:PERSON>{enc1}</PII> and <PII:PERSON>{enc2}</PII>\n\n".encode()
+
+    async def mock_send(req, stream=False):
+        mock_resp = MagicMock()
+        mock_resp.headers = {"content-type": "text/event-stream"}
+        mock_resp.status_code = 200
+
+        async def aiter_bytes():
+            yield line
+
+        mock_resp.aiter_bytes = aiter_bytes
+        async def aclose(): pass
+        mock_resp.aclose = aclose
+        return mock_resp
+
+    monkeypatch.setattr(pii_proxy._client, "send", mock_send)
+    monkeypatch.setattr(pii_proxy._analyzer, "analyze", lambda *a, **kw: [])
+
+    with client.stream("POST", "/v1/messages", json={"messages": []}, headers={"x-api-key": "k"}) as resp:
+        assert resp.status_code == 200
+        body = b"".join(resp.iter_bytes())
+        assert b"Carol" in body
+        assert b"Dave" in body
+        assert b"<PII:PERSON>" not in body
 
 
 # ---------------------------------------------------------------------------
@@ -236,24 +335,25 @@ def test_proxy_anonymizes_list_content(monkeypatch):
         mock_resp.aclose = aclose
         return mock_resp
 
+    pii_proxy.anonymize_text.cache_clear()
     monkeypatch.setattr(pii_proxy._client, "send", mock_send)
     monkeypatch.setattr(
         pii_proxy._analyzer,
         "analyze",
         lambda text, language, entities: [
             _RecognizerResult(
-                entity_type="EMAIL_ADDRESS",
-                start=text.index("alice@example.com"),
-                end=text.index("alice@example.com") + len("alice@example.com"),
+                entity_type="PASSWORD",
+                start=text.index("s3cr3t!"),
+                end=text.index("s3cr3t!") + len("s3cr3t!"),
                 score=0.95,
             )
-        ] if "alice@example.com" in text else [],
+        ] if "s3cr3t!" in text else [],
     )
 
     resp = client.post(
         "/v1/messages",
         json={"messages": [{"role": "user", "content": [
-            {"type": "text", "text": "My email is alice@example.com"},
+            {"type": "text", "text": "My password is s3cr3t!"},
             {"type": "image_url", "url": "http://example.com/img.png"},
         ]}]},
         headers={"x-api-key": "test-key"},
@@ -261,8 +361,8 @@ def test_proxy_anonymizes_list_content(monkeypatch):
 
     assert resp.status_code == 200
     sent_block = captured["body"]["messages"][0]["content"][0]
-    assert "alice@example.com" not in sent_block["text"]
-    assert "<PII:EMAIL_ADDRESS>" in sent_block["text"]
+    assert "s3cr3t!" not in sent_block["text"]
+    assert "<PII:PASSWORD>" in sent_block["text"]
     # image block 未被修改
     assert captured["body"]["messages"][0]["content"][1]["url"] == "http://example.com/img.png"
 

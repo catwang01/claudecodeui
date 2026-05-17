@@ -6,9 +6,13 @@ import hmac
 import hashlib
 import difflib
 import base64
+import codecs
 import secrets
 import logging
 import pathlib
+import time
+import asyncio
+from functools import lru_cache
 from collections import deque
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
@@ -21,7 +25,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding as crypto_padding
 from cryptography.hazmat.backends import default_backend
 from presidio_analyzer import AnalyzerEngine, EntityRecognizer, RecognizerResult
-from presidio_analyzer.nlp_engine import NlpArtifacts
+from presidio_analyzer.nlp_engine import NlpArtifacts, NlpEngineProvider
 
 # detect-secrets: 检测结构化密钥（JWT、AWS key、Basic Auth、PEM 私钥、带引号的关键词）
 try:
@@ -80,7 +84,7 @@ ENTITY_TYPES = [
     e.strip()
     for e in os.getenv(
         "PII_PROXY_ENTITIES",
-        "EMAIL_ADDRESS,PASSWORD",
+        "PASSWORD",
     ).split(",")
 ]
 
@@ -218,7 +222,11 @@ class PasswordValueRecognizer(EntityRecognizer):
         return results
 
 
-_analyzer = AnalyzerEngine()
+_nlp_engine = NlpEngineProvider(nlp_configuration={
+    "nlp_engine_name": "spacy",
+    "models": [{"lang_code": "en", "model_name": "en_core_web_sm"}],
+}).create_engine()
+_analyzer = AnalyzerEngine(nlp_engine=_nlp_engine)
 _analyzer.registry.add_recognizer(PasswordValueRecognizer())
 
 
@@ -245,11 +253,21 @@ def _scan_secrets(text: str) -> List[RecognizerResult]:
     return results
 
 
+_PASSWORD_HINT_RE = re.compile(
+    r"password|passwd|pwd|pass|secret|api[_\-]?key|auth[_\-]?token|access[_\-]?token|"
+    r"private[_\-]?key|db[_\-]?pass|密码|口令|暗语",
+    re.IGNORECASE,
+)
+
+@lru_cache(maxsize=512)
 def anonymize_text(text: str) -> str:
     if not text or not text.strip():
         return text
-    results = _analyzer.analyze(text=text, language="en", entities=ENTITY_TYPES)
-    results += _scan_secrets(text)
+    # detect-secrets runs unconditionally (JWT/AWS key/PEM have no password keywords)
+    results = _scan_secrets(text)
+    # presidio NLP: skip if no password-related keywords present
+    if _PASSWORD_HINT_RE.search(text):
+        results += _analyzer.analyze(text=text, language="en", entities=ENTITY_TYPES)
     if not results:
         return text
     # 去除重叠 span（同起点保留高分，不同起点跳过被覆盖的）
@@ -288,8 +306,9 @@ def deanonymize_text(text: str, req_id: str = "", label: str = "") -> str:
     return result
 
 
-def _anonymize_messages(messages: list, req_id: str = "") -> list:
+def _anonymize_messages(messages: list, req_id: str = "") -> tuple:
     out = []
+    modified = False
     for i, msg in enumerate(messages):
         msg = dict(msg)
         role = msg.get("role", "?")
@@ -298,8 +317,10 @@ def _anonymize_messages(messages: list, req_id: str = "") -> list:
         if isinstance(content, str):
             before = content
             msg["content"] = anonymize_text(content)
-            if req_id:
-                _log_diff(req_id, label, before, msg["content"])
+            if msg["content"] != before:
+                modified = True
+                if req_id:
+                    _log_diff(req_id, label, before, msg["content"])
         elif isinstance(content, list):
             new_blocks = []
             for j, block in enumerate(content):
@@ -307,8 +328,10 @@ def _anonymize_messages(messages: list, req_id: str = "") -> list:
                 if block.get("type") == "text" and isinstance(block.get("text"), str):
                     before = block["text"]
                     block["text"] = anonymize_text(block["text"])
-                    if req_id:
-                        _log_diff(req_id, f"{label}/text[{j}]", before, block["text"])
+                    if block["text"] != before:
+                        modified = True
+                        if req_id:
+                            _log_diff(req_id, f"{label}/text[{j}]", before, block["text"])
                 elif block.get("type") == "tool_result" and isinstance(block.get("content"), list):
                     new_content = []
                     for k, b in enumerate(block["content"]):
@@ -316,14 +339,16 @@ def _anonymize_messages(messages: list, req_id: str = "") -> list:
                         if b.get("type") == "text" and isinstance(b.get("text"), str):
                             before = b["text"]
                             b["text"] = anonymize_text(b["text"])
-                            if req_id:
-                                _log_diff(req_id, f"{label}/tool_result[{j}]/text[{k}]", before, b["text"])
+                            if b["text"] != before:
+                                modified = True
+                                if req_id:
+                                    _log_diff(req_id, f"{label}/tool_result[{j}]/text[{k}]", before, b["text"])
                         new_content.append(b)
                     block["content"] = new_content
                 new_blocks.append(block)
             msg["content"] = new_blocks
         out.append(msg)
-    return out
+    return out, modified
 
 
 def _deanonymize_obj(obj, req_id: str = "", path: str = "response"):
@@ -340,7 +365,7 @@ def _deanonymize_obj(obj, req_id: str = "", path: str = "response"):
 # ---------------------------------------------------------------------------
 
 _client = httpx.AsyncClient(
-    timeout=httpx.Timeout(connect=10.0, read=None, write=None, pool=None),
+    timeout=httpx.Timeout(connect=30.0, read=None, write=None, pool=None),
     follow_redirects=True,
 )
 
@@ -373,50 +398,90 @@ async def clear_logs():
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 async def proxy(request: Request, path: str):
+    _t0 = time.monotonic()
     body = await request.body()
     req_id = uuid.uuid4().hex[:8]
 
     # Anonymize PII in POST /v1/messages
+    _t_anon = time.monotonic()
     if request.method == "POST" and path == "v1/messages":
         try:
             data = json.loads(body)
             modified = False
+            loop = asyncio.get_running_loop()
             if "messages" in data:
-                data["messages"] = _anonymize_messages(data["messages"], req_id=req_id)
-                modified = True
+                data["messages"], msg_modified = await loop.run_in_executor(
+                    None, _anonymize_messages, data["messages"], req_id
+                )
+                modified = modified or msg_modified
             if isinstance(data.get("system"), str):
                 before = data["system"]
-                data["system"] = anonymize_text(data["system"])
-                _log_diff(req_id, "system", before, data["system"])
-                modified = True
+                data["system"] = await loop.run_in_executor(None, anonymize_text, before)
+                if data["system"] != before:
+                    _log_diff(req_id, "system", before, data["system"])
+                    modified = True
             if modified:
                 body = json.dumps(data).encode()
         except Exception as exc:
             logger.warning("Failed to anonymize request: %s", exc)
+    _anon_ms = (time.monotonic() - _t_anon) * 1000
 
     fwd_headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP}
     upstream_url = f"{UPSTREAM_URL}/{path}"
     if request.url.query:
         upstream_url += f"?{request.url.query}"
 
-    req = _client.build_request(
-        method=request.method,
-        url=upstream_url,
-        headers=fwd_headers,
-        content=body,
-    )
-    upstream_resp = await _client.send(req, stream=True)
+    last_exc = None
+    for attempt in range(4):
+        if attempt:
+            wait = 2 ** (attempt - 1)  # 1s, 2s, 4s
+            logger.warning("[%s] retry %d/3 after %.0fs (reason: %s)", req_id, attempt, wait, last_exc)
+            await asyncio.sleep(wait)
+        req = _client.build_request(
+            method=request.method,
+            url=upstream_url,
+            headers=fwd_headers,
+            content=body,
+        )
+        try:
+            upstream_resp = await _client.send(req, stream=True)
+            break
+        except httpx.TransportError as exc:
+            last_exc = exc
+    else:
+        raise last_exc
 
     content_type = upstream_resp.headers.get("content-type", "")
     resp_headers = {k: v for k, v in upstream_resp.headers.items() if k.lower() not in _HOP_BY_HOP}
 
-    # SSE: stream through directly (no deanonymize — by design)
+    # SSE: stream with deanonymize, buffering across chunk boundaries
     if "text/event-stream" in content_type:
+        _ttfb = time.monotonic() - _t0
+        logger.info("[%s] %s %s → %d (SSE) anon=%.0fms ttfb=%.3fs", req_id, request.method, path, upstream_resp.status_code, _anon_ms, _ttfb)
         async def _stream():
+            raw_buf = bytearray()
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            text_buf = ""
             try:
                 async for chunk in upstream_resp.aiter_bytes():
-                    yield chunk
+                    raw_buf += chunk
+                    # Decode only complete UTF-8 sequences; incomplete tail stays in raw_buf
+                    decoded = decoder.decode(chunk, final=False)
+                    text_buf += decoded
+                    last_open = text_buf.rfind("<PII:")
+                    if last_open != -1 and "</PII>" not in text_buf[last_open:]:
+                        # Incomplete PII tag — hold it back
+                        safe, text_buf = text_buf[:last_open], text_buf[last_open:]
+                    else:
+                        safe, text_buf = text_buf, ""
+                    if safe:
+                        yield deanonymize_text(safe).encode("utf-8")
             finally:
+                # Flush remaining with final=True to emit any replacement chars
+                tail = decoder.decode(b"", final=True)
+                text_buf += tail
+                if text_buf:
+                    yield deanonymize_text(text_buf).encode("utf-8")
                 await upstream_resp.aclose()
         return StreamingResponse(_stream(), status_code=upstream_resp.status_code, headers=resp_headers)
 
@@ -433,6 +498,7 @@ async def proxy(request: Request, path: str):
                 logger.warning("Failed to deanonymize response: %s", exc)
     finally:
         await upstream_resp.aclose()
+    logger.info("[%s] %s %s → %d anon=%.0fms total=%.3fs", req_id, request.method, path, upstream_resp.status_code, _anon_ms, time.monotonic() - _t0)
     resp_headers["content-length"] = str(len(resp_body))
     return Response(
         content=resp_body,
