@@ -99,10 +99,11 @@ export const api = {
     authenticatedFetch(`/api/projects/${projectName}${force ? '?force=true' : ''}`, {
       method: 'DELETE',
     }),
-  searchConversationsUrl: (query, limit = 50) => {
+  searchConversationsUrl: (query, limit = 50, excludePatterns = []) => {
     const token = localStorage.getItem('auth-token');
     const params = new URLSearchParams({ q: query, limit: String(limit) });
     if (token) params.set('token', token);
+    for (const p of excludePatterns) params.append('exclude', p);
     return `/api/search/conversations?${params.toString()}`;
   },
   createProject: (path) =>

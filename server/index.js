@@ -768,6 +768,11 @@ app.get('/api/search/conversations', authenticateToken, async (req, res) => {
     const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
     const parsedLimit = Number.parseInt(String(req.query.limit), 10);
     const limit = Number.isNaN(parsedLimit) ? 50 : Math.max(1, Math.min(parsedLimit, 100));
+    const excludePatterns = Array.isArray(req.query.exclude)
+        ? req.query.exclude.filter((p) => typeof p === 'string' && p.trim())
+        : typeof req.query.exclude === 'string' && req.query.exclude.trim()
+          ? [req.query.exclude]
+          : [];
 
     if (query.length < 2) {
         return res.status(400).json({ error: 'Query must be at least 2 characters' });
@@ -792,7 +797,7 @@ app.get('/api/search/conversations', authenticateToken, async (req, res) => {
             } else {
                 res.write(`event: progress\ndata: ${JSON.stringify({ totalMatches, scannedProjects, totalProjects })}\n\n`);
             }
-        }, abortController.signal);
+        }, abortController.signal, excludePatterns);
         if (!closed) {
             res.write(`event: done\ndata: {}\n\n`);
         }

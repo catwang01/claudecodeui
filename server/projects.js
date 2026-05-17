@@ -2057,7 +2057,7 @@ async function deleteCodexSession(sessionId) {
   }
 }
 
-async function searchConversations(query, limit = 50, onProjectResult = null, signal = null) {
+async function searchConversations(query, limit = 50, onProjectResult = null, signal = null, excludePatterns = []) {
   const safeQuery = typeof query === 'string' ? query.trim() : '';
   const safeLimit = Math.max(1, Math.min(Number.isFinite(limit) ? limit : 50, 200));
   const claudeDir = path.join(os.homedir(), '.claude', 'projects');
@@ -2157,6 +2157,14 @@ async function searchConversations(query, limit = 50, onProjectResult = null, si
       const projectName = projectEntry.name;
       const projectDir = path.join(claudeDir, projectName);
       const actualDir = await extractProjectDirectory(projectName).catch(() => null);
+
+      if (actualDir && excludePatterns.length > 0) {
+        const isExcluded = excludePatterns.some((pattern) => {
+          try { return new RegExp(pattern, 'i').test(actualDir); } catch { return false; }
+        });
+        if (isExcluded) { scannedProjects++; continue; }
+      }
+
       const displayName = (actualDir && projectsDb.getProjectPath(actualDir)?.custom_project_name)
         || await generateDisplayName(projectName);
 

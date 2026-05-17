@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import ReactDOM from 'react-dom';
 import { FolderOpen, MessageSquare, Search, X } from 'lucide-react';
 import { api } from '../../utils/api';
+import { readProjectExcludePatterns } from '../sidebar/utils/utils';
 import type { Project, ProjectSession, SessionProvider } from '../../types/app';
 
 type Highlight = { start: number; end: number };
@@ -221,7 +222,7 @@ export default function QuickSearchOverlay({ projects, onSessionSelect, onProjec
       debounceRef.current = setTimeout(() => {
         if (seq !== searchSeqRef.current) return;
 
-        const url = api.searchConversationsUrl(trimmed, 20);
+        const url = api.searchConversationsUrl(trimmed, 20, readProjectExcludePatterns());
         const es = new EventSource(url);
         eventSourceRef.current = es;
 
@@ -246,6 +247,10 @@ export default function QuickSearchOverlay({ projects, onSessionSelect, onProjec
                 }[];
               };
             };
+            const isExcluded = !projectsRef.current.some(
+              (p) => p.name === data.projectResult.projectName,
+            );
+            if (isExcluded) return;
             for (const s of data.projectResult.sessions) {
               if (!seenIds.has(s.sessionId)) {
                 seenIds.add(s.sessionId);
