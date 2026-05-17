@@ -317,6 +317,21 @@ export function useChatRealtimeHandlers({
             setTimeout(() => window.refreshProjects?.(), 500);
           }
         }
+
+        // Reconcile with server to catch any messages the WebSocket may have missed.
+        // Delay 500ms to allow the backend JSONL to finish writing.
+        if (sid) {
+          const lastId = sessionStore.getLastMessageId(sid);
+          if (lastId) {
+            setTimeout(() => {
+              sessionStore.fetchIncremental(sid, lastId, {
+                provider,
+                projectName: selectedProject?.name,
+                projectPath: selectedProject?.fullPath || selectedProject?.path || '',
+              });
+            }, 500);
+          }
+        }
         break;
       }
 

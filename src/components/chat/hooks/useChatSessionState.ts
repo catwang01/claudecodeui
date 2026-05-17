@@ -488,29 +488,46 @@ export function useChatSessionState({
 
     lastLoadedSessionKeyRef.current = sessionKey;
 
-    // Clear stale messages before fetching so no previous session's messages are visible
-    // during the loading window. This must happen before setIsLoadingSessionMessages so
-    // the cleared empty array and loading=true state batch into the same React render.
-    sessionStore.clearSlot(selectedSession.id);
+    const cachedLastId = sessionStore.getLastMessageId(selectedSession.id);
+    if (cachedLastId) {
+      // We have cached messages — do incremental fetch to append only new messages.
+      setIsLoadingSessionMessages(true);
+      sessionStore.fetchIncremental(selectedSession.id, cachedLastId, {
+        provider: (selectedSession.__provider || provider) as SessionProvider,
+        projectName: selectedProject.name,
+        projectPath: selectedProject.fullPath || selectedProject.path || '',
+      }).then(slot => {
+        if (slot) {
+          setHasMoreMessages(slot.hasMore);
+          setTotalMessages(slot.total);
+        }
+        setIsLoadingSessionMessages(false);
+      }).catch(() => {
+        setIsLoadingSessionMessages(false);
+      });
+    } else {
+      // No cache — clear and do a full fetch.
+      sessionStore.clearSlot(selectedSession.id);
 
-    // Fetch from server → store updates → chatMessages re-derives automatically
-    setIsLoadingSessionMessages(true);
-    sessionStore.fetchFromServer(selectedSession.id, {
-      provider: (selectedSession.__provider || provider) as SessionProvider,
-      projectName: selectedProject.name,
-      projectPath: selectedProject.fullPath || selectedProject.path || '',
-      limit: MESSAGES_PER_PAGE,
-      offset: 0,
-    }).then(slot => {
-      if (slot) {
-        setHasMoreMessages(slot.hasMore);
-        setTotalMessages(slot.total);
-        if (slot.tokenUsage) setTokenBudget(slot.tokenUsage as Record<string, unknown>);
-      }
-      setIsLoadingSessionMessages(false);
-    }).catch(() => {
-      setIsLoadingSessionMessages(false);
-    });
+      // Fetch from server → store updates → chatMessages re-derives automatically
+      setIsLoadingSessionMessages(true);
+      sessionStore.fetchFromServer(selectedSession.id, {
+        provider: (selectedSession.__provider || provider) as SessionProvider,
+        projectName: selectedProject.name,
+        projectPath: selectedProject.fullPath || selectedProject.path || '',
+        limit: MESSAGES_PER_PAGE,
+        offset: 0,
+      }).then(slot => {
+        if (slot) {
+          setHasMoreMessages(slot.hasMore);
+          setTotalMessages(slot.total);
+          if (slot.tokenUsage) setTokenBudget(slot.tokenUsage as Record<string, unknown>);
+        }
+        setIsLoadingSessionMessages(false);
+      }).catch(() => {
+        setIsLoadingSessionMessages(false);
+      });
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     pendingViewSessionRef,

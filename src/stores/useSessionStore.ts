@@ -11,7 +11,7 @@
  * WebSocket calls (appendWsMessage) dedup-append to the array.
  */
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SessionProvider } from '../types/app';
 import { authenticatedFetch } from '../utils/api';
 import { logger } from '../utils/logger';
@@ -92,6 +92,8 @@ export interface SessionSlot {
   hasMore: boolean;
   offset: number;
   tokenUsage: unknown;
+  /** Timestamp of last user access — used for sessionStorage cache eviction. */
+  lastAccessedAt: number;
 }
 
 const EMPTY: NormalizedMessage[] = [];
@@ -105,12 +107,39 @@ function createEmptySlot(): SessionSlot {
     hasMore: false,
     offset: 0,
     tokenUsage: null,
+    lastAccessedAt: 0,
   };
 }
 
 // ─── Stale threshold ─────────────────────────────────────────────────────────
 
 const STALE_THRESHOLD_MS = 30_000;
+
+// ─── sessionStorage cache ─────────────────────────────────────────────────────
+
+const SS_PREFIX = 'session_msgs_';
+
+interface SsCacheEntry {
+  messages: NormalizedMessage[];
+  total: number;
+  lastAccessedAt: number;
+}
+
+function ssRead(sessionId: string): SsCacheEntry | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = sessionStorage.getItem(SS_PREFIX + sessionId);
+    return raw ? (JSON.parse(raw) as SsCacheEntry) : null;
+  } catch { return null; }
+}
+
+function ssWrite(sessionId: string, messages: NormalizedMessage[], total: number): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const entry: SsCacheEntry = { messages, total, lastAccessedAt: Date.now() };
+    sessionStorage.setItem(SS_PREFIX + sessionId, JSON.stringify(entry));
+  } catch { /* QuotaExceededError: ignore */ }
+}
 
 /**
  * Pure helper: determine whether a refresh actually changed anything worth re-rendering.
@@ -162,7 +191,21 @@ export function useSessionStore() {
   const getSlot = useCallback((sessionId: string): SessionSlot => {
     const store = storeRef.current;
     if (!store.has(sessionId)) {
-      store.set(sessionId, createEmptySlot());
+      const cached = ssRead(sessionId);
+      if (cached) {
+        store.set(sessionId, {
+          messages: cached.messages,
+          status: 'idle',
+          fetchedAt: cached.lastAccessedAt,
+          total: cached.total,
+          hasMore: false,
+          offset: cached.messages.length,
+          tokenUsage: null,
+          lastAccessedAt: cached.lastAccessedAt,
+        });
+      } else {
+        store.set(sessionId, createEmptySlot());
+      }
     }
     return store.get(sessionId)!;
   }, []);
@@ -212,10 +255,12 @@ export function useSessionStore() {
       slot.hasMore = Boolean(data.hasMore);
       slot.offset = (opts.offset ?? 0) + newMessages.length;
       slot.fetchedAt = Date.now();
+      slot.lastAccessedAt = Date.now();
       slot.status = 'idle';
       if (data.tokenUsage) {
         slot.tokenUsage = data.tokenUsage;
       }
+      ssWrite(sessionId, slot.messages, slot.total);
 
       // Guard: only re-render if this session is still the active one.
       // Stale responses for background sessions write slot data (so switching back
@@ -274,6 +319,63 @@ export function useSessionStore() {
       return slot;
     } catch (error) {
       logger.error(`[SessionStore] fetchMore failed for ${sessionId}:`, error);
+      return slot;
+    }
+  }, [getSlot, notify]);
+
+  /**
+   * Fetch only messages after the given message ID (incremental sync).
+   * Appends new messages to the existing slot without replacing them.
+   */
+  const fetchIncremental = useCallback(async (
+    sessionId: string,
+    afterId: string,
+    opts: {
+      provider?: SessionProvider;
+      projectName?: string;
+      projectPath?: string;
+    } = {},
+  ): Promise<SessionSlot> => {
+    const slot = getSlot(sessionId);
+    if (slot.status === 'loading') return slot;
+    slot.status = 'loading';
+    notify(sessionId);
+
+    try {
+      const params = new URLSearchParams();
+      if (opts.provider) params.append('provider', opts.provider);
+      if (opts.projectName) params.append('projectName', opts.projectName);
+      if (opts.projectPath) params.append('projectPath', opts.projectPath);
+      params.append('after_id', afterId);
+
+      const url = `/api/sessions/${encodeURIComponent(sessionId)}/messages?${params.toString()}`;
+      const response = await authenticatedFetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+      const data = await response.json();
+      const newMessages: NormalizedMessage[] = data.messages || [];
+
+      if (newMessages.length > 0) {
+        const extra = dedupeMessages(slot.messages, newMessages);
+        if (extra.length > 0) {
+          slot.messages = [...slot.messages, ...extra];
+        }
+      }
+      slot.total = data.total ?? slot.total;
+      slot.status = 'idle';
+      slot.lastAccessedAt = Date.now();
+      ssWrite(sessionId, slot.messages, slot.total);
+
+      if (sessionId === activeSessionIdRef.current) {
+        notify(sessionId);
+      }
+      return slot;
+    } catch (error) {
+      logger.error(`[SessionStore] fetchIncremental failed for ${sessionId}:`, error);
+      slot.status = 'error';
+      if (sessionId === activeSessionIdRef.current) {
+        notify(sessionId);
+      }
       return slot;
     }
   }, [getSlot, notify]);
@@ -452,11 +554,54 @@ export function useSessionStore() {
     return storeRef.current.get(sessionId);
   }, []);
 
+  /**
+   * Get the last non-temporary message ID in a session (for incremental fetch).
+   * Skips streaming placeholders and optimistic local_ messages.
+   */
+  const getLastMessageId = useCallback((sessionId: string): string | null => {
+    const slot = storeRef.current.get(sessionId);
+    if (!slot || slot.messages.length === 0) return null;
+    for (let i = slot.messages.length - 1; i >= 0; i--) {
+      const m = slot.messages[i];
+      if (!m.id.startsWith('__streaming_') && !m.id.startsWith('local_')) {
+        return m.id;
+      }
+    }
+    return null;
+  }, []);
+
+  // Cleanup timer: every 5 minutes, evict sessionStorage entries older than 30 minutes.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const CLEANUP_INTERVAL = 5 * 60 * 1000;
+    const STALE_AFTER = 30 * 60 * 1000;
+    const id = setInterval(() => {
+      const now = Date.now();
+      for (const key of Object.keys(sessionStorage)) {
+        if (!key.startsWith(SS_PREFIX)) continue;
+        try {
+          const data = JSON.parse(sessionStorage.getItem(key)!) as SsCacheEntry;
+          if (now - data.lastAccessedAt > STALE_AFTER) {
+            sessionStorage.removeItem(key);
+            const sid = key.slice(SS_PREFIX.length);
+            if (storeRef.current.has(sid) && activeSessionIdRef.current !== sid) {
+              storeRef.current.delete(sid);
+            }
+          }
+        } catch {
+          sessionStorage.removeItem(key);
+        }
+      }
+    }, CLEANUP_INTERVAL);
+    return () => clearInterval(id);
+  }, []);
+
   return useMemo(() => ({
     getSlot,
     has,
     fetchFromServer,
     fetchMore,
+    fetchIncremental,
     appendWsMessage,
     appendWsMessageBatch,
     refreshFromServer,
@@ -469,11 +614,12 @@ export function useSessionStore() {
     clearRealtime,
     getMessages,
     getSessionSlot,
+    getLastMessageId,
   }), [
-    getSlot, has, fetchFromServer, fetchMore,
+    getSlot, has, fetchFromServer, fetchMore, fetchIncremental,
     appendWsMessage, appendWsMessageBatch, refreshFromServer,
     setActiveSession, setStatus, isStale, updateStreaming, finalizeStreaming,
-    clearSlot, clearRealtime, getMessages, getSessionSlot,
+    clearSlot, clearRealtime, getMessages, getSessionSlot, getLastMessageId,
   ]);
 }
 

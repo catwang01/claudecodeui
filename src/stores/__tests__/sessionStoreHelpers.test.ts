@@ -203,6 +203,7 @@ describe('stale HTTP response guard — slot isolation', () => {
       hasMore: false,
       offset: 0,
       tokenUsage: null,
+      lastAccessedAt: 0,
       ...overrides,
     };
   }
