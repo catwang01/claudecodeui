@@ -296,6 +296,7 @@ export const claudeAdapter = {
         msg.toolResult = {
           content: typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content),
           isError: tr.isError,
+          timestamp: tr.timestamp,
           toolUseResult: tr.toolUseResult,
         };
         msg.subagentTools = tr.subagentTools;

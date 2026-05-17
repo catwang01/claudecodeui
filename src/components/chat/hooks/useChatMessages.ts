@@ -4,7 +4,7 @@
  */
 
 import type { NormalizedMessage } from '../../../stores/useSessionStore';
-import type { ChatMessage, SubagentChildTool } from '../types/types';
+import type { ChatMessage, SubagentChildTool, ToolResult } from '../types/types';
 import { decodeHtmlEntities, unescapeWithMathProtection, formatUsageLimitText } from '../utils/chatFormatting';
 
 /**
@@ -86,6 +86,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           ? {
               content: typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content),
               isError: Boolean(tr.isError),
+              timestamp: (tr as ToolResult).timestamp,
               toolUseResult: (tr as any).toolUseResult,
             }
           : null;

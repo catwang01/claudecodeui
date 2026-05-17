@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import type { Dispatch, RefObject, SetStateAction } from 'react';
 import type { ChatMessage } from '../../types/types';
 import type { Project, ProjectSession, SessionProvider } from '../../../../types/app';
@@ -144,6 +144,25 @@ export default function ChatMessagesPane({
     messageKeyMapRef.current.set(message, candidateKey);
     return candidateKey;
   }, []);
+
+  const replyDurationMap = useMemo(() => {
+    const map = new Map<ChatMessage, number>();
+    let pendingUserTs: number | null = null;
+    for (let i = 0; i < visibleMessages.length; i++) {
+      const msg = visibleMessages[i];
+      if (msg.type === 'user') {
+        pendingUserTs = new Date(msg.timestamp).getTime();
+      } else if (msg.type === 'assistant' && !msg.isToolUse && !msg.isStreaming && pendingUserTs !== null) {
+        const next = visibleMessages[i + 1];
+        if (!next || next.type === 'user') {
+          const duration = new Date(msg.timestamp).getTime() - pendingUserTs;
+          if (duration > 0 && duration < 600_000) map.set(msg, duration);
+          pendingUserTs = null;
+        }
+      }
+    }
+    return map;
+  }, [visibleMessages]);
 
   return (
     <div
@@ -298,6 +317,7 @@ export default function ChatMessagesPane({
                   showSubAgentInput={showSubAgentInput}
                   selectedProject={selectedProject}
                   provider={provider}
+                  replyDuration={replyDurationMap.get(message)}
                 />
                 {showForkSeparator && ts && (
                   <div className="relative my-1 flex items-center px-3 sm:px-0">

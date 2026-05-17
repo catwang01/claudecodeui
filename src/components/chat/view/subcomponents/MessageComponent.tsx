@@ -34,6 +34,7 @@ type MessageComponentProps = {
   showSubAgentInput?: boolean;
   selectedProject?: Project | null;
   provider: Provider | string;
+  replyDuration?: number;
 };
 
 type InteractiveOption = {
@@ -44,8 +45,9 @@ type InteractiveOption = {
 
 type PermissionGrantState = 'idle' | 'granted' | 'error';
 const COPY_HIDDEN_TOOL_NAMES = new Set(['Bash', 'Edit', 'Write', 'ApplyPatch']);
+const formatDuration = (ms: number): string => ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
 
-const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, showSubAgentInput, selectedProject, provider }: MessageComponentProps) => {
+const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, showSubAgentInput, selectedProject, provider, replyDuration }: MessageComponentProps) => {
   const { t } = useTranslation('chat');
   const isGrouped = prevMessage && prevMessage.type === message.type &&
     ((prevMessage.type === 'assistant') ||
@@ -104,6 +106,13 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
   }, [autoExpandTools, isExpanded, message.isToolUse]);
 
   const formattedTime = useMemo(() => new Date(message.timestamp).toLocaleTimeString(), [message.timestamp]);
+  const toolDuration = useMemo(() => {
+    if (!message.isToolUse || !message.toolResult?.timestamp) return null;
+    const start = new Date(message.timestamp).getTime();
+    const end = new Date(message.toolResult.timestamp as string | number | Date).getTime();
+    const ms = end - start;
+    return ms > 0 && ms < 600_000 ? ms : null;
+  }, [message.isToolUse, message.toolResult?.timestamp, message.timestamp]);
   const shouldHideThinkingMessage = Boolean(message.isThinking && !showThinking);
   const shouldHideSubAgentInput = Boolean(message.isSubAgentInput && !showSubAgentInput);
 
@@ -303,6 +312,9 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                     </div>
                   )
                 )}
+                {toolDuration !== null && (
+                  <div className="mt-1 text-[11px] text-gray-400 dark:text-gray-500">⏱ {formatDuration(toolDuration)}</div>
+                )}
               </>
             ) : message.isInteractivePrompt ? (
               // Special handling for interactive prompts
@@ -465,12 +477,15 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
               </div>
             )}
 
-            {(shouldShowAssistantCopyControl || !isGrouped) && (
+            {(shouldShowAssistantCopyControl || !isGrouped || replyDuration !== undefined) && (
               <div className="mt-1 flex w-full items-center gap-2 text-[11px] text-gray-400 dark:text-gray-500">
                 {shouldShowAssistantCopyControl && (
                   <MessageCopyControl content={assistantCopyContent} messageType="assistant" />
                 )}
                 {!isGrouped && <span>{formattedTime}</span>}
+                {replyDuration !== undefined && (
+                  <span className="text-gray-300 dark:text-gray-600">· ⏱ {formatDuration(replyDuration)}</span>
+                )}
               </div>
             )}
           </div>
