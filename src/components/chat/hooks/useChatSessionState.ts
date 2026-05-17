@@ -225,7 +225,7 @@ export function useChatSessionState({
       if (sessionCreationTimeoutRef.current) clearTimeout(sessionCreationTimeoutRef.current);
       sessionCreationTimeoutRef.current = setTimeout(() => {
         setSessionCreationError('Session creation timed out. Please try again.');
-      }, 30000);
+      }, 60000);
       return;
     }
     const prov = (localStorage.getItem('selected-provider') as SessionProvider) || 'claude';
