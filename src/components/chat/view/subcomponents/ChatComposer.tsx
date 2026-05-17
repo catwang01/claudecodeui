@@ -98,6 +98,9 @@ interface ChatComposerProps {
   onVoiceToggle: () => void;
   sessionId?: string | null;
   sessionTitle?: string | null;
+  currentModel?: string;
+  modelOptions?: { value: string; label: string }[];
+  onModelChange?: (model: string) => void;
 }
 
 export default function ChatComposer({
@@ -164,6 +167,9 @@ export default function ChatComposer({
   onVoiceToggle,
   sessionId,
   sessionTitle,
+  currentModel,
+  modelOptions,
+  onModelChange,
 }: ChatComposerProps) {
   const { t } = useTranslation('chat');
   const textareaRect = textareaRef.current?.getBoundingClientRect();
@@ -224,6 +230,9 @@ export default function ChatComposer({
           onVoiceToggle={onVoiceToggle}
           sessionId={sessionId}
           sessionTitle={sessionTitle}
+          currentModel={currentModel}
+          modelOptions={modelOptions}
+          onModelChange={onModelChange}
         />}
       </div>
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Radio } from 'lucide-react';
+import { ChevronDown, Radio } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { PermissionMode, Provider } from '../../types/types';
 import type { VoiceStatus } from '../../../../contexts/VoiceConversationContext';
@@ -27,6 +27,9 @@ interface ChatInputControlsProps {
   onVoiceToggle: () => void;
   sessionId?: string | null;
   sessionTitle?: string | null;
+  currentModel?: string;
+  modelOptions?: { value: string; label: string }[];
+  onModelChange?: (model: string) => void;
 }
 
 export default function ChatInputControls({
@@ -49,6 +52,9 @@ export default function ChatInputControls({
   onVoiceToggle,
   sessionId,
   sessionTitle,
+  currentModel,
+  modelOptions,
+  onModelChange,
 }: ChatInputControlsProps) {
   const { t } = useTranslation('chat');
 
@@ -129,6 +135,21 @@ export default function ChatInputControls({
 
       {provider === 'claude' && (
         <ThinkingModeSelector selectedMode={thinkingMode} onModeChange={setThinkingMode} onClose={() => {}} className="" />
+      )}
+
+      {modelOptions && modelOptions.length > 0 && onModelChange && (
+        <div className="relative">
+          <select
+            value={currentModel}
+            onChange={(e) => onModelChange(e.target.value)}
+            className="cursor-pointer appearance-none rounded-lg border border-border/60 bg-muted/50 py-1 pl-2.5 pr-6 text-xs font-medium text-foreground transition-colors hover:bg-muted focus:outline-none focus:ring-2 focus:ring-primary/20 sm:py-1.5 sm:pl-3 sm:pr-7 sm:text-sm"
+          >
+            {modelOptions.map(({ value, label }) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </select>
+          <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground sm:right-2" />
+        </div>
       )}
 
       <TokenUsagePie used={tokenBudget?.used || 0} total={tokenBudget?.total || parseInt(import.meta.env.VITE_CONTEXT_WINDOW) || 160000} />

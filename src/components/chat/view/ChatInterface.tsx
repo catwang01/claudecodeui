@@ -8,6 +8,7 @@ import { useChatProviderState } from '../hooks/useChatProviderState';
 import { useChatSessionState } from '../hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
+import { CLAUDE_MODELS, CURSOR_MODELS, CODEX_MODELS, GEMINI_MODELS } from '../../../../shared/modelConstants';
 import { useSessionStore } from '../../../stores/useSessionStore';
 import { useWebSocket } from '../../../contexts/WebSocketContext';
 import { api } from '../../../utils/api';
@@ -549,6 +550,22 @@ function ChatInterface({
           onVoiceToggle={toggleVoice}
           sessionId={selectedSession?.id ?? null}
           sessionTitle={selectedSession?.title ?? selectedSession?.summary ?? null}
+          currentModel={
+            provider === 'claude' ? claudeModel :
+            provider === 'cursor' ? cursorModel :
+            provider === 'codex' ? codexModel : geminiModel
+          }
+          modelOptions={
+            provider === 'claude' ? CLAUDE_MODELS.OPTIONS :
+            provider === 'cursor' ? CURSOR_MODELS.OPTIONS :
+            provider === 'codex' ? CODEX_MODELS.OPTIONS : GEMINI_MODELS.OPTIONS
+          }
+          onModelChange={(value) => {
+            if (provider === 'claude') { setClaudeModel(value); localStorage.setItem('claude-model', value); }
+            else if (provider === 'cursor') { setCursorModel(value); localStorage.setItem('cursor-model', value); }
+            else if (provider === 'codex') { setCodexModel(value); localStorage.setItem('codex-model', value); }
+            else { setGeminiModel(value); localStorage.setItem('gemini-model', value); }
+          }}
         />
       </div>
 
