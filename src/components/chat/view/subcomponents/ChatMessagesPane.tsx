@@ -148,17 +148,27 @@ export default function ChatMessagesPane({
   const replyDurationMap = useMemo(() => {
     const map = new Map<ChatMessage, number>();
     let pendingUserTs: number | null = null;
+    let prevTs: number | null = null;
     for (let i = 0; i < visibleMessages.length; i++) {
       const msg = visibleMessages[i];
+      const msgTs = new Date(msg.timestamp).getTime();
       if (msg.type === 'user') {
-        pendingUserTs = new Date(msg.timestamp).getTime();
+        pendingUserTs = msgTs;
+        prevTs = msgTs;
       } else if (msg.type === 'assistant' && !msg.isToolUse && !msg.isStreaming && pendingUserTs !== null) {
         const next = visibleMessages[i + 1];
-        if (!next || next.type === 'user') {
-          const duration = new Date(msg.timestamp).getTime() - pendingUserTs;
+        const isLastInTurn = !next || next.type === 'user';
+        if (isLastInTurn) {
+          const duration = msgTs - pendingUserTs;
           if (duration > 0 && duration < 600_000) map.set(msg, duration);
           pendingUserTs = null;
+        } else if (prevTs !== null) {
+          const duration = msgTs - prevTs;
+          if (duration > 0 && duration < 600_000) map.set(msg, duration);
         }
+        prevTs = msgTs;
+      } else {
+        prevTs = new Date(msg.timestamp).getTime();
       }
     }
     return map;
