@@ -12,10 +12,10 @@ function GitHubIcon({ className }: { className?: string }) {
   );
 }
 
-export default function GitHubStarBadge() {
+export default function GitHubStarBadge({ hidden = false }: { hidden?: boolean }) {
   const { formattedCount, isDismissed, dismiss } = useGitHubStars('siteboon', 'claudecodeui');
 
-  if (IS_PLATFORM || isDismissed) return null;
+  if (IS_PLATFORM || isDismissed || hidden) return null;
 
   return (
     <div className="group/star relative hidden md:block">

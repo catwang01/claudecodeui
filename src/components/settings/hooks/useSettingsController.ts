@@ -88,6 +88,7 @@ type ClaudeSettingsStorage = {
   projectSortOrder?: ProjectSortOrder;
   projectExcludePatterns?: string[];
   recentsTagLimit?: number;
+  cleanMode?: boolean;
 };
 
 type CursorSettingsStorage = {
@@ -209,6 +210,7 @@ export function useSettingsController({ isOpen, initialTab, projects, onClose }:
   const [projectSortOrder, setProjectSortOrder] = useState<ProjectSortOrder>('name');
   const [projectExcludePatterns, setProjectExcludePatterns] = useState<string[]>([]);
   const [recentsTagLimit, setRecentsTagLimit] = useState<number>(10);
+  const [cleanMode, setCleanMode] = useState<boolean>(false);
   const [codeEditorSettings, setCodeEditorSettings] = useState<CodeEditorSettingsState>(
     DEFAULT_CODE_EDITOR_SETTINGS
   );
@@ -693,6 +695,7 @@ export function useSettingsController({ isOpen, initialTab, projects, onClose }:
       setProjectExcludePatterns(Array.isArray(claudeData?.projectExcludePatterns) ? claudeData.projectExcludePatterns : []);
       const tagLimit = claudeData?.recentsTagLimit;
       setRecentsTagLimit(typeof tagLimit === 'number' && tagLimit > 0 ? tagLimit : 10);
+      setCleanMode(claudeData?.cleanMode === true);
 
       const cursorData = await fetchPref<CursorSettingsStorage>('cursor-tools-settings', 'cursor-tools-settings');
       setCursorPermissions({
@@ -809,6 +812,7 @@ export function useSettingsController({ isOpen, initialTab, projects, onClose }:
           projectSortOrder,
           projectExcludePatterns,
           recentsTagLimit,
+          cleanMode,
         }),
         savePref('cursor-tools-settings', {
           allowedCommands: cursorPermissions.allowedCommands,
@@ -843,6 +847,7 @@ export function useSettingsController({ isOpen, initialTab, projects, onClose }:
     projectSortOrder,
     projectExcludePatterns,
     recentsTagLimit,
+    cleanMode,
   ]);
 
   const updateCodeEditorSetting = useCallback(
@@ -956,6 +961,8 @@ export function useSettingsController({ isOpen, initialTab, projects, onClose }:
     setProjectExcludePatterns,
     recentsTagLimit,
     setRecentsTagLimit,
+    cleanMode,
+    setCleanMode,
     codeEditorSettings,
     updateCodeEditorSetting,
     claudePermissions,

@@ -15,6 +15,8 @@ type AppearanceSettingsTabProps = {
   onProjectExcludePatternsChange: (value: string[]) => void;
   recentsTagLimit: number;
   onRecentsTagLimitChange: (value: number) => void;
+  cleanMode: boolean;
+  onCleanModeChange: (value: boolean) => void;
   codeEditorSettings: CodeEditorSettingsState;
   onCodeEditorThemeChange: (value: 'dark' | 'light') => void;
   onCodeEditorWordWrapChange: (value: boolean) => void;
@@ -30,6 +32,8 @@ export default function AppearanceSettingsTab({
   onProjectExcludePatternsChange,
   recentsTagLimit,
   onRecentsTagLimitChange,
+  cleanMode,
+  onCleanModeChange,
   codeEditorSettings,
   onCodeEditorThemeChange,
   onCodeEditorWordWrapChange,
@@ -73,6 +77,21 @@ export default function AppearanceSettingsTab({
             description={t('appearanceSettings.darkMode.description')}
           >
             <DarkModeToggle ariaLabel={t('appearanceSettings.darkMode.label')} />
+          </SettingsRow>
+        </SettingsCard>
+      </SettingsSection>
+
+      <SettingsSection title="Clean Mode">
+        <SettingsCard>
+          <SettingsRow
+            label="Clean Mode"
+            description="Hide update notifications, GitHub star badge, and community links from the sidebar."
+          >
+            <SettingsToggle
+              checked={cleanMode}
+              onChange={onCleanModeChange}
+              ariaLabel="Clean Mode"
+            />
           </SettingsRow>
         </SettingsCard>
       </SettingsSection>

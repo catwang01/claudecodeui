@@ -23,6 +23,7 @@ type SidebarFooterProps = {
   currentVersion: string;
   onShowVersionModal: () => void;
   onShowSettings: () => void;
+  cleanMode?: boolean;
   t: TFunction;
 };
 
@@ -33,12 +34,13 @@ export default function SidebarFooter({
   currentVersion,
   onShowVersionModal,
   onShowSettings,
+  cleanMode = false,
   t,
 }: SidebarFooterProps) {
   return (
     <div className="flex-shrink-0" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0)' }}>
       {/* Update banner */}
-      {updateAvailable && (
+      {updateAvailable && !cleanMode && (
         <>
           <div className="nav-divider" />
           {/* Desktop update */}
@@ -102,6 +104,7 @@ export default function SidebarFooter({
       </div>
 
       {/* Desktop Discord */}
+      {!cleanMode && (
       <div className="hidden px-2 md:block">
         <a
           href={DISCORD_INVITE_URL}
@@ -113,6 +116,7 @@ export default function SidebarFooter({
           <span className="text-sm">{t('actions.joinCommunity')}</span>
         </a>
       </div>
+      )}
 
       {/* Desktop settings */}
       <div className="hidden px-2 py-1.5 md:block">
@@ -155,6 +159,7 @@ export default function SidebarFooter({
       </div>
 
       {/* Mobile Discord */}
+      {!cleanMode && (
       <div className="px-3 pt-2 md:hidden">
         <a
           href={DISCORD_INVITE_URL}
@@ -168,6 +173,7 @@ export default function SidebarFooter({
           <span className="text-base font-medium text-foreground">{t('actions.joinCommunity')}</span>
         </a>
       </div>
+      )}
 
       {/* Mobile settings */}
       <div className="px-3 pb-3 pt-2 md:hidden">

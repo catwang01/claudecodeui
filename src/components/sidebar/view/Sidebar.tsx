@@ -84,6 +84,7 @@ function Sidebar({
     showVersionModal,
     filteredProjects,
     recentsTagLimit,
+    cleanMode,
     toggleProject,
     handleSessionClick,
     toggleStarProject,
@@ -321,6 +322,7 @@ function Sidebar({
             scrollToProjectToken={scrollToProjectToken}
             scrollToProjectName={scrollToProjectName}
             recentsTagLimit={recentsTagLimit}
+            cleanMode={cleanMode}
             t={t}
           />
         </>

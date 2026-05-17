@@ -21,6 +21,7 @@ type SidebarHeaderProps = {
   isRefreshing: boolean;
   onCreateProject: () => void;
   onCollapseSidebar: () => void;
+  cleanMode?: boolean;
   t: TFunction;
 };
 
@@ -38,6 +39,7 @@ export default function SidebarHeader({
   isRefreshing,
   onCreateProject,
   onCollapseSidebar,
+  cleanMode = false,
   t,
 }: SidebarHeaderProps) {
   const LogoBlock = () => (
@@ -107,7 +109,7 @@ export default function SidebarHeader({
           </div>
         </div>
 
-        <GitHubStarBadge />
+        <GitHubStarBadge hidden={cleanMode} />
 
         {/* Search bar */}
         {projectsCount > 0 && !isLoading && (

@@ -50,6 +50,17 @@ export const readRecentsTagLimit = (): number => {
   }
 };
 
+export const readCleanMode = (): boolean => {
+  try {
+    const rawSettings = localStorage.getItem('claude-settings');
+    if (!rawSettings) return false;
+    const settings = JSON.parse(rawSettings) as { cleanMode?: boolean };
+    return settings.cleanMode === true;
+  } catch {
+    return false;
+  }
+};
+
 export const loadStarredProjects = (): Set<string> => {
   try {
     const saved = localStorage.getItem('starredProjects');

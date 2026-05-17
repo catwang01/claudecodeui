@@ -66,6 +66,7 @@ type SidebarContentProps = {
   scrollToProjectToken?: number;
   scrollToProjectName?: string | null;
   recentsTagLimit?: number;
+  cleanMode?: boolean;
   t: TFunction;
 };
 
@@ -97,6 +98,7 @@ export default function SidebarContent({
   scrollToProjectToken = 0,
   scrollToProjectName = null,
   recentsTagLimit = 10,
+  cleanMode = false,
   t,
 }: SidebarContentProps) {
   const showConversationSearch = (searchMode === 'conversations' || searchMode === 'recent') && searchFilter.trim().length >= 2;
@@ -245,6 +247,7 @@ export default function SidebarContent({
         isRefreshing={isRefreshing}
         onCreateProject={onCreateProject}
         onCollapseSidebar={onCollapseSidebar}
+        cleanMode={cleanMode}
         t={t}
       />
 
@@ -423,6 +426,7 @@ export default function SidebarContent({
         currentVersion={currentVersion}
         onShowVersionModal={onShowVersionModal}
         onShowSettings={onShowSettings}
+        cleanMode={cleanMode}
         t={t}
       />
     </div>

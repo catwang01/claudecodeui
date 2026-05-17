@@ -19,6 +19,7 @@ import {
   readProjectSortOrder,
   readProjectExcludePatterns,
   readRecentsTagLimit,
+  readCleanMode,
   DEFAULT_RECENTS_TAG_LIMIT,
   sortProjects,
 } from '../utils/utils';
@@ -106,6 +107,7 @@ export function useSidebarController({
   const [projectSortOrder, setProjectSortOrder] = useState<ProjectSortOrder>('name');
   const [projectExcludePatterns, setProjectExcludePatterns] = useState<string[]>([]);
   const [recentsTagLimit, setRecentsTagLimit] = useState<number>(DEFAULT_RECENTS_TAG_LIMIT);
+  const [cleanMode, setCleanMode] = useState<boolean>(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [projectHasMoreOverrides, setProjectHasMoreOverrides] = useState<Record<string, boolean>>({});
   const [editingSession, setEditingSession] = useState<string | null>(null);
@@ -231,6 +233,20 @@ export function useSidebarController({
 
   useEffect(() => {
     const load = () => setRecentsTagLimit(readRecentsTagLimit());
+    load();
+    const handleStorageChange = (event: StorageEvent) => {
+      if (event.key === 'claude-settings') load();
+    };
+    window.addEventListener('storage', handleStorageChange);
+    const interval = setInterval(() => { if (document.hasFocus()) load(); }, 1000);
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
+    const load = () => setCleanMode(readCleanMode());
     load();
     const handleStorageChange = (event: StorageEvent) => {
       if (event.key === 'claude-settings') load();
@@ -663,6 +679,7 @@ export function useSidebarController({
     showVersionModal,
     starredProjects,
     recentsTagLimit,
+    cleanMode,
     filteredProjects,
     toggleProject,
     handleSessionClick,

@@ -33,6 +33,8 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
     setProjectExcludePatterns,
     recentsTagLimit,
     setRecentsTagLimit,
+    cleanMode,
+    setCleanMode,
     codeEditorSettings,
     updateCodeEditorSetting,
     claudePermissions,
@@ -156,6 +158,8 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
                   onProjectExcludePatternsChange={setProjectExcludePatterns}
                   recentsTagLimit={recentsTagLimit}
                   onRecentsTagLimitChange={setRecentsTagLimit}
+                  cleanMode={cleanMode}
+                  onCleanModeChange={setCleanMode}
                   codeEditorSettings={codeEditorSettings}
                   onCodeEditorThemeChange={(value) => updateCodeEditorSetting('theme', value)}
                   onCodeEditorWordWrapChange={(value) => updateCodeEditorSetting('wordWrap', value)}
