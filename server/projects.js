@@ -331,9 +331,11 @@ function readFirstCwdFromJsonl(filePath) {
 }
 
 // Converts an absolute project path to the Claude directory name.
-// e.g. /Users/foo/myproject → Users-foo-myproject
+// Matches Claude CLI's aO() function: replace(/[^a-zA-Z0-9]/g, "-")
+// e.g. Mac:  /Users/foo/myproject   → -Users-foo-myproject
+// e.g. Win:  C:\Users\foo\myproject → C--Users-foo-myproject
 function pathToClaudeProjectName(absolutePath) {
-  return absolutePath.replace(/^\//, '').replace(/[/\\]/g, '-');
+  return absolutePath.replace(/[^a-zA-Z0-9]/g, '-');
 }
 
 // Extract the actual project directory from JSONL sessions (with caching)
@@ -346,7 +348,7 @@ async function extractProjectDirectory(projectName) {
   // Check DB for manually added projects
   try {
     const dbProjects = projectsDb.getAllProjects();
-    const match = dbProjects.find(p => p.project_path.replace(/[\\/:\s~_]/g, '-') === projectName);
+    const match = dbProjects.find(p => pathToClaudeProjectName(p.project_path) === projectName);
     if (match) {
       projectDirectoryCache.set(projectName, match.project_path);
       return match.project_path;
