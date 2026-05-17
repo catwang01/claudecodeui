@@ -379,6 +379,26 @@ export function useChatRealtimeHandlers({
       case 'status': {
         if (msg.text === 'token_budget' && msg.tokenBudget) {
           setTokenBudget(msg.tokenBudget as Record<string, unknown>);
+        } else if (msg.text === 'context_mgmt_retry') {
+          const sid = msg.sessionId || currentSessionId;
+          if (sid) {
+            sessionStore.appendWsMessage(sid, {
+              id: `context-mgmt-retry-${Date.now()}`,
+              sessionId: sid,
+              timestamp: new Date().toISOString(),
+              provider: (msg.provider as NormalizedMessage['provider']) || 'claude',
+              kind: 'text',
+              role: 'assistant',
+              content: `⟳ Context compaction failed, retrying (${msg.retryCount}/${msg.maxRetries})...`,
+            } as NormalizedMessage);
+          }
+          setClaudeStatus({
+            text: `Retrying context compaction (${msg.retryCount}/${msg.maxRetries})`,
+            tokens: 0,
+            can_interrupt: true,
+          });
+          setIsLoading(true);
+          setCanAbortSession(true);
         } else if (msg.text) {
           setClaudeStatus({
             text: msg.text,

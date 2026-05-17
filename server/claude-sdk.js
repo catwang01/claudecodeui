@@ -695,12 +695,15 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
     const STALL_TIMEOUT_MS = options.stallTimeoutMs ?? 120000;
     const MAX_STALL_RETRIES = 3;
+    const MAX_CONTEXT_MGMT_RETRIES = 3;
     let stallRetryCount = 0;
+    let contextMgmtRetryCount = 0;
 
     let _msgCount = 0;
     const pendingDownloadToolIds = new Set();
 
     while (true) {
+      let hasContextMgmtError = false;
       const abortController = new AbortController();
       const queryEnv = {
         ...sdkOptions.env,
@@ -709,7 +712,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
       };
 
       // On retry, resume the session from disk; first run uses the original prompt.
-      const isRetry = stallRetryCount > 0 && capturedSessionId;
+      const isRetry = (stallRetryCount > 0 || contextMgmtRetryCount > 0) && capturedSessionId;
       const queryOpts = {
         ...sdkOptions,
         abortController,
@@ -790,6 +793,15 @@ async function queryClaudeSDK(command, options = {}, ws) {
         if (transformedMessage.parentToolUseId && !msg.parentToolUseId) {
           msg.parentToolUseId = transformedMessage.parentToolUseId;
         }
+
+        // Detect context_management compaction failure — intercept and retry instead of showing raw error
+        if (msg.kind === 'text' && typeof msg.content === 'string' &&
+            msg.content.includes('context_management: Extra inputs are not permitted')) {
+          hasContextMgmtError = true;
+          appendMessage(capturedSessionId || sessionId || null, msg); // keep in JSONL for debug
+          continue; // don't send to frontend yet; will retry
+        }
+
         ws.send(msg);
         // Persist each stream message to local JSONL as history
         appendMessage(capturedSessionId || sessionId || null, msg);
@@ -862,6 +874,17 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
         // Non-retryable: propagate to outer catch
         throw forAwaitError;
+      }
+
+      // context_management compaction error detected in stream — retry transparently
+      if (hasContextMgmtError && contextMgmtRetryCount < MAX_CONTEXT_MGMT_RETRIES) {
+        contextMgmtRetryCount++;
+        console.warn(`[CONTEXT-MGMT-RETRY] Session ${capturedSessionId} compaction failed (Extra inputs), retry ${contextMgmtRetryCount}/${MAX_CONTEXT_MGMT_RETRIES}`);
+        ws.send(createNormalizedMessage({ kind: 'status', text: 'context_mgmt_retry', retryCount: contextMgmtRetryCount, maxRetries: MAX_CONTEXT_MGMT_RETRIES, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+        continue;
+      } else if (hasContextMgmtError) {
+        // All retries exhausted — surface the error to the user
+        ws.send(createNormalizedMessage({ kind: 'error', content: 'Context compaction failed after retries (context_management: Extra inputs are not permitted). Try /compact manually or start a new session.', sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
       }
 
       // for await completed normally — exit retry loop
