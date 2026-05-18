@@ -34,6 +34,16 @@ export function useSessionProtection() {
     setProcessingSessionsMap((prev) => new Map([...prev, [sessionId, provider]]));
   }, []);
 
+  const batchMarkSessionsAsProcessing = useCallback((entries: Array<{ sessionId: string; provider: string }>) => {
+    setProcessingSessionsMap((prev) => {
+      const next = new Map(prev);
+      for (const { sessionId, provider } of entries) {
+        if (sessionId) next.set(sessionId, provider);
+      }
+      return next;
+    });
+  }, []);
+
   const markSessionAsNotProcessing = useCallback((sessionId?: string | null) => {
     if (!sessionId) {
       return;
@@ -70,6 +80,7 @@ export function useSessionProtection() {
     markSessionAsActive,
     markSessionAsInactive,
     markSessionAsProcessing,
+    batchMarkSessionsAsProcessing,
     markSessionAsNotProcessing,
     replaceTemporarySession,
   };

@@ -28,6 +28,7 @@ export default function AppContent() {
     markSessionAsActive,
     markSessionAsInactive,
     markSessionAsProcessing,
+    batchMarkSessionsAsProcessing,
     markSessionAsNotProcessing,
     replaceTemporarySession,
   } = useSessionProtection();
@@ -122,16 +123,15 @@ export default function AppContent() {
     };
   }, [navigate, refreshProjectsSilently, setActiveTab, setSidebarOpen]);
 
-  // Permission recovery: query pending permissions on WebSocket reconnect or session change
+  // On connect/reconnect: discover already-running sessions.
   useEffect(() => {
-    const isReconnect = isConnected && !wasConnectedRef.current;
+    if (!isConnected) { wasConnectedRef.current = false; return; }
+    wasConnectedRef.current = true;
+    sendMessage({ type: 'get-active-sessions' });
+  }, [isConnected, sendMessage]);
 
-    if (isReconnect) {
-      wasConnectedRef.current = true;
-    } else if (!isConnected) {
-      wasConnectedRef.current = false;
-    }
-
+  // Permission recovery: query pending permissions on session change or reconnect.
+  useEffect(() => {
     if (isConnected && selectedSession?.id) {
       sendMessage({
         type: 'get-pending-permissions',
@@ -139,6 +139,20 @@ export default function AppContent() {
       });
     }
   }, [isConnected, selectedSession?.id, sendMessage]);
+
+  useEffect(() => {
+    if (!latestMessage || latestMessage.type !== 'active-sessions') return;
+    const sessions = latestMessage.sessions as Record<string, string[]> | undefined;
+    if (!sessions) return;
+    const entries: Array<{ sessionId: string; provider: string }> = [];
+    for (const [provider, ids] of Object.entries(sessions)) {
+      if (!Array.isArray(ids)) continue;
+      for (const sessionId of ids) {
+        if (sessionId) entries.push({ sessionId, provider });
+      }
+    }
+    if (entries.length > 0) batchMarkSessionsAsProcessing(entries);
+  }, [latestMessage, batchMarkSessionsAsProcessing]);
 
   // Poll backend every 5s for any session stuck in isProcessing state
   useEffect(() => {
