@@ -152,6 +152,10 @@ export function useChatRealtimeHandlers({
           const statusSessionId = msg.sessionId;
           if (!statusSessionId) return;
 
+          // Legacy isProcessing format from check-session-status
+          const isCurrentSession =
+            statusSessionId === currentSessionId || (selectedSession && statusSessionId === selectedSession.id);
+
           const status = msg.status;
           if (status) {
             const statusInfo = {
@@ -159,15 +163,13 @@ export function useChatRealtimeHandlers({
               tokens: status.tokens || 0,
               can_interrupt: status.can_interrupt !== undefined ? status.can_interrupt : true,
             };
-            setClaudeStatus(statusInfo);
-            setIsLoading(true);
-            setCanAbortSession(statusInfo.can_interrupt);
+            if (isCurrentSession) {
+              setClaudeStatus(statusInfo);
+              setIsLoading(true);
+              setCanAbortSession(statusInfo.can_interrupt);
+            }
             return;
           }
-
-          // Legacy isProcessing format from check-session-status
-          const isCurrentSession =
-            statusSessionId === currentSessionId || (selectedSession && statusSessionId === selectedSession.id);
 
           if (msg.isProcessing) {
             onSessionProcessing?.(statusSessionId, msg.provider, msg.startTime ?? null);
@@ -288,10 +290,13 @@ export function useChatRealtimeHandlers({
         }
         streamBufferRef.current = '';
 
-        setIsLoading(false);
-        setCanAbortSession(false);
-        setClaudeStatus(null);
-        setPendingPermissionRequests([]);
+        const isMySession = !msg.sessionId || msg.sessionId === activeViewSessionId;
+        if (isMySession) {
+          setIsLoading(false);
+          setCanAbortSession(false);
+          setClaudeStatus(null);
+          setPendingPermissionRequests([]);
+        }
         onSessionInactive?.(sid);
         if (sid) clearSession(sid);
         onSessionNotProcessing?.(sid);
@@ -336,35 +341,43 @@ export function useChatRealtimeHandlers({
       }
 
       case 'error': {
-        setIsLoading(false);
-        setCanAbortSession(false);
-        setClaudeStatus(null);
+        const isMySession = !msg.sessionId || msg.sessionId === activeViewSessionId;
+        if (isMySession) {
+          setIsLoading(false);
+          setCanAbortSession(false);
+          setClaudeStatus(null);
+          onSessionCreationError?.(msg.error || 'Session creation failed');
+        }
         onSessionInactive?.(sid);
         if (sid) clearSession(sid);
         onSessionNotProcessing?.(sid);
-        onSessionCreationError?.(msg.error || 'Session creation failed');
         break;
       }
 
       case 'permission_request': {
         if (!msg.requestId) break;
-        setPendingPermissionRequests((prev) => {
-          if (prev.some((r: PendingPermissionRequest) => r.requestId === msg.requestId)) return prev;
-          return [...prev, {
-            requestId: msg.requestId,
-            toolName: msg.toolName || 'UnknownTool',
-            input: msg.input,
-            context: msg.context,
-            sessionId: sid || null,
-            receivedAt: new Date(),
-          }];
-        });
+        // Always register in global context (drives sidebar badge for background sessions)
         if (sid) {
           setAwaitingPermission(sid, { toolName: msg.toolName ?? '', requestId: msg.requestId ?? '' });
         }
-        setIsLoading(true);
-        setCanAbortSession(true);
-        setClaudeStatus({ text: 'Waiting for permission', tokens: 0, can_interrupt: true });
+        // Only update local UI state if this request belongs to the current session
+        const isMySession = !msg.sessionId || msg.sessionId === activeViewSessionId;
+        if (isMySession) {
+          setPendingPermissionRequests((prev) => {
+            if (prev.some((r: PendingPermissionRequest) => r.requestId === msg.requestId)) return prev;
+            return [...prev, {
+              requestId: msg.requestId,
+              toolName: msg.toolName || 'UnknownTool',
+              input: msg.input,
+              context: msg.context,
+              sessionId: sid || null,
+              receivedAt: new Date(),
+            }];
+          });
+          setIsLoading(true);
+          setCanAbortSession(true);
+          setClaudeStatus({ text: 'Waiting for permission', tokens: 0, can_interrupt: true });
+        }
         break;
       }
 
@@ -377,8 +390,9 @@ export function useChatRealtimeHandlers({
       }
 
       case 'status': {
+        const isMySession = !msg.sessionId || msg.sessionId === activeViewSessionId;
         if (msg.text === 'token_budget' && msg.tokenBudget) {
-          setTokenBudget(msg.tokenBudget as Record<string, unknown>);
+          if (isMySession) setTokenBudget(msg.tokenBudget as Record<string, unknown>);
         } else if (msg.text === 'context_mgmt_retry') {
           const sid = msg.sessionId || currentSessionId;
           if (sid) {
@@ -392,21 +406,25 @@ export function useChatRealtimeHandlers({
               content: `⟳ Context compaction failed, retrying (${msg.retryCount}/${msg.maxRetries})...`,
             } as NormalizedMessage);
           }
-          setClaudeStatus({
-            text: `Retrying context compaction (${msg.retryCount}/${msg.maxRetries})`,
-            tokens: 0,
-            can_interrupt: true,
-          });
-          setIsLoading(true);
-          setCanAbortSession(true);
+          if (isMySession) {
+            setClaudeStatus({
+              text: `Retrying context compaction (${msg.retryCount}/${msg.maxRetries})`,
+              tokens: 0,
+              can_interrupt: true,
+            });
+            setIsLoading(true);
+            setCanAbortSession(true);
+          }
         } else if (msg.text) {
-          setClaudeStatus({
-            text: msg.text,
-            tokens: msg.tokens || 0,
-            can_interrupt: msg.canInterrupt !== undefined ? msg.canInterrupt : true,
-          });
-          setIsLoading(true);
-          setCanAbortSession(msg.canInterrupt !== false);
+          if (isMySession) {
+            setClaudeStatus({
+              text: msg.text,
+              tokens: msg.tokens || 0,
+              can_interrupt: msg.canInterrupt !== undefined ? msg.canInterrupt : true,
+            });
+            setIsLoading(true);
+            setCanAbortSession(msg.canInterrupt !== false);
+          }
         }
         break;
       }
