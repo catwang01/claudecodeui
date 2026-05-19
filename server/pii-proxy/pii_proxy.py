@@ -108,12 +108,53 @@ else:
 _log_buffer: deque = deque(maxlen=200)
 
 # ---------------------------------------------------------------------------
+# PII groups: keyed by deterministic encrypted token, tracks all occurrences
+# ---------------------------------------------------------------------------
+
+_pii_groups: dict = {}  # token_key → {entity_type, masked, hits: deque}
+_MAX_PII_GROUPS = 200
+
+_TAG_EXTRACT_RE = re.compile(r"<PII:([A-Z_]+)>([^<]+)</PII>")
+
+
+def _mask_value(s: str) -> str:
+    if len(s) <= 2:
+        return "****"
+    if len(s) <= 6:
+        return s[0] + "***" + s[-1]
+    return s[:2] + "****" + s[-2:]
+
+
+def _record_pii_hits(after: str, req_id: str, ts: str, label: str) -> None:
+    for m in _TAG_EXTRACT_RE.finditer(after):
+        entity_type = m.group(1)
+        encrypted = m.group(2)
+        token_key = encrypted  # deterministic: same plaintext → same ciphertext
+        if token_key not in _pii_groups:
+            if len(_pii_groups) >= _MAX_PII_GROUPS:
+                oldest = next(iter(_pii_groups))
+                del _pii_groups[oldest]
+            try:
+                original = _decrypt(encrypted)
+                masked = _mask_value(original)
+            except Exception:
+                masked = "****"
+            _pii_groups[token_key] = {
+                "entity_type": entity_type,
+                "masked": masked,
+                "hits": deque(maxlen=200),
+            }
+        _pii_groups[token_key]["hits"].appendleft({"req_id": req_id, "ts": ts, "label": label})
+
+# ---------------------------------------------------------------------------
 # Diff logging helper
 # ---------------------------------------------------------------------------
 
 def _log_diff(req_id: str, label: str, before: str, after: str) -> None:
     if before == after:
         return
+    ts = datetime.now(timezone.utc).isoformat()
+    _record_pii_hits(after, req_id, ts, label)
     diff = list(difflib.unified_diff(
         before.splitlines(keepends=True),
         after.splitlines(keepends=True),
@@ -126,7 +167,7 @@ def _log_diff(req_id: str, label: str, before: str, after: str) -> None:
         logger.info("[%s] %s\n%s", req_id, label, diff_text)
         _log_buffer.append({
             "id": req_id,
-            "ts": datetime.now(timezone.utc).isoformat(),
+            "ts": ts,
             "label": label,
             "diff": diff_text,
         })
@@ -393,6 +434,30 @@ async def get_logs():
 @app.delete("/logs")
 async def clear_logs():
     _log_buffer.clear()
+    _pii_groups.clear()
+    return {"ok": True}
+
+
+@app.get("/pii-groups")
+async def get_pii_groups():
+    result = []
+    for token_key, v in _pii_groups.items():
+        hits = list(v["hits"])
+        result.append({
+            "token_key": token_key[:16],
+            "entity_type": v["entity_type"],
+            "masked": v["masked"],
+            "count": len(hits),
+            "last_seen": hits[0]["ts"] if hits else "",
+            "occurrences": hits,
+        })
+    result.sort(key=lambda x: x["last_seen"], reverse=True)
+    return {"groups": result}
+
+
+@app.delete("/pii-groups")
+async def clear_pii_groups():
+    _pii_groups.clear()
     return {"ok": True}
 
 

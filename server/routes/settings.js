@@ -462,4 +462,23 @@ router.delete('/pii-proxy/logs', async (req, res) => {
   }
 });
 
+router.get('/pii-proxy/pii-groups', async (req, res) => {
+  try {
+    const r = await fetch(`${PII_PROXY_BASE}/pii-groups`);
+    const data = await r.json();
+    res.json(data);
+  } catch {
+    res.json({ groups: [] });
+  }
+});
+
+router.delete('/pii-proxy/pii-groups', async (req, res) => {
+  try {
+    await fetch(`${PII_PROXY_BASE}/pii-groups`, { method: 'DELETE' });
+    res.json({ ok: true });
+  } catch {
+    res.json({ ok: true });
+  }
+});
+
 export default router;
