@@ -284,7 +284,7 @@ export function useChatComposerState({
         const context = {
           projectPath: selectedProject.fullPath || selectedProject.path,
           projectName: selectedProject.name,
-          sessionId: currentSessionId,
+          sessionId: selectedSession?.id || currentSessionId,
           provider,
           model: provider === 'cursor' ? cursorModel : provider === 'codex' ? codexModel : provider === 'gemini' ? geminiModel : claudeModel,
           tokenUsage: tokenBudget,
@@ -612,7 +612,7 @@ export function useChatComposerState({
       }
 
       const effectiveSessionId =
-        currentSessionId || selectedSession?.id || sessionStorage.getItem('cursorSessionId');
+        selectedSession?.id || currentSessionId || sessionStorage.getItem('cursorSessionId');
       const sessionToActivate = effectiveSessionId || `new-session-${Date.now()}`;
 
       const localMessageId = `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -963,11 +963,11 @@ export function useChatComposerState({
       typeof window !== 'undefined' ? sessionStorage.getItem('cursorSessionId') : null;
 
     const candidateSessionIds = [
+      selectedSession?.id || null,
       currentSessionId,
       pendingViewSessionRef.current?.sessionId || null,
       pendingSessionId,
       provider === 'cursor' ? cursorSessionId : null,
-      selectedSession?.id || null,
     ];
 
     const targetSessionId =

@@ -411,6 +411,13 @@ export function useChatSessionState({
     const provider = (selectedSession.__provider || localStorage.getItem('selected-provider') as Provider) || 'claude';
     const sessionKey = `${selectedSession.id}:${selectedProject.name}:${provider}`;
 
+    // Always sync currentSessionId immediately — must happen before any early returns so that
+    // cached / in-progress sessions don't leave currentSessionId pointing at the previous session.
+    setCurrentSessionId(selectedSession.id);
+    if (provider === 'cursor') {
+      sessionStorage.setItem('cursorSessionId', selectedSession.id);
+    }
+
     // Always check session status so that a WS reconnect corrects any stale
     // processing/loading state even if the session data is already cached.
     if (ws) {
@@ -454,6 +461,9 @@ export function useChatSessionState({
       return;
     }
 
+    // currentSessionId here is the React state value from the *previous* render — intentional.
+    // setCurrentSessionId(selectedSession.id) above schedules an update but doesn't mutate the
+    // closure value, so this correctly detects "we just switched to a different session."
     const sessionChanged = currentSessionId !== null && currentSessionId !== selectedSession.id;
     if (sessionChanged) {
       resetStreamingState();
@@ -481,13 +491,9 @@ export function useChatSessionState({
       setIsLoading(false);
     }
 
-    setCurrentSessionId(selectedSession.id);
-    if (provider === 'cursor') {
-      sessionStorage.setItem('cursorSessionId', selectedSession.id);
-    }
-
     lastLoadedSessionKeyRef.current = sessionKey;
 
+    const requestedSessionId = selectedSession.id;
     const cachedLastId = sessionStore.getLastMessageId(selectedSession.id);
     if (cachedLastId) {
       // We have cached messages — do incremental fetch to append only new messages.
@@ -497,12 +503,14 @@ export function useChatSessionState({
         projectName: selectedProject.name,
         projectPath: selectedProject.fullPath || selectedProject.path || '',
       }).then(slot => {
+        if (selectedSessionRef.current?.id !== requestedSessionId) return;
         if (slot) {
           setHasMoreMessages(slot.hasMore);
           setTotalMessages(slot.total);
         }
         setIsLoadingSessionMessages(false);
       }).catch(() => {
+        if (selectedSessionRef.current?.id !== requestedSessionId) return;
         setIsLoadingSessionMessages(false);
       });
     } else {
@@ -518,6 +526,7 @@ export function useChatSessionState({
         limit: MESSAGES_PER_PAGE,
         offset: 0,
       }).then(slot => {
+        if (selectedSessionRef.current?.id !== requestedSessionId) return;
         if (slot) {
           setHasMoreMessages(slot.hasMore);
           setTotalMessages(slot.total);
@@ -525,6 +534,7 @@ export function useChatSessionState({
         }
         setIsLoadingSessionMessages(false);
       }).catch(() => {
+        if (selectedSessionRef.current?.id !== requestedSessionId) return;
         setIsLoadingSessionMessages(false);
       });
     }
@@ -797,7 +807,7 @@ export function useChatSessionState({
         offset: 0,
       });
 
-      if (currentSessionId !== requestSessionId) return;
+      if (selectedSessionRef.current?.id !== requestSessionId) return;
 
       if (slot) {
         if (container) {
@@ -825,7 +835,7 @@ export function useChatSessionState({
       isLoadingMoreRef.current = false;
       setIsLoadingAllMessages(false);
     }
-  }, [selectedSession, selectedProject, isLoadingAllMessages, currentSessionId, sessionStore]);
+  }, [selectedSession, selectedProject, isLoadingAllMessages, sessionStore]);
 
   const loadEarlierMessages = useCallback(() => {
     setVisibleMessageCount((prev) => prev + 100);

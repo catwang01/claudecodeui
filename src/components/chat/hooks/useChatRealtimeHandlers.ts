@@ -61,7 +61,6 @@ interface UseChatRealtimeHandlersArgs {
   setTokenBudget: (budget: Record<string, unknown> | null) => void;
   setPendingPermissionRequests: Dispatch<SetStateAction<PendingPermissionRequest[]>>;
   pendingViewSessionRef: MutableRefObject<PendingViewSession | null>;
-  streamBufferRef: MutableRefObject<string>;
   streamTimerRef: MutableRefObject<number | null>;
   accumulatedStreamMapRef: MutableRefObject<Map<string, string>>;
   onSessionInactive?: (sessionId?: string | null) => void;
@@ -93,7 +92,6 @@ export function useChatRealtimeHandlers({
   setTokenBudget,
   setPendingPermissionRequests,
   pendingViewSessionRef,
-  streamBufferRef,
   streamTimerRef,
   accumulatedStreamMapRef,
   onSessionInactive,
@@ -134,8 +132,7 @@ export function useChatRealtimeHandlers({
 
         case 'pending-permissions-response': {
           const permSessionId = msg.sessionId;
-          const isCurrentPermSession =
-            permSessionId === currentSessionId || (selectedSession && permSessionId === selectedSession.id);
+          const isCurrentPermSession = permSessionId === activeViewSessionId;
           if (permSessionId && !isCurrentPermSession) return;
           const requests: PendingPermissionRequest[] = msg.data || [];
           setPendingPermissionRequests(requests);
@@ -153,8 +150,7 @@ export function useChatRealtimeHandlers({
           if (!statusSessionId) return;
 
           // Legacy isProcessing format from check-session-status
-          const isCurrentSession =
-            statusSessionId === currentSessionId || (selectedSession && statusSessionId === selectedSession.id);
+          const isCurrentSession = statusSessionId === activeViewSessionId;
 
           const status = msg.status;
           if (status) {
@@ -200,27 +196,22 @@ export function useChatRealtimeHandlers({
     /*  NormalizedMessage handling (has `kind` field)                    */
     /* ---------------------------------------------------------------- */
 
-    const sid = msg.sessionId || activeViewSessionId;
+    const sid = msg.sessionId || null;
 
     // --- Streaming: buffer for performance ---
     if (msg.kind === 'stream_delta') {
       const text = msg.content || '';
-      if (!text) return;
-      streamBufferRef.current += text;
-      if (sid) {
-        const prev = accumulatedStreamMapRef.current.get(sid) ?? '';
-        accumulatedStreamMapRef.current.set(sid, prev + text);
-      }
+      if (!text || !sid) return;
+      const prev = accumulatedStreamMapRef.current.get(sid) ?? '';
+      accumulatedStreamMapRef.current.set(sid, prev + text);
       if (!streamTimerRef.current) {
         streamTimerRef.current = window.setTimeout(() => {
           streamTimerRef.current = null;
-          if (sid) {
-            sessionStore.updateStreaming(sid, accumulatedStreamMapRef.current.get(sid) ?? '', provider);
-          }
+          sessionStore.updateStreaming(sid, accumulatedStreamMapRef.current.get(sid) ?? '', provider);
         }, 100);
       }
       // Also route to store for non-active sessions
-      if (sid && sid !== activeViewSessionId) {
+      if (sid !== activeViewSessionId) {
         sessionStore.appendWsMessage(sid, msg as NormalizedMessage);
       }
       return;
@@ -242,7 +233,6 @@ export function useChatRealtimeHandlers({
         }
         accumulatedStreamMapRef.current.delete(sid);
       }
-      streamBufferRef.current = '';
       return;
     }
 
@@ -288,7 +278,6 @@ export function useChatRealtimeHandlers({
           }
           accumulatedStreamMapRef.current.delete(sid);
         }
-        streamBufferRef.current = '';
 
         const isMySession = !msg.sessionId || msg.sessionId === activeViewSessionId;
         if (isMySession) {
@@ -394,7 +383,7 @@ export function useChatRealtimeHandlers({
         if (msg.text === 'token_budget' && msg.tokenBudget) {
           if (isMySession) setTokenBudget(msg.tokenBudget as Record<string, unknown>);
         } else if (msg.text === 'context_mgmt_retry') {
-          const sid = msg.sessionId || currentSessionId;
+          const sid = msg.sessionId || activeViewSessionId;
           if (sid) {
             sessionStore.appendWsMessage(sid, {
               id: `context-mgmt-retry-${Date.now()}`,
@@ -451,7 +440,6 @@ export function useChatRealtimeHandlers({
     setTokenBudget,
     setPendingPermissionRequests,
     pendingViewSessionRef,
-    streamBufferRef,
     streamTimerRef,
     accumulatedStreamMapRef,
     onSessionInactive,

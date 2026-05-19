@@ -57,7 +57,6 @@ function ChatInterface({
   const sessionStore = useSessionStore();
   const { speak } = useTTS();
   const { registerSubmitCallback, notifyLoadingChange, status: voiceStatus, transcript: voiceTranscript, toggle: toggleVoice, isActive: isVoiceActive, supported: isVoiceSupported } = useVoiceConversation();
-  const streamBufferRef = useRef('');
   const streamTimerRef = useRef<number | null>(null);
   const accumulatedStreamMapRef = useRef<Map<string, string>>(new Map());
   const pendingViewSessionRef = useRef<PendingViewSession | null>(null);
@@ -67,7 +66,6 @@ function ChatInterface({
       clearTimeout(streamTimerRef.current);
       streamTimerRef.current = null;
     }
-    streamBufferRef.current = '';
     accumulatedStreamMapRef.current.clear();
   }, []);
 
@@ -311,7 +309,6 @@ function ChatInterface({
     setTokenBudget,
     setPendingPermissionRequests,
     pendingViewSessionRef,
-    streamBufferRef,
     streamTimerRef,
     accumulatedStreamMapRef,
     onSessionInactive,
