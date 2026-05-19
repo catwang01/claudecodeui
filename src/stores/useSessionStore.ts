@@ -72,6 +72,8 @@ export interface NormalizedMessage {
   rowid?: number;
   // Maps this server message back to the frontend optimistic local_ id it corresponds to
   localMessageId?: string;
+  // Per-message token usage (assistant text messages only)
+  tokenUsage?: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number };
   // file_download fields
   filename?: string;
   filepath?: string;

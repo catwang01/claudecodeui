@@ -25,6 +25,13 @@ export interface SubagentChildTool {
   timestamp: Date;
 }
 
+export interface MessageTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+}
+
 export interface ChatMessage {
   type: string;
   content?: string;
@@ -55,6 +62,7 @@ export interface ChatMessage {
     fileSize: number;
   };
   isTaskNotification?: boolean;
+  tokenUsage?: MessageTokenUsage;
   taskStatus?: string;
   [key: string]: unknown;
 }

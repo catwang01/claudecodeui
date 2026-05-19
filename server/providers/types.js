@@ -34,7 +34,12 @@
  * @property {boolean} [isMeta] - True for system-injected messages (skill prompts, resume markers, etc.) hidden by default
  *
  * Additional fields depending on kind:
- * - text:                 role ('user'|'assistant'), content, images?
+ * - text:                 role ('user'|'assistant'), content, images?, tokenUsage?
+ * @property {object}  [tokenUsage]                    - Token usage for this API call (first msg of each assistant response only)
+ * @property {number}  [tokenUsage.inputTokens]         - input_tokens
+ * @property {number}  [tokenUsage.outputTokens]        - output_tokens
+ * @property {number}  [tokenUsage.cacheReadTokens]     - cache_read_input_tokens
+ * @property {number}  [tokenUsage.cacheCreationTokens] - cache_creation_input_tokens
  * - tool_use:             toolName, toolInput, toolId
  * - tool_result:          toolId, content, isError
  * - thinking:             content

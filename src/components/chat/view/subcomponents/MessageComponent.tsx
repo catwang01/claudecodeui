@@ -14,6 +14,7 @@ import { ToolRenderer, shouldHideToolResult } from '../../tools';
 import { Markdown } from './Markdown';
 import MessageCopyControl from './MessageCopyControl';
 import { DownloadLink } from '../../tools/components/DownloadLink';
+import Tooltip from '../../../../shared/view/ui/Tooltip';
 
 type DiffLine = {
   type: string;
@@ -46,6 +47,7 @@ type InteractiveOption = {
 type PermissionGrantState = 'idle' | 'granted' | 'error';
 const COPY_HIDDEN_TOOL_NAMES = new Set(['Bash', 'Edit', 'Write', 'ApplyPatch']);
 const formatDuration = (ms: number): string => ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+const formatTokenCount = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 
 const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, showSubAgentInput, selectedProject, provider, replyDuration }: MessageComponentProps) => {
   const { t } = useTranslation('chat');
@@ -477,7 +479,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
               </div>
             )}
 
-            {(shouldShowAssistantCopyControl || !isGrouped || replyDuration !== undefined) && (
+            {(shouldShowAssistantCopyControl || !isGrouped || replyDuration !== undefined || message.tokenUsage !== undefined) && (
               <div className="mt-1 flex w-full items-center gap-2 text-[11px] text-gray-400 dark:text-gray-500">
                 {shouldShowAssistantCopyControl && (
                   <MessageCopyControl content={assistantCopyContent} messageType="assistant" />
@@ -485,6 +487,57 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                 {!isGrouped && <span>{formattedTime}</span>}
                 {replyDuration !== undefined && (
                   <span className="text-gray-300 dark:text-gray-600">· ⏱ {formatDuration(replyDuration)}</span>
+                )}
+                {message.tokenUsage && (
+                  <>
+                    <span className="text-gray-300 dark:text-gray-600">·</span>
+                    <Tooltip
+                      position="top"
+                      delay={200}
+                      content={
+                        <div className="space-y-0.5 text-left">
+                          <div className="flex gap-4">
+                            <span className="text-gray-300">Input</span>
+                            <span className="ml-auto font-mono">{message.tokenUsage.inputTokens.toLocaleString()}</span>
+                          </div>
+                          <div className="flex gap-4">
+                            <span className="text-gray-300">Output</span>
+                            <span className="ml-auto font-mono">{message.tokenUsage.outputTokens.toLocaleString()}</span>
+                          </div>
+                          {message.tokenUsage.cacheReadTokens > 0 && (
+                            <div className="flex gap-4">
+                              <span className="text-green-300">Cache read</span>
+                              <span className="ml-auto font-mono">{message.tokenUsage.cacheReadTokens.toLocaleString()}</span>
+                            </div>
+                          )}
+                          {message.tokenUsage.cacheCreationTokens > 0 && (
+                            <div className="flex gap-4">
+                              <span className="text-amber-300">Cache write</span>
+                              <span className="ml-auto font-mono">{message.tokenUsage.cacheCreationTokens.toLocaleString()}</span>
+                            </div>
+                          )}
+                        </div>
+                      }
+                    >
+                      <span className="cursor-default">
+                        <span>↓ {formatTokenCount(message.tokenUsage.inputTokens)}</span>
+                        <span className="mx-1 text-gray-300 dark:text-gray-600">·</span>
+                        <span>↑ {formatTokenCount(message.tokenUsage.outputTokens)}</span>
+                        {message.tokenUsage.cacheReadTokens > 0 && (
+                          <>
+                            <span className="mx-1 text-gray-300 dark:text-gray-600">·</span>
+                            <span className="text-green-400 dark:text-green-600">⚡ {formatTokenCount(message.tokenUsage.cacheReadTokens)}</span>
+                          </>
+                        )}
+                        {message.tokenUsage.cacheCreationTokens > 0 && (
+                          <>
+                            <span className="mx-1 text-gray-300 dark:text-gray-600">·</span>
+                            <span className="text-amber-400 dark:text-amber-600">+ {formatTokenCount(message.tokenUsage.cacheCreationTokens)}</span>
+                          </>
+                        )}
+                      </span>
+                    </Tooltip>
+                  </>
                 )}
               </div>
             )}

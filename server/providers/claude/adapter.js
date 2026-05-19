@@ -203,6 +203,14 @@ export function normalizeMessage(raw, sessionId) {
         content: raw.message.content,
       }));
     }
+    if (messages.length > 0 && raw.message?.usage && messages[0].kind === 'text' && messages[0].role === 'assistant') {
+      messages[0].tokenUsage = {
+        inputTokens: raw.message.usage.input_tokens ?? 0,
+        outputTokens: raw.message.usage.output_tokens ?? 0,
+        cacheReadTokens: raw.message.usage.cache_read_input_tokens ?? 0,
+        cacheCreationTokens: raw.message.usage.cache_creation_input_tokens ?? 0,
+      };
+    }
     return messages;
   }
 

@@ -59,6 +59,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
             type: 'assistant',
             content: text,
             timestamp: msg.timestamp,
+            tokenUsage: msg.tokenUsage as ChatMessage['tokenUsage'],
           });
         }
         break;
