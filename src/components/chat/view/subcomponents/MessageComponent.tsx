@@ -497,8 +497,12 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                       content={
                         <div className="space-y-0.5 text-left">
                           <div className="flex gap-4">
-                            <span className="text-gray-300">Input</span>
-                            <span className="ml-auto font-mono">{message.tokenUsage.inputTokens.toLocaleString()}</span>
+                            <span className="text-gray-300">Input (total)</span>
+                            <span className="ml-auto font-mono">{(message.tokenUsage.inputTokens + message.tokenUsage.cacheReadTokens + message.tokenUsage.cacheCreationTokens).toLocaleString()}</span>
+                          </div>
+                          <div className="flex gap-4 pl-2">
+                            <span className="text-gray-500">· new</span>
+                            <span className="ml-auto font-mono text-gray-500">{message.tokenUsage.inputTokens.toLocaleString()}</span>
                           </div>
                           <div className="flex gap-4">
                             <span className="text-gray-300">Output</span>
@@ -520,9 +524,9 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                       }
                     >
                       <span className="cursor-default">
-                        <span>↓ {formatTokenCount(message.tokenUsage.inputTokens)}</span>
+                        <span>↑ {formatTokenCount(message.tokenUsage.inputTokens + message.tokenUsage.cacheReadTokens + message.tokenUsage.cacheCreationTokens)}</span>
                         <span className="mx-1 text-gray-300 dark:text-gray-600">·</span>
-                        <span>↑ {formatTokenCount(message.tokenUsage.outputTokens)}</span>
+                        <span>↓ {formatTokenCount(message.tokenUsage.outputTokens)}</span>
                         {message.tokenUsage.cacheReadTokens > 0 && (
                           <>
                             <span className="mx-1 text-gray-300 dark:text-gray-600">·</span>
