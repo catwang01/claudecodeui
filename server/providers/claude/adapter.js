@@ -203,13 +203,20 @@ export function normalizeMessage(raw, sessionId) {
         content: raw.message.content,
       }));
     }
-    if (messages.length > 0 && raw.message?.usage && messages[0].kind === 'text' && messages[0].role === 'assistant') {
-      messages[0].tokenUsage = {
-        inputTokens: raw.message.usage.input_tokens ?? 0,
-        outputTokens: raw.message.usage.output_tokens ?? 0,
-        cacheReadTokens: raw.message.usage.cache_read_input_tokens ?? 0,
-        cacheCreationTokens: raw.message.usage.cache_creation_input_tokens ?? 0,
+    if (messages.length > 0 && raw.message?.usage) {
+      const usage = raw.message.usage;
+      const tokenUsage = {
+        inputTokens: usage.input_tokens ?? 0,
+        outputTokens: usage.output_tokens ?? 0,
+        cacheReadTokens: usage.cache_read_input_tokens ?? 0,
+        cacheCreationTokens: usage.cache_creation_input_tokens ?? 0,
       };
+      // Prefer text assistant message; fall back to messages[0] so token data is
+      // never silently dropped for tool-only / thinking-only entries.
+      const carrier = messages.find(m => m.kind === 'text' && m.role === 'assistant') ?? messages[0];
+      carrier.tokenUsage = tokenUsage;
+      // Marker for turn-level output-token aggregation (summed in fetchHistory post-processing)
+      carrier._entryOutputTokens = tokenUsage.outputTokens;
     }
     return messages;
   }
@@ -308,6 +315,39 @@ export const claudeAdapter = {
           toolUseResult: tr.toolUseResult,
         };
         msg.subagentTools = tr.subagentTools;
+      }
+    }
+
+    // Aggregate output tokens per assistant turn.
+    // Newer Claude CLI writes one JSONL entry per content block, each with its own
+    // output_tokens. We sum across all blocks in the same turn (between user messages)
+    // and store the total on the text message so the UI shows a meaningful number.
+    let turnStart = -1;
+    for (let i = 0; i <= normalized.length; i++) {
+      const msg = i < normalized.length ? normalized[i] : null;
+      // Positive: any non-user, non-tool_result message belongs to the assistant turn.
+      const isAssistant = msg && msg.role !== 'user' && msg.kind !== 'tool_result';
+      if (isAssistant && turnStart === -1) {
+        turnStart = i;
+      } else if (!isAssistant && turnStart !== -1) {
+        const turn = normalized.slice(turnStart, i);
+        let totalOutput = 0;
+        for (const m of turn) {
+          if (m._entryOutputTokens !== undefined) {
+            totalOutput += m._entryOutputTokens;
+            delete m._entryOutputTokens;
+          }
+        }
+        if (totalOutput > 0) {
+          // Prefer text assistant message; fall back to any message that already has tokenUsage
+          // (e.g. thinking message in a tool-only turn).
+          const textMsg = turn.find(m => m.kind === 'text' && m.role === 'assistant' && m.tokenUsage)
+            ?? turn.find(m => m.tokenUsage);
+          if (textMsg) {
+            textMsg.tokenUsage = { ...textMsg.tokenUsage, outputTokens: totalOutput };
+          }
+        }
+        turnStart = -1;
       }
     }
 
