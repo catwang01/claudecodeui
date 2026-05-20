@@ -308,6 +308,106 @@ def test_proxy_sse_deanonymizes_multiple_tags(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Integration: tool_result string content
+# ---------------------------------------------------------------------------
+
+def test_proxy_anonymizes_tool_result_string_content(monkeypatch):
+    """tool_result.content 为 string 时应被脱敏。"""
+    import pii_proxy
+
+    captured = {}
+
+    async def mock_send(req, stream=False):
+        captured["body"] = json.loads(req.content)
+        mock_resp = MagicMock()
+        mock_resp.headers = {"content-type": "application/json"}
+        mock_resp.status_code = 200
+        mock_resp.content = json.dumps({"content": []}).encode()
+        async def aread(): pass
+        mock_resp.aread = aread
+        async def aclose(): pass
+        mock_resp.aclose = aclose
+        return mock_resp
+
+    pii_proxy.anonymize_text.cache_clear()
+    monkeypatch.setattr(pii_proxy._client, "send", mock_send)
+    monkeypatch.setattr(
+        pii_proxy._analyzer,
+        "analyze",
+        lambda text, language, entities: [
+            _RecognizerResult(
+                entity_type="PASSWORD",
+                start=text.index("p4ssw0rd"),
+                end=text.index("p4ssw0rd") + len("p4ssw0rd"),
+                score=0.9,
+            )
+        ] if "p4ssw0rd" in text else [],
+    )
+
+    resp = client.post(
+        "/v1/messages",
+        json={"messages": [{"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "tu_1", "content": "password=p4ssw0rd found in config"},
+        ]}]},
+        headers={"x-api-key": "test-key"},
+    )
+
+    assert resp.status_code == 200
+    tr = captured["body"]["messages"][0]["content"][0]
+    assert "p4ssw0rd" not in tr["content"]
+    assert "<PII:PASSWORD>" in tr["content"]
+
+
+def test_proxy_anonymizes_tool_use_input(monkeypatch):
+    """tool_use.input 中的字符串字段应被脱敏。"""
+    import pii_proxy
+
+    captured = {}
+
+    async def mock_send(req, stream=False):
+        captured["body"] = json.loads(req.content)
+        mock_resp = MagicMock()
+        mock_resp.headers = {"content-type": "application/json"}
+        mock_resp.status_code = 200
+        mock_resp.content = json.dumps({"content": []}).encode()
+        async def aread(): pass
+        mock_resp.aread = aread
+        async def aclose(): pass
+        mock_resp.aclose = aclose
+        return mock_resp
+
+    pii_proxy.anonymize_text.cache_clear()
+    monkeypatch.setattr(pii_proxy._client, "send", mock_send)
+    monkeypatch.setattr(
+        pii_proxy._analyzer,
+        "analyze",
+        lambda text, language, entities: [
+            _RecognizerResult(
+                entity_type="PASSWORD",
+                start=text.index("s3cret"),
+                end=text.index("s3cret") + len("s3cret"),
+                score=0.9,
+            )
+        ] if "s3cret" in text else [],
+    )
+
+    resp = client.post(
+        "/v1/messages",
+        json={"messages": [{"role": "assistant", "content": [
+            {"type": "tool_use", "id": "tu_2", "name": "write_file",
+             "input": {"path": "/etc/config", "content": "password=s3cret\n"}},
+        ]}]},
+        headers={"x-api-key": "test-key"},
+    )
+
+    assert resp.status_code == 200
+    tu = captured["body"]["messages"][0]["content"][0]
+    assert "s3cret" not in tu["input"]["content"]
+    assert "<PII:PASSWORD>" in tu["input"]["content"]
+    assert tu["input"]["path"] == "/etc/config"  # 非 PII 字段不变
+
+
+# ---------------------------------------------------------------------------
 # Integration: list content anonymization
 # ---------------------------------------------------------------------------
 

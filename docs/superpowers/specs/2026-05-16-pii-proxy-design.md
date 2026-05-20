@@ -175,6 +175,38 @@ async def proxy(request: Request, path: str):
     return Response(content=resp_body, status_code=upstream_resp.status_code, ...)
 ```
 
+## 前端 UI（设置 → 隐私 → PII 脱敏代理）
+
+组件：`src/components/settings/view/tabs/PrivacySettingsTab.tsx`
+
+### 功能
+
+1. **开关**：启用/禁用 PII proxy（`PUT /api/settings/pii-proxy`）
+2. **脱敏记录**：entity-grouped 视图，按 PII 实体类型聚合展示（`GET /api/settings/pii-proxy/pii-groups`）
+3. **Diff 详情**：展开 group 后，点击单条 occurrence 可查看该请求的 unified diff（`GET /api/settings/pii-proxy/logs`）
+4. **搜索/刷新/清除**：过滤实体类型或掩码值，手动刷新，清除全部记录
+
+### 数据流
+
+```
+PrivacySettingsTab
+  ├── fetchGroups() → 并发请求 /pii-groups + /logs
+  │     ├── groups: PiiGroup[] → 按 entity_type 分组展示
+  │     └── logsByReqId: Map<req_id, LogEntry[]> → 传给 PiiGroupItem
+  └── PiiGroupItem
+        ├── 展开 → 显示 occurrences 列表
+        └── 点击 occurrence → 匹配 req_id 的 LogEntry → DiffView 渲染 unified diff
+```
+
+### DiffView 渲染规则
+
+- `+` 行：绿色背景（新增 = 加密后的 PII token）
+- `-` 行：红色背景（原始 = 明文 PII）
+- `@@` 行：蓝色（位置标记）
+- 其他行：灰色上下文
+
+---
+
 ## 不在范围内（后续可扩展）
 
 - SSE 流式响应的逐 token 还原

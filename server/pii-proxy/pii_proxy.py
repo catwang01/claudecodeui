@@ -373,19 +373,41 @@ def _anonymize_messages(messages: list, req_id: str = "") -> tuple:
                         modified = True
                         if req_id:
                             _log_diff(req_id, f"{label}/text[{j}]", before, block["text"])
-                elif block.get("type") == "tool_result" and isinstance(block.get("content"), list):
-                    new_content = []
-                    for k, b in enumerate(block["content"]):
-                        b = dict(b)
-                        if b.get("type") == "text" and isinstance(b.get("text"), str):
-                            before = b["text"]
-                            b["text"] = anonymize_text(b["text"])
-                            if b["text"] != before:
+                elif block.get("type") == "tool_result":
+                    tr_content = block.get("content")
+                    if isinstance(tr_content, str):
+                        before = tr_content
+                        block["content"] = anonymize_text(tr_content)
+                        if block["content"] != before:
+                            modified = True
+                            if req_id:
+                                _log_diff(req_id, f"{label}/tool_result[{j}]", before, block["content"])
+                    elif isinstance(tr_content, list):
+                        new_content = []
+                        for k, b in enumerate(tr_content):
+                            b = dict(b)
+                            if b.get("type") == "text" and isinstance(b.get("text"), str):
+                                before = b["text"]
+                                b["text"] = anonymize_text(b["text"])
+                                if b["text"] != before:
+                                    modified = True
+                                    if req_id:
+                                        _log_diff(req_id, f"{label}/tool_result[{j}]/text[{k}]", before, b["text"])
+                            new_content.append(b)
+                        block["content"] = new_content
+                elif block.get("type") == "tool_use" and isinstance(block.get("input"), dict):
+                    new_input = {}
+                    for k, v in block["input"].items():
+                        if isinstance(v, str):
+                            before = v
+                            new_input[k] = anonymize_text(v)
+                            if new_input[k] != before:
                                 modified = True
                                 if req_id:
-                                    _log_diff(req_id, f"{label}/tool_result[{j}]/text[{k}]", before, b["text"])
-                        new_content.append(b)
-                    block["content"] = new_content
+                                    _log_diff(req_id, f"{label}/tool_use[{j}].input.{k}", before, new_input[k])
+                        else:
+                            new_input[k] = v
+                    block["input"] = new_input
                 new_blocks.append(block)
             msg["content"] = new_blocks
         out.append(msg)

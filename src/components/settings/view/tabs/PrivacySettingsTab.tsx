@@ -2,6 +2,13 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 import { Shield, RefreshCw, Trash2, ChevronRight, ChevronDown, Search } from 'lucide-react';
 import { authenticatedFetch } from '../../../../utils/api';
 
+type LogEntry = {
+  id: string;
+  ts: string;
+  label: string;
+  diff: string;
+};
+
 type PiiOccurrence = {
   req_id: string;
   ts: string;
@@ -30,8 +37,28 @@ function entityColor(type: string) {
   return ENTITY_COLORS[type] ?? 'bg-slate-500/15 text-slate-600 dark:text-slate-400';
 }
 
-function PiiGroupItem({ group }: { group: PiiGroup }) {
+function DiffView({ diff }: { diff: string }) {
+  return (
+    <pre className="overflow-x-auto rounded bg-muted/50 p-3 text-xs font-mono leading-5">
+      {diff.split('\n').map((line, i) => {
+        let cls = 'text-muted-foreground';
+        if (line.startsWith('+++') || line.startsWith('---')) cls = 'text-muted-foreground';
+        else if (line.startsWith('+')) cls = 'bg-green-500/15 text-green-700 dark:text-green-400';
+        else if (line.startsWith('-')) cls = 'bg-red-500/15 text-red-700 dark:text-red-400';
+        else if (line.startsWith('@@')) cls = 'text-blue-500 dark:text-blue-400';
+        return (
+          <div key={i} className={`block px-1 ${cls}`}>
+            {line || ' '}
+          </div>
+        );
+      })}
+    </pre>
+  );
+}
+
+function PiiGroupItem({ group, logsByReqId }: { group: PiiGroup; logsByReqId: Map<string, LogEntry[]> }) {
   const [expanded, setExpanded] = useState(false);
+  const [openKey, setOpenKey] = useState<string | null>(null);
   const lastSeen = new Date(group.last_seen).toLocaleTimeString();
 
   return (
@@ -62,17 +89,51 @@ function PiiGroupItem({ group }: { group: PiiGroup }) {
 
       {expanded && (
         <div className="border-t border-border divide-y divide-border bg-muted/10">
-          {group.occurrences.map((occ, i) => (
-            <div key={i} className="flex items-center justify-between px-4 py-1.5 gap-3">
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="font-mono text-[10px] text-muted-foreground flex-shrink-0">[{occ.req_id.slice(0, 8)}]</span>
-                <span className="text-xs text-foreground truncate">{occ.label}</span>
+          {group.occurrences.map((occ, i) => {
+            const itemKey = `${occ.req_id}:${i}`;
+            const isOpen = openKey === itemKey;
+            const diffEntries = logsByReqId.get(occ.req_id) ?? [];
+            const hasDiff = diffEntries.length > 0;
+
+            return (
+              <div key={i} className="px-4 py-1.5">
+                <button
+                  type="button"
+                  disabled={!hasDiff}
+                  onClick={() => setOpenKey(isOpen ? null : itemKey)}
+                  className="flex w-full items-center justify-between gap-3 text-left disabled:cursor-default"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    {hasDiff ? (
+                      isOpen
+                        ? <ChevronDown className="h-3 w-3 flex-shrink-0 text-muted-foreground" />
+                        : <ChevronRight className="h-3 w-3 flex-shrink-0 text-muted-foreground" />
+                    ) : (
+                      <span className="h-3 w-3 flex-shrink-0" />
+                    )}
+                    <span className="font-mono text-[10px] text-muted-foreground flex-shrink-0">[{occ.req_id.slice(0, 8)}]</span>
+                    <span className="text-xs text-foreground truncate">{occ.label}</span>
+                  </div>
+                  <span className="text-[10px] text-muted-foreground flex-shrink-0">
+                    {new Date(occ.ts).toLocaleTimeString()}
+                  </span>
+                </button>
+
+                {isOpen && (
+                  <div className="mt-2 space-y-2">
+                    {diffEntries.map((entry, j) => (
+                      <div key={j}>
+                        {diffEntries.length > 1 && (
+                          <p className="mb-1 text-[10px] text-muted-foreground font-mono">{entry.label}</p>
+                        )}
+                        <DiffView diff={entry.diff} />
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-              <span className="text-[10px] text-muted-foreground flex-shrink-0">
-                {new Date(occ.ts).toLocaleTimeString()}
-              </span>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
@@ -84,6 +145,7 @@ export default function PrivacySettingsTab() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [groups, setGroups] = useState<PiiGroup[]>([]);
+  const [logsByReqId, setLogsByReqId] = useState<Map<string, LogEntry[]>>(new Map());
   const [groupsLoading, setGroupsLoading] = useState(false);
   const [query, setQuery] = useState('');
 
@@ -98,9 +160,21 @@ export default function PrivacySettingsTab() {
   const fetchGroups = useCallback(async () => {
     setGroupsLoading(true);
     try {
-      const res = await authenticatedFetch('/api/settings/pii-proxy/pii-groups');
-      const data = await res.json();
-      setGroups(data.groups ?? []);
+      const [groupsRes, logsRes] = await Promise.all([
+        authenticatedFetch('/api/settings/pii-proxy/pii-groups'),
+        authenticatedFetch('/api/settings/pii-proxy/logs'),
+      ]);
+      const groupsData = await groupsRes.json();
+      const logsData = await logsRes.json();
+
+      setGroups(groupsData.groups ?? []);
+
+      const map = new Map<string, LogEntry[]>();
+      for (const entry of (logsData.entries ?? []) as LogEntry[]) {
+        if (!map.has(entry.id)) map.set(entry.id, []);
+        map.get(entry.id)!.push(entry);
+      }
+      setLogsByReqId(map);
     } catch {
       // proxy not running
     } finally {
@@ -138,6 +212,7 @@ export default function PrivacySettingsTab() {
   const handleClear = async () => {
     await authenticatedFetch('/api/settings/pii-proxy/logs', { method: 'DELETE' });
     setGroups([]);
+    setLogsByReqId(new Map());
   };
 
   if (loading) {
@@ -197,7 +272,6 @@ export default function PrivacySettingsTab() {
         <div className="flex items-center justify-between gap-2">
           <h4 className="text-sm font-medium text-foreground flex-shrink-0">脱敏记录</h4>
           <div className="flex items-center gap-2 flex-1 justify-end">
-            {/* Search */}
             <div className="relative flex-1 max-w-48">
               <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground pointer-events-none" />
               <input
@@ -241,7 +315,7 @@ export default function PrivacySettingsTab() {
         ) : (
           <div className="space-y-2">
             {filtered.map(group => (
-              <PiiGroupItem key={group.token_key} group={group} />
+              <PiiGroupItem key={group.token_key} group={group} logsByReqId={logsByReqId} />
             ))}
           </div>
         )}
