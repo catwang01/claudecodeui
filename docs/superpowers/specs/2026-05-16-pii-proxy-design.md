@@ -16,7 +16,7 @@ claudecodeui 作为 Claude Code CLI 的 Web UI，用户的聊天消息和工具�
 ## 范围
 
 - **支持提供商**: 仅 Claude（通过 `ANTHROPIC_BASE_URL` 控制）
-- **流式响应（SSE）**: 暂不处理，直接透传
+- **流式响应（SSE）**: 流式 deanonymize（跨 chunk 缓冲 PII tag）
 - **非流式响应**: 完整处理脱敏/还原
 
 ## 架构
@@ -31,7 +31,7 @@ Claude Agent SDK
 │                                                │
 │  请求: Presidio Analyze → AES Encrypt → 转发   │
 │  响应:                                         │
-│    - SSE (text/event-stream): 直接透传          │
+│    - SSE (text/event-stream): 流式 Decrypt 还原 │
 │    - JSON (application/json): AES Decrypt 还原 │
 └────────────────────────────────────────────────┘
   ↓  PII_PROXY_UPSTREAM_URL
@@ -47,7 +47,9 @@ Anthropic API (https://api.anthropic.com)
 Anthropic API 请求体中 `messages` 数组的每条消息文本内容，包括：
 - `{"role": "user", "content": "string"}` 中的字符串
 - `{"role": "user", "content": [{"type": "text", "text": "string"}]}` 中的 text 字段
-- `{"role": "tool", "content": [...]}` 中的工具返回文本（文件内容）
+- `tool_result` block 的 `content`（string 或 list of text blocks 均处理）
+- `tool_use` block 的 `input` 中所有 string 类型字段
+- `system` 字段（string 形式）
 
 ### 脱敏方式
 
@@ -73,17 +75,17 @@ Anthropic API 请求体中 `messages` 数组的每条消息文本内容，包括
 
 | 响应类型 | 处理方式 |
 |---------|---------|
-| `application/json` | 解析 JSON，对文本字段递归运行 `DeanonymizeEngine` 解密还原，返回还原后的 JSON |
-| `text/event-stream` (SSE) | 直接透传，不处理 |
+| `application/json` | 解析 JSON，对文本字段递归运行 `_deanonymize_obj` 解密还原，返回还原后的 JSON |
+| `text/event-stream` (SSE) | 流式 deanonymize：缓冲跨 chunk 的不完整 PII tag，逐段解密后返回给客户端 |
 
-非流式场景下，还原的目标字段为响应体中所有出现 `<ENTITY>...</ENTITY>` 模式的文本。
+响应还原的目标：所有出现 `<PII:TYPE>...</PII>` 模式的文本（递归扫描所有字符串字段）。
 
 ## 文件结构
 
 ```
 server/pii-proxy/
 ├── pii_proxy.py        # FastAPI 代理主体
-├── test_pii_proxy.py   # pytest 测试套件（10 tests，mocks Presidio）
+├── test_pii_proxy.py   # pytest 测试套件（15 tests，mocks Presidio）
 ├── requirements.txt    # 依赖声明
 └── setup.sh            # 一键安装脚本（pip install + spacy model download）
 ```
@@ -209,7 +211,6 @@ PrivacySettingsTab
 
 ## 不在范围内（后续可扩展）
 
-- SSE 流式响应的逐 token 还原
 - Cursor / Codex / Gemini 等其他提供商
 
 ## 已实现的扩展
@@ -218,3 +219,5 @@ PrivacySettingsTab
 - **detect-secrets 集成**（2026-05-17）：高精度结构化密钥检测层，覆盖 JWT token（`eyJ...`）、PEM 私钥、AWS Access Key、Basic Auth、带引号的关键词密码。与 Presidio 结果合并并自动去除重叠 span
 - **确定性加密**（2026-05-17）：AES-CBC IV 改为 HMAC-SHA256(key, plaintext)[:16] 派生，相同明文始终产生相同密文，便于调试去重
 - **精简默认实体**（2026-05-17）：默认检测实体从 `PERSON,PHONE_NUMBER,EMAIL_ADDRESS,CREDIT_CARD,LOCATION` 精简为 `EMAIL_ADDRESS,PASSWORD`，消除 spaCy NER 对技术词汇（命令名、变量名）的误报
+- **SSE 流式 deanonymize**（2026-05-18）：SSE 响应不再直接透传，而是逐段解密 PII tag；实现跨 chunk 缓冲（`<PII:` 开头未闭合时暂存，等到 `</PII>` 后一并解密），支持单 chunk 多 tag 和 tag 被切断两种场景
+- **tool_result string + tool_use input 脱敏**（2026-05-20）：`_anonymize_messages` 现在处理 `tool_result.content` 为 string 的情况（之前仅处理 list），以及 `tool_use.input` 中所有 string 字段
