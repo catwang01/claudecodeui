@@ -38,10 +38,10 @@
     "lint": "eslint src/ server/",
     "lint:fix": "eslint src/ server/ --fix",
     "start": "npm run build && PII_PROXY_PORT=18090 concurrently --kill-others \"npm run pii-proxy\" \"wait-on -t 30000 tcp:18090 && npm run server:prod\"",
-    "pii-proxy": "cd server/pii-proxy && python3 -m uvicorn pii_proxy:app --host 127.0.0.1 --port ${PII_PROXY_PORT:-18090} --log-level info",
+    "pii-proxy": "node scripts/start-pii-proxy.js",
     "release": "./release.sh",
     "prepublishOnly": "npm run build",
-    "postinstall": "node scripts/fix-node-pty.js && bash server/pii-proxy/setup.sh",
+    "postinstall": "node scripts/fix-node-pty.js && node scripts/setup-pii-proxy.js",
     "prepare": "husky",
     "test": "vitest run",
     "test:watch": "vitest"

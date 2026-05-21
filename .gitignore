@@ -146,6 +146,13 @@ tasks/
 # Local startup scripts
 start.sh
 
+# Python virtual environment
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
 # Runtime state (regenerated on each run)
 server/state/watcher-cursors.json
 bun.lock
