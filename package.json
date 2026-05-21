@@ -23,7 +23,7 @@
     "url": "https://github.com/siteboon/claudecodeui/issues"
   },
   "scripts": {
-    "dev": "concurrently --kill-others \"npm run pii-proxy\" \"wait-on -t 30000 tcp:${PII_PROXY_PORT:-18090} && npm run server:dev\" \"wait-on -t 30000 tcp:${PII_PROXY_PORT:-18090} && npm run client\"",
+    "dev": "concurrently --kill-others \"npm run pii-proxy\" \"wait-on -t 30000 tcp:18090 && npm run server:dev\" \"wait-on -t 30000 tcp:18090 && npm run client\"",
     "server:dev": "tsx --tsconfig server/tsconfig.json server/index.js",
     "server:dev-watch": "tsx watch --tsconfig server/tsconfig.json server/index.js",
     "server:prod": "node dist-server/server/index.js",
@@ -37,7 +37,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p server/tsconfig.json",
     "lint": "eslint src/ server/",
     "lint:fix": "eslint src/ server/ --fix",
-    "start": "npm run build && PII_PROXY_PORT=18090 concurrently --kill-others \"npm run pii-proxy\" \"wait-on -t 30000 tcp:18090 && npm run server:prod\"",
+    "start": "npm run build && concurrently --kill-others \"npm run pii-proxy\" \"wait-on -t 30000 tcp:18090 && npm run server:prod\"",
     "pii-proxy": "node scripts/start-pii-proxy.js",
     "release": "./release.sh",
     "prepublishOnly": "npm run build",
@@ -125,9 +125,9 @@
     "sqlite": "^5.1.1",
     "sqlite3": "^5.1.7",
     "tailwind-merge": "^3.3.1",
+    "wait-on": "^9.0.10",
     "web-push": "^3.6.7",
-    "ws": "^8.14.2",
-    "wait-on": "^9.0.10"
+    "ws": "^8.14.2"
   },
   "devDependencies": {
     "@commitlint/cli": "^20.4.3",
@@ -148,6 +148,7 @@
     "auto-changelog": "^2.5.0",
     "autoprefixer": "^10.4.16",
     "concurrently": "^8.2.2",
+    "cross-env": "^10.1.0",
     "eslint": "^9.39.3",
     "eslint-plugin-import-x": "^4.16.1",
     "eslint-plugin-react": "^7.37.5",
