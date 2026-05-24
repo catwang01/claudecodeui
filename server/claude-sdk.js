@@ -698,12 +698,14 @@ async function queryClaudeSDK(command, options = {}, ws) {
     const MAX_CONTEXT_MGMT_RETRIES = 3;
     let stallRetryCount = 0;
     let contextMgmtRetryCount = 0;
+    let retryExhausted = false;
 
     let _msgCount = 0;
     const pendingDownloadToolIds = new Set();
 
     while (true) {
       let hasContextMgmtError = false;
+      let hasApiStreamError = false;
       const abortController = new AbortController();
       const queryEnv = {
         ...sdkOptions.env,
@@ -713,6 +715,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
       // On retry, resume the session from disk; first run uses the original prompt.
       const isRetry = (stallRetryCount > 0 || contextMgmtRetryCount > 0) && capturedSessionId;
+
       const queryOpts = {
         ...sdkOptions,
         abortController,
@@ -780,6 +783,18 @@ async function queryClaudeSDK(command, options = {}, ws) {
         }
       } else {
         // session_id already captured
+      }
+
+      // Detect SDK synthetic error messages (e.g. stream idle timeout).
+      // These arrive as normal stream items (not thrown exceptions) with error: 'unknown'
+      // and model '<synthetic>', so the AbortError stall-retry path never fires for them.
+      // The '<synthetic>' guard prevents retrying genuinely non-retriable errors that might
+      // also carry error: 'unknown' (e.g. invalid_request surfaced synthetically in future SDK versions).
+      if (message.type === 'assistant' && message.error === 'unknown' &&
+          message.message?.model === '<synthetic>') {
+        hasApiStreamError = true;
+        appendToSessionLog(capturedSessionId || sessionId || 'unknown', `[${new Date().toISOString()}] [SDK] synthetic API error detected (error: unknown), will retry`);
+        continue; // skip normalization; handled after the for-await loop
       }
 
       // Transform and normalize message via adapter
@@ -868,7 +883,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
         if (isStall && stallRetryCount < MAX_STALL_RETRIES) {
           stallRetryCount++;
           console.warn(`[STALL-RETRY] Session ${capturedSessionId} stalled (no stream activity for ${STALL_TIMEOUT_MS}ms), retry ${stallRetryCount}/${MAX_STALL_RETRIES}`);
-          ws.send(createNormalizedMessage({ kind: 'status', text: 'stall_retry', retryCount: stallRetryCount, maxRetries: MAX_STALL_RETRIES, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+          ws.send(createNormalizedMessage({ kind: 'status', text: 'stall_retry', retryCount: stallRetryCount, maxRetries: MAX_STALL_RETRIES, errorMessage: `Stream stalled for ${STALL_TIMEOUT_MS / 1000}s`, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
           continue; // retry with resume
         }
 
@@ -884,7 +899,19 @@ async function queryClaudeSDK(command, options = {}, ws) {
         continue;
       } else if (hasContextMgmtError) {
         // All retries exhausted — surface the error to the user
+        retryExhausted = true;
         ws.send(createNormalizedMessage({ kind: 'error', content: 'Context compaction failed after retries (context_management: Extra inputs are not permitted). Try /compact manually or start a new session.', sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+      }
+
+      // SDK synthetic API error (e.g. stream idle timeout) — retry using resume
+      if (hasApiStreamError && stallRetryCount < MAX_STALL_RETRIES) {
+        stallRetryCount++;
+        console.warn(`[STALL-RETRY] Session ${capturedSessionId} received synthetic API error (stream idle timeout), retry ${stallRetryCount}/${MAX_STALL_RETRIES}`);
+        ws.send(createNormalizedMessage({ kind: 'status', text: 'stall_retry', retryCount: stallRetryCount, maxRetries: MAX_STALL_RETRIES, errorMessage: 'Stream idle timeout', sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+        continue;
+      } else if (hasApiStreamError) {
+        retryExhausted = true;
+        ws.send(createNormalizedMessage({ kind: 'error', content: 'Stream idle timeout after retries. Please try again.', sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
       }
 
       // for await completed normally — exit retry loop
@@ -902,8 +929,10 @@ async function queryClaudeSDK(command, options = {}, ws) {
     // Wait for file system watcher to flush projects_updated before notifying client
     await new Promise(resolve => setTimeout(resolve, 2000));
 
-    // Send completion event
-    ws.send(createNormalizedMessage({ kind: 'complete', exitCode: 0, isNewSession: !sessionId && !!command, sessionId: capturedSessionId, provider: 'claude' }));
+    // Send completion event (skip if retries were exhausted — frontend already received kind: 'error')
+    if (!retryExhausted) {
+      ws.send(createNormalizedMessage({ kind: 'complete', exitCode: 0, isNewSession: !sessionId && !!command, sessionId: capturedSessionId, provider: 'claude' }));
+    }
     notifyRunStopped({
       userId: ws?.userId || null,
       provider: 'claude',
