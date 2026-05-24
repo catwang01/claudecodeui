@@ -404,6 +404,17 @@ export function useChatRealtimeHandlers({
             setIsLoading(true);
             setCanAbortSession(true);
           }
+        } else if (msg.text === 'stall_retry') {
+          if (isMySession) {
+            const errSuffix = msg.errorMessage ? `: ${msg.errorMessage}` : '';
+            setClaudeStatus({
+              text: `Reconnecting (${msg.retryCount}/${msg.maxRetries})${errSuffix}`,
+              tokens: 0,
+              can_interrupt: true,
+            });
+            setIsLoading(true);
+            setCanAbortSession(true);
+          }
         } else if (msg.text) {
           if (isMySession) {
             setClaudeStatus({
