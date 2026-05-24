@@ -411,6 +411,102 @@ def test_proxy_anonymizes_tool_use_input(monkeypatch):
 # Integration: list content anonymization
 # ---------------------------------------------------------------------------
 
+def test_agent_tool_call_credentials_never_exposed(monkeypatch):
+    """
+    端到端 agent 凭证保护流程：
+    用户要求 agent 用真实用户名和密码调用 login 函数。
+
+    断言：
+    - 发往 Anthropic 的请求中不含明文凭证（agent 全程只看到占位符）
+    - Anthropic 返回的 tool_use block 携带占位符版本的凭证
+    - Proxy 将响应还原后，客户端收到的 tool_use.input 含真实凭证
+    - 即：函数最终以真实用户名和密码被调用，但 agent 从未接触过明文
+    """
+    import pii_proxy
+
+    USERNAME = "john@example.com"
+    PASSWORD = "hunter2"
+
+    # 预计算匿名化后的占位符（encrypt 是确定性的，固定 key 下相同明文→相同密文）
+    enc_username = pii_proxy._encrypt(USERNAME)
+    enc_password = pii_proxy._encrypt(PASSWORD)
+    anon_username = f"<PII:EMAIL_ADDRESS>{enc_username}</PII>"
+    anon_password = f"<PII:PASSWORD>{enc_password}</PII>"
+
+    captured_request = {}
+
+    async def mock_send(req, stream=False):
+        captured_request["body"] = json.loads(req.content)
+        # 模拟 Anthropic：只看到占位符，用占位符版本填入 tool_use.input
+        mock_resp = MagicMock()
+        mock_resp.headers = {"content-type": "application/json"}
+        mock_resp.status_code = 200
+        mock_resp.content = json.dumps({
+            "content": [{
+                "type": "tool_use",
+                "id": "tu_login_001",
+                "name": "login",
+                "input": {
+                    "username": anon_username,
+                    "password": anon_password,
+                },
+            }]
+        }).encode()
+        async def aread(): pass
+        mock_resp.aread = aread
+        async def aclose(): pass
+        mock_resp.aclose = aclose
+        return mock_resp
+
+    pii_proxy.anonymize_text.cache_clear()
+    monkeypatch.setattr(pii_proxy._client, "send", mock_send)
+    monkeypatch.setattr(
+        pii_proxy._analyzer,
+        "analyze",
+        lambda text, language, entities: [
+            *(
+                [_RecognizerResult(
+                    entity_type="EMAIL_ADDRESS",
+                    start=text.index(USERNAME),
+                    end=text.index(USERNAME) + len(USERNAME),
+                    score=0.95,
+                )] if USERNAME in text else []
+            ),
+            *(
+                [_RecognizerResult(
+                    entity_type="PASSWORD",
+                    start=text.index(PASSWORD),
+                    end=text.index(PASSWORD) + len(PASSWORD),
+                    score=0.9,
+                )] if PASSWORD in text else []
+            ),
+        ],
+    )
+
+    resp = client.post(
+        "/v1/messages",
+        json={"messages": [{"role": "user", "content": f"请用用户名 {USERNAME} 密码 {PASSWORD} 调用 login 函数"}]},
+        headers={"x-api-key": "test-key"},
+    )
+
+    assert resp.status_code == 200
+
+    # 断言 1：Anthropic 收到的请求中不含明文凭证
+    sent_content = captured_request["body"]["messages"][0]["content"]
+    assert USERNAME not in sent_content, "用户名不应出现在发往 Anthropic 的请求中（agent 不可见）"
+    assert PASSWORD not in sent_content, "密码不应出现在发往 Anthropic 的请求中（agent 不可见）"
+    assert "<PII:EMAIL_ADDRESS>" in sent_content
+    assert "<PII:PASSWORD>" in sent_content
+
+    # 断言 2：客户端收到的 tool_use.input 已还原为真实凭证（函数将以真实值被调用）
+    body = resp.json()
+    tool_input = body["content"][0]["input"]
+    assert tool_input["username"] == USERNAME, "函数调用应携带真实用户名"
+    assert tool_input["password"] == PASSWORD, "函数调用应携带真实密码"
+    assert "<PII:" not in tool_input["username"], "响应中用户名字段不应含 PII 占位符"
+    assert "<PII:" not in tool_input["password"], "响应中密码字段不应含 PII 占位符"
+
+
 def test_proxy_anonymizes_list_content(monkeypatch):
     """messages 中 content 为 list 格式时，text block 也应被脱敏。"""
     import pii_proxy
