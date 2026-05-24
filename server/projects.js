@@ -2057,6 +2057,33 @@ async function deleteCodexSession(sessionId) {
   }
 }
 
+function extractTextFromContent(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter(part => (part.type === 'text' && part.text) || part.type === 'tool_result' || part.type === 'tool_use')
+      .map(part => {
+        if (part.type === 'text') return part.text;
+        if (part.type === 'tool_result') {
+          const inner = part.content;
+          if (typeof inner === 'string') return inner;
+          if (Array.isArray(inner)) return inner.filter(p => p.type === 'text' && p.text).map(p => p.text).join(' ');
+        }
+        if (part.type === 'tool_use') {
+          const parts = [part.name];
+          if (part.input && typeof part.input === 'object') {
+            parts.push(Object.values(part.input).map(v => (typeof v === 'string' ? v : JSON.stringify(v))).join(' '));
+          }
+          return parts.filter(Boolean).join(' ');
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .join(' ');
+  }
+  return '';
+}
+
 async function searchConversations(query, limit = 50, onProjectResult = null, signal = null, excludePatterns = []) {
   const safeQuery = typeof query === 'string' ? query.trim() : '';
   const safeLimit = Math.max(1, Math.min(Number.isFinite(limit) ? limit : 50, 200));
@@ -2086,16 +2113,7 @@ async function searchConversations(query, limit = 50, onProjectResult = null, si
     );
   };
 
-  const extractText = (content) => {
-    if (typeof content === 'string') return content;
-    if (Array.isArray(content)) {
-      return content
-        .filter(part => part.type === 'text' && part.text)
-        .map(part => part.text)
-        .join(' ');
-    }
-    return '';
-  };
+  const extractText = extractTextFromContent;
 
   const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const wordPatterns = words.map(w => new RegExp(`(?<!\\p{L})${escapeRegex(w)}(?!\\p{L})`, 'u'));
@@ -2747,5 +2765,6 @@ export {
   deleteCodexSession,
   getGeminiCliSessions,
   getGeminiCliSessionMessages,
-  searchConversations
+  searchConversations,
+  extractTextFromContent
 };
