@@ -33,6 +33,8 @@ export function normalizeMessage(raw, sessionId) {
   }
 
   // ── History / full-message events ────────────────────────────────────────
+  if (raw.type === 'attachment') return [];
+
   const messages = [];
   const ts = raw.timestamp || new Date().toISOString();
   const baseId = raw.id || raw.uuid || generateMessageId('claude');
