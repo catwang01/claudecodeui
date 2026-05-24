@@ -430,6 +430,7 @@ def _deanonymize_obj(obj, req_id: str = "", path: str = "response"):
 _client = httpx.AsyncClient(
     timeout=httpx.Timeout(connect=30.0, read=None, write=None, pool=None),
     follow_redirects=True,
+    trust_env=False,  # bypass system proxy; pii-proxy should connect directly to upstream
 )
 
 _HOP_BY_HOP = {"host", "content-length", "transfer-encoding", "connection", "keep-alive", "content-encoding"}
