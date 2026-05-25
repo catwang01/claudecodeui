@@ -584,6 +584,7 @@ function ChatInterface({
         isVisible={isCreatingSession}
         error={sessionCreationError}
         onRetry={handleSessionCreationRetry}
+        onCancel={clearSessionCreation}
       />
 
       {uploadError && (

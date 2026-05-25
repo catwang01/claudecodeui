@@ -305,6 +305,7 @@ export default function SidebarContent({
                 onSessionSelect={projectListProps.onSessionSelect}
                 onHideSession={() => hideSession(session.id, session.__provider || 'claude', session.lastActivity || session.createdAt || '')}
                 onDeleteSession={projectListProps.onDeleteSession}
+                onRenameSession={projectListProps.onSaveEditingSession}
                 onProjectNavigate={(proj) => {
                   setScrollTargetProject(proj.name);
                   onSearchModeChange('projects');

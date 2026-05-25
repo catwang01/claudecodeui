@@ -4,14 +4,20 @@ interface NewSessionLoadingModalProps {
   isVisible: boolean;
   error: string | null;
   onRetry: () => void;
+  onCancel?: () => void;
 }
 
-export function NewSessionLoadingModal({ isVisible, error, onRetry }: NewSessionLoadingModalProps) {
+export function NewSessionLoadingModal({ isVisible, error, onRetry, onCancel }: NewSessionLoadingModalProps) {
   if (!isVisible) return null;
 
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-[2px]" />
+      <div
+        className="absolute inset-0 bg-black/70 backdrop-blur-[2px]"
+        onClick={onCancel}
+        role={onCancel ? 'button' : undefined}
+        aria-label={onCancel ? 'Cancel session creation' : undefined}
+      />
       <div className="relative flex flex-col items-center gap-3 rounded-xl border border-border bg-card px-10 py-8 shadow-2xl text-center min-w-[220px] max-w-[320px]">
         {!error ? (
           <>

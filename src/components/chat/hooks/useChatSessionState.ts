@@ -399,6 +399,8 @@ export function useChatSessionState({
       setIsLoading(false);
       setCurrentSessionId(null);
       setPendingUserMessage(null);
+      setIsCreatingSession(false);
+      setSessionCreationError(null);
       sessionStorage.removeItem('cursorSessionId');
       messagesOffsetRef.current = 0;
       setHasMoreMessages(false);

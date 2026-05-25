@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Check, Clock, Edit2, EyeOff, Folder, Sparkles, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { Badge, Button } from '../../../../shared/view/ui';
@@ -51,6 +52,7 @@ type RecentsProps = {
     provider: SessionProvider,
   ) => void;
   onProjectNavigate: (project: Project) => void;
+  onRenameSession: (projectName: string, sessionId: string, summary: string, provider: SessionProvider) => void;
   isProcessing?: boolean;
   t: TFunction;
 };
@@ -63,8 +65,30 @@ export default function SidebarSessionItem(props: SidebarSessionItemProps) {
   const { awaitingPermissionSessions } = useAwaitingPermissions();
   const isAwaitingPermission = awaitingPermissionSessions.has(session.id);
 
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState('');
+
   if (props.variant === 'recents') {
-    const { projectColorDot, projectDisplayName, isRead = false, onSessionSelect, onHideSession, onDeleteSession, onProjectNavigate } = props;
+    const { projectColorDot, projectDisplayName, isRead = false, onSessionSelect, onHideSession, onDeleteSession, onProjectNavigate, onRenameSession } = props;
+
+    const startRenaming = (e: { stopPropagation: () => void }) => {
+      e.stopPropagation();
+      setRenameValue(sessionView.sessionName);
+      setIsRenaming(true);
+    };
+
+    const saveRename = (e: { stopPropagation: () => void }) => {
+      e.stopPropagation();
+      const trimmed = renameValue.trim();
+      if (trimmed) onRenameSession(project.name, session.id, trimmed, session.__provider);
+      setIsRenaming(false);
+    };
+
+    const cancelRename = (e: { stopPropagation: () => void }) => {
+      e.stopPropagation();
+      setIsRenaming(false);
+    };
+
     return (
       <div className="group relative">
         <div
@@ -83,20 +107,41 @@ export default function SidebarSessionItem(props: SidebarSessionItemProps) {
         )}
         <div
           className="w-full rounded-md pr-2 py-2 pl-5 text-left transition-colors hover:bg-accent/50 cursor-pointer"
-          onClick={() => onSessionSelect(session, project.name)}
+          onClick={() => { if (!isRenaming) onSessionSelect(session, project.name); }}
           role="button"
           tabIndex={0}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onSessionSelect(session, project.name); }}
+          onKeyDown={(e) => { if (!isRenaming && (e.key === 'Enter' || e.key === ' ')) onSessionSelect(session, project.name); }}
         >
           <div className="flex items-center gap-2 min-w-0">
             <SessionProviderLogo provider={session.__provider} className="h-3 w-3 flex-shrink-0" />
-            <span className="min-w-0 truncate text-xs font-medium text-foreground flex-1 flex items-center gap-1">
-              {session.isAutoDoc && (
-                <Sparkles className="h-2.5 w-2.5 flex-shrink-0 text-amber-500" aria-label="Auto Doc" />
-              )}
-              {sessionView.sessionName}
-            </span>
-            {isAwaitingPermission && (
+            {isRenaming ? (
+              <input
+                type="text"
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === 'Enter') {
+                    const trimmed = renameValue.trim();
+                    if (trimmed) onRenameSession(project.name, session.id, trimmed, session.__provider);
+                    setIsRenaming(false);
+                  } else if (e.key === 'Escape') {
+                    setIsRenaming(false);
+                  }
+                }}
+                onClick={(e) => e.stopPropagation()}
+                className="min-w-0 flex-1 rounded border border-border bg-background px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                autoFocus
+              />
+            ) : (
+              <span className="min-w-0 truncate text-xs font-medium text-foreground flex-1 flex items-center gap-1">
+                {session.isAutoDoc && (
+                  <Sparkles className="h-2.5 w-2.5 flex-shrink-0 text-amber-500" aria-label="Auto Doc" />
+                )}
+                {sessionView.sessionName}
+              </span>
+            )}
+            {!isRenaming && isAwaitingPermission && (
               <span
                 aria-label="Permission request waiting for approval"
                 title="Permission request waiting for approval"
@@ -107,43 +152,78 @@ export default function SidebarSessionItem(props: SidebarSessionItemProps) {
             )}
           </div>
           <div className="mt-0.5 flex items-center gap-1.5 pl-5">
-            <button
-              className="group/folder flex items-center gap-1 min-w-0 max-w-[40%] rounded px-0.5 py-0.5 hover:bg-accent/60 transition-colors cursor-pointer"
-              onClick={(e) => { e.stopPropagation(); onProjectNavigate(project); }}
-              title={`Go to project: ${projectDisplayName}`}
-              type="button"
-            >
-              <Folder className="h-2.5 w-2.5 flex-shrink-0 text-muted-foreground/60 group-hover/folder:text-foreground/70 transition-colors" />
-              <span className="truncate text-[10px] text-muted-foreground/60 group-hover/folder:text-foreground/70 group-hover/folder:underline transition-colors">{projectDisplayName}</span>
-            </button>
-            {sessionView.messageCount > 0 && (
+            {!isRenaming && (
+              <button
+                className="group/folder flex items-center gap-1 min-w-0 max-w-[40%] rounded px-0.5 py-0.5 hover:bg-accent/60 transition-colors cursor-pointer"
+                onClick={(e) => { e.stopPropagation(); onProjectNavigate(project); }}
+                title={`Go to project: ${projectDisplayName}`}
+                type="button"
+              >
+                <Folder className="h-2.5 w-2.5 flex-shrink-0 text-muted-foreground/60 group-hover/folder:text-foreground/70 transition-colors" />
+                <span className="truncate text-[10px] text-muted-foreground/60 group-hover/folder:text-foreground/70 group-hover/folder:underline transition-colors">{projectDisplayName}</span>
+              </button>
+            )}
+            {!isRenaming && sessionView.messageCount > 0 && (
               <Badge variant="secondary" className="ml-auto px-1 py-0 text-xs flex-shrink-0">
                 {sessionView.messageCount}
               </Badge>
             )}
-            <span className={cn('flex-shrink-0 text-[10px] text-muted-foreground/50', sessionView.messageCount > 0 ? 'ml-1' : 'ml-auto')}>
-              {formatTimeAgo(sessionView.sessionTime, currentTime, t)}
-            </span>
-            <button
-              className="ml-1 hidden group-hover:flex items-center justify-center h-4 w-4 rounded text-muted-foreground/40 hover:text-muted-foreground transition-colors flex-shrink-0"
-              onClick={(e) => { e.stopPropagation(); onHideSession(); }}
-              title="Hide from recents"
-              type="button"
-            >
-              <EyeOff className="h-3 w-3" />
-            </button>
-            {!sessionView.isCursorSession && (
-            <button
-              className="hidden group-hover:flex items-center justify-center h-4 w-4 rounded text-muted-foreground/40 hover:text-red-500 transition-colors flex-shrink-0"
-              onClick={(e) => { e.stopPropagation(); onDeleteSession(project.name, session.id, sessionView.sessionName, session.__provider); }}
-              title="Delete session"
-              type="button"
-            >
-              <Trash2 className="h-3 w-3" />
-            </button>
+            {!isRenaming && (
+              <span className={cn('flex-shrink-0 text-[10px] text-muted-foreground/50', sessionView.messageCount > 0 ? 'ml-1' : 'ml-auto')}>
+                {formatTimeAgo(sessionView.sessionTime, currentTime, t)}
+              </span>
+            )}
+            {isRenaming ? (
+              <>
+                <button
+                  className="ml-auto flex items-center justify-center h-4 w-4 rounded text-green-600 hover:text-green-700 transition-colors flex-shrink-0"
+                  onClick={saveRename}
+                  title="Save name"
+                  type="button"
+                >
+                  <Check className="h-3 w-3" />
+                </button>
+                <button
+                  className="flex items-center justify-center h-4 w-4 rounded text-muted-foreground/40 hover:text-muted-foreground transition-colors flex-shrink-0"
+                  onClick={cancelRename}
+                  title="Cancel"
+                  type="button"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  className="ml-1 hidden group-hover:flex items-center justify-center h-4 w-4 rounded text-muted-foreground/40 hover:text-muted-foreground transition-colors flex-shrink-0"
+                  onClick={startRenaming}
+                  title="Rename session"
+                  type="button"
+                >
+                  <Edit2 className="h-3 w-3" />
+                </button>
+                <button
+                  className="ml-1 hidden group-hover:flex items-center justify-center h-4 w-4 rounded text-muted-foreground/40 hover:text-muted-foreground transition-colors flex-shrink-0"
+                  onClick={(e) => { e.stopPropagation(); onHideSession(); }}
+                  title="Hide from recents"
+                  type="button"
+                >
+                  <EyeOff className="h-3 w-3" />
+                </button>
+                {!sessionView.isCursorSession && (
+                  <button
+                    className="hidden group-hover:flex items-center justify-center h-4 w-4 rounded text-muted-foreground/40 hover:text-red-500 transition-colors flex-shrink-0"
+                    onClick={(e) => { e.stopPropagation(); onDeleteSession(project.name, session.id, sessionView.sessionName, session.__provider); }}
+                    title="Delete session"
+                    type="button"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                )}
+              </>
             )}
           </div>
-          {session.lastAutoDocAt && (
+          {!isRenaming && session.lastAutoDocAt && (
             <div className="mt-0.5 flex items-center gap-1 pl-5">
               <Sparkles className="h-2.5 w-2.5 flex-shrink-0 text-amber-400" />
               <span className="text-[10px] text-amber-500/70">
