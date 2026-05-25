@@ -1,6 +1,7 @@
 # Session Rename Feature Design
 
 **Date:** 2026-05-25
+**Status:** Implemented (2026-05-25)
 
 ## Summary
 
@@ -78,6 +79,12 @@ User clicks title
 - Empty string: skip API call, revert
 - Same name: skip API call, revert
 - API error: show `alert()` (matches existing `updateSessionSummary` behavior), stay in edit mode
+
+## Implementation Notes
+
+- **Chat header** (`MainContentTitle.tsx`): Uses `optimisticTitle` local state instead of an `onRenameSession` prop. Calls `api.renameSession()` directly + `window.refreshProjects?.()` for sidebar sync. `optimisticTitle` cleared on session navigation (`useEffect` on `selectedSession?.id`).
+- **Recents sidebar** (`SidebarSessionItem.tsx`): Uses local `isRenaming`/`renameValue` state (independent of the parent-managed `editingSession` flow in the Default variant). Edit2 button appears on hover alongside hide/delete.
+- **Deviation from spec**: Spec proposed `onRenameSession` callback prop for `MainContentTitle`; implementation uses direct `api.renameSession()` + optimistic state because `window.refreshProjects` doesn't update `selectedSession` (only the project list).
 
 ## Files Changed
 
