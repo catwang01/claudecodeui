@@ -282,7 +282,7 @@ router.post('/push/unsubscribe', async (req, res) => {
 const AUTO_DOC_DEFAULT_INTERVAL_MS = 30 * 60 * 1000;
 const AUTO_DOC_DEFAULT_PROMPT = 'Based on this conversation, please organize and update the relevant project documentation.';
 const AUTO_DOC_DEFAULT_MIN_MESSAGE_COUNT = 20;
-const AUTO_DOC_DEFAULT_MODEL = 'claude-opus-4-6';
+const AUTO_DOC_DEFAULT_MODEL = 'claude-opus-4.7';
 
 router.get('/auto-doc', async (req, res) => {
   try {

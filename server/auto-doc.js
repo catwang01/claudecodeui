@@ -22,7 +22,7 @@ const DEFAULT_INTERVAL_MS = parseInt(process.env.AUTO_DOC_INTERVAL_MS, 10) || 30
 const DEFAULT_PROMPT = process.env.AUTO_DOC_PROMPT ||
   'Based on this conversation, please organize and update the relevant project documentation.';
 
-const DEFAULT_MODEL = process.env.AUTO_DOC_MODEL || 'claude-opus-4-6';
+const DEFAULT_MODEL = process.env.AUTO_DOC_MODEL || 'claude-opus-4.7';
 
 // Re-run only when the session has grown by at least this many messages
 const NEW_MSG_THRESHOLD = 20;

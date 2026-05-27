@@ -15,7 +15,7 @@ const INTERVAL_OPTIONS = [
 const DEFAULT_INTERVAL_MS = 30 * 60 * 1000;
 const DEFAULT_PROMPT = 'Based on this conversation, please organize and update the relevant project documentation.';
 const DEFAULT_MIN_MESSAGE_COUNT = 20;
-const DEFAULT_MODEL = 'claude-opus-4-6';
+const DEFAULT_MODEL = 'claude-opus-4.7';
 
 export default function AutomationsSettingsTab() {
   const { t } = useTranslation('settings');

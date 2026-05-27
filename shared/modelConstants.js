@@ -11,18 +11,17 @@
  * - API format ('claude-sonnet-4.5') - used by slash commands for display
  */
 export const CLAUDE_MODELS = {
-  // Models in SDK format (what the actual SDK accepts)
+  // Models in API format (official Anthropic model IDs)
+  // IMPORTANT: Must use dot notation (4.7), not dash notation (4-7)
   OPTIONS: [
-    { value: "opus", label: "Opus" },
-    { value: "sonnet", label: "Sonnet" },
-    { value: "haiku", label: "Haiku" },
-    { value: "claude-opus-4-6", label: "Opus 4.6" },
-    { value: "opusplan", label: "Opus Plan" },
-    { value: "sonnet[1m]", label: "Sonnet [1M]" },
-    { value: "opus[1m]", label: "Opus [1M]" },
+    { value: "claude-opus-4.7", label: "Opus 4.7" },
+    { value: "claude-opus-4.6", label: "Opus 4.6" },
+    { value: "claude-sonnet-4.6", label: "Sonnet 4.6" },
+    { value: "claude-sonnet-4.5", label: "Sonnet 4.5" },
+    { value: "claude-haiku-4.5", label: "Haiku 4.5" },
   ],
 
-  DEFAULT: "sonnet[1m]",
+  DEFAULT: "claude-sonnet-4.6",
 };
 
 /**

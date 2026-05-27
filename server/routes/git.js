@@ -983,7 +983,7 @@ Generate the commit message:`;
       await queryClaudeSDK(prompt, {
         cwd: projectPath,
         permissionMode: 'bypassPermissions',
-        model: 'sonnet'
+        model: 'claude-sonnet-4.6'
       }, writer);
     } else if (provider === 'cursor') {
       await spawnCursor(prompt, {
