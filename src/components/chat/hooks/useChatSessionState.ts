@@ -397,6 +397,7 @@ export function useChatSessionState({
       setClaudeStatus(null);
       setCanAbortSession(false);
       setIsLoading(false);
+      setIsLoadingSessionMessages(false);
       setCurrentSessionId(null);
       setPendingUserMessage(null);
       setIsCreatingSession(false);
