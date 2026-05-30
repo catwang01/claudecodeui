@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Load environment variables before other imports execute
 import './load-env.js';
+import { createWatcherDebounce } from './watcher-debounce.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -103,9 +104,7 @@ const WATCHER_IGNORED_PATTERNS = [
 ];
 const WATCHER_DEBOUNCE_MS = 300;
 let projectsWatchers = [];
-let projectsWatcherDebounceTimer = null;
 const connectedClients = new Set();
-let isGetProjectsRunning = false; // Flag to prevent reentrant calls
 
 // Broadcast progress to all connected WebSocket clients
 function broadcastProgress(progress) {
@@ -192,11 +191,6 @@ async function resolveLocalIdIfPending(filePath) {
 async function setupProjectsWatcher() {
     const chokidar = (await import('chokidar')).default;
 
-    if (projectsWatcherDebounceTimer) {
-        clearTimeout(projectsWatcherDebounceTimer);
-        projectsWatcherDebounceTimer = null;
-    }
-
     await Promise.all(
         projectsWatchers.map(async (watcher) => {
             try {
@@ -208,22 +202,17 @@ async function setupProjectsWatcher() {
     );
     projectsWatchers = [];
 
-    const debouncedUpdate = (eventType, filePath, provider, rootPath) => {
-        if (projectsWatcherDebounceTimer) {
-            clearTimeout(projectsWatcherDebounceTimer);
-        }
+    // Helper: build a per-provider debounced handler so provider/rootPath are
+    // captured by closure rather than passed as arguments.
+    // Uses a per-provider serial promise queue so that immediate 'add' events
+    // from multiple providers never race through the shared isGetProjectsRunning guard.
+    function makeProviderHandler(provider, rootPath) {
+        let queue = Promise.resolve();
 
-        projectsWatcherDebounceTimer = setTimeout(async () => {
-            // Prevent reentrant calls
-            if (isGetProjectsRunning) {
-                return;
-            }
-
+        async function handleEvent(eventType, filePath) {
             try {
-                isGetProjectsRunning = true;
-
                 // Sync changed file to sessions DB so getProjects()/getSessions() read up-to-date data
-                if (filePath.endsWith('.jsonl') || filePath.endsWith('.json')) {
+                if (filePath && (filePath.endsWith('.jsonl') || filePath.endsWith('.json'))) {
                     sessionSynchronizerService.synchronizeProviderFile(provider, filePath)
                         .catch(err => console.error('[WARN] DB sync failed for', filePath, err));
                 }
@@ -252,17 +241,28 @@ async function setupProjectsWatcher() {
 
             } catch (error) {
                 console.error('[ERROR] Error handling project changes:', error);
-            } finally {
-                isGetProjectsRunning = false;
             }
-        }, WATCHER_DEBOUNCE_MS);
-    };
+        }
+
+        const { handle } = createWatcherDebounce({
+            debounceMs: WATCHER_DEBOUNCE_MS,
+            callback: (eventType, filePath) => {
+                // Serialize events for this provider — never drop, never race
+                queue = queue.then(() => handleEvent(eventType, filePath)).catch(() => {});
+                return queue;
+            }
+        });
+        return handle;
+    }
 
     for (const { provider, rootPath } of PROVIDER_WATCH_PATHS) {
         try {
             // chokidar v4 emits ENOENT via the "error" event for missing roots and will not auto-recover.
             // Ensure provider folders exist before creating the watcher so watching stays active.
             await fsPromises.mkdir(rootPath, { recursive: true });
+
+            // Each provider gets its own debounced handler (provider/rootPath captured by closure)
+            const handle = makeProviderHandler(provider, rootPath);
 
             // Initialize chokidar watcher with optimized settings
             const watcher = chokidar.watch(rootPath, {
@@ -279,11 +279,11 @@ async function setupProjectsWatcher() {
 
             // Set up event listeners
             watcher
-                .on('add', (filePath) => { resolveLocalIdIfPending(filePath); if (filePath.endsWith('.jsonl')) debouncedUpdate('add', filePath, provider, rootPath); })
-                .on('change', (filePath) => { resolveLocalIdIfPending(filePath); if (filePath.endsWith('.jsonl')) debouncedUpdate('change', filePath, provider, rootPath); })
-                .on('unlink', (filePath) => { if (filePath.endsWith('.jsonl')) debouncedUpdate('unlink', filePath, provider, rootPath); })
-                .on('addDir', (dirPath) => debouncedUpdate('addDir', dirPath, provider, rootPath))
-                .on('unlinkDir', (dirPath) => debouncedUpdate('unlinkDir', dirPath, provider, rootPath))
+                .on('add', (filePath) => { resolveLocalIdIfPending(filePath); if (filePath.endsWith('.jsonl')) handle('add', filePath); })
+                .on('change', (filePath) => { resolveLocalIdIfPending(filePath); if (filePath.endsWith('.jsonl')) handle('change', filePath); })
+                .on('unlink', (filePath) => { if (filePath.endsWith('.jsonl')) handle('unlink', filePath); })
+                .on('addDir', (dirPath) => handle('addDir', dirPath))
+                .on('unlinkDir', (dirPath) => handle('unlinkDir', dirPath))
                 .on('error', (error) => {
                     console.error(`[ERROR] ${provider} watcher error:`, error);
                 })
