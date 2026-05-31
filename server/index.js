@@ -12,6 +12,25 @@ const __dirname = dirname(__filename);
 
 const installMode = fs.existsSync(path.join(__dirname, '..', '.git')) ? 'git' : 'npm';
 
+// ── WebSocket 全量日志 ──────────────────────────────────────────────────────
+// 环境变量 WS_LOG_FILE 指定路径时启用，例如：WS_LOG_FILE=/tmp/ws.log npm run dev
+const WS_LOG_FILE = process.env.WS_LOG_FILE || null;
+const wsLogStream = WS_LOG_FILE
+    ? fs.createWriteStream(WS_LOG_FILE, { flags: 'a' })
+    : null;
+
+function wsLog(direction, sessionId, data) {
+    if (!wsLogStream) return;
+    const line = JSON.stringify({
+        ts: new Date().toISOString(),
+        dir: direction,   // 'recv' | 'send'
+        sid: sessionId,
+        data,
+    });
+    wsLogStream.write(line + '\n');
+}
+// ───────────────────────────────────────────────────────────────────────────
+
 // ANSI color codes for terminal output
 const colors = {
     reset: '\x1b[0m',
@@ -1673,6 +1692,7 @@ class WebSocketWriter {
 
     send(data) {
         if (this.ws.readyState === 1) { // WebSocket.OPEN
+            wsLog('send', this.sessionId, data);
             this.ws.send(JSON.stringify(data));
         }
     }
@@ -1703,6 +1723,7 @@ function handleChatConnection(ws, request) {
     ws.on('message', async (message) => {
         try {
             const data = JSON.parse(message);
+            wsLog('recv', writer.getSessionId(), data);
 
             if (data.type === 'claude-command') {
                 console.log('[DEBUG] User message:', data.command || '[Continue/Resume]');

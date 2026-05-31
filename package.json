@@ -28,7 +28,7 @@
     "server:dev-watch": "tsx watch --tsconfig server/tsconfig.json server/index.js",
     "server:prod": "node dist-server/server/index.js",
     "server": "npm run server:dev",
-    "client": "vite",
+    "client": "vite --force",
     "build": "npm run build:client && npm run build:server && cp -r dist dist-server/dist",
     "build:client": "vite build",
     "prebuild:server": "node -e \"require('node:fs').rmSync('dist-server', { recursive: true, force: true })\"",
@@ -125,7 +125,6 @@
     "sqlite": "^5.1.1",
     "sqlite3": "^5.1.7",
     "tailwind-merge": "^3.3.1",
-    "wait-on": "^9.0.10",
     "web-push": "^3.6.7",
     "ws": "^8.14.2"
   },
@@ -171,7 +170,8 @@
     "typescript-eslint": "^8.56.1",
     "vite": "^7.0.4",
     "vite-plugin-static-copy": "^4.1.0",
-    "vitest": "^4.1.4"
+    "vitest": "^4.1.4",
+    "wait-on": "^9.0.10"
   },
   "lint-staged": {
     "src/**/*.{ts,tsx,js,jsx}": "eslint"

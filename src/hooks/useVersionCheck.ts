@@ -24,13 +24,14 @@ const compareVersions = (v1: string, v2: string) => {
 
 export type InstallMode = 'git' | 'npm';
 
-export const useVersionCheck = (owner: string, repo: string) => {
+export const useVersionCheck = (owner: string, repo: string, skip = false) => {
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [latestVersion, setLatestVersion] = useState<string | null>(null);
   const [releaseInfo, setReleaseInfo] = useState<ReleaseInfo | null>(null);
   const [installMode, setInstallMode] = useState<InstallMode>('git');
 
   useEffect(() => {
+    if (skip) return;
     const fetchInstallMode = async () => {
       try {
         const response = await fetch('/health');
@@ -46,6 +47,7 @@ export const useVersionCheck = (owner: string, repo: string) => {
   }, []);
 
   useEffect(() => {
+    if (skip) return;
     const checkVersion = async () => {
       try {
         const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/latest`);

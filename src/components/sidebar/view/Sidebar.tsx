@@ -42,10 +42,6 @@ function Sidebar({
 }: SidebarProps) {
   const { t } = useTranslation(['sidebar', 'common']);
   const { isPWA } = useDeviceSettings({ trackMobile: false });
-  const { updateAvailable, latestVersion, currentVersion, releaseInfo, installMode } = useVersionCheck(
-    'siteboon',
-    'claudecodeui',
-  );
   const { preferences, setPreference } = useUiPreferences();
   const { sidebarVisible } = preferences;
   const { setCurrentProject, mcpServerStatus } = useTaskMaster() as TaskMasterSidebarContext;
@@ -127,6 +123,12 @@ function Sidebar({
     setSidebarVisible,
     sidebarVisible,
   });
+
+  const { updateAvailable, latestVersion, currentVersion, releaseInfo, installMode } = useVersionCheck(
+    'siteboon',
+    'claudecodeui',
+    cleanMode,
+  );
 
   useEffect(() => {
     if (typeof document === 'undefined') {

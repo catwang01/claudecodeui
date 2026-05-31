@@ -8,6 +8,8 @@ All notable changes to CloudCLI UI will be documented in this file.
 ### New Features
 
 * **messages:** sessionStorage message caching with incremental fetch — session switch no longer re-fetches all messages; `after_id` backend API enables delta-only sync
+* **chat:** persistent model selector dropdown in chat input controls — per-provider model selection saved to localStorage
+* **search:** QuickSearch now respects `projectExcludePatterns` — backend skips matching directories, frontend double-guards with active project list filter
 * **privacy:** add PII anonymization proxy with Presidio + detect-secrets + AES-256 deterministic encryption (transparent request/response interception)
 * **privacy:** custom PasswordValueRecognizer for structured and natural-language password detection (EN + ZH)
 * **privacy:** add Privacy settings tab with PII proxy toggle and debug log viewer
@@ -16,15 +18,17 @@ All notable changes to CloudCLI UI will be documented in this file.
 * **settings:** add Auto Doc Generation settings tab with interval, prompt, and hide toggle
 * **sidebar:** option to hide auto-generated sessions from recents and project views
 * **sidebar:** hide session from recents with auto-restore on new activity
+* **settings:** add Clean Mode toggle (Settings → Appearance) — hides update notification banner, GitHub star badge, and community/Discord links from sidebar
+* **chat:** tool call duration and reply duration timing display — shows ⏱ elapsed time after tool results and in assistant message footer; last reply in a turn shows total time from user message, intermediate replies show self duration; timestamps flow from JSONL `tool_result` entries through adapter → useChatMessages → MessageComponent
 
 ### Bug Fixes
 
+* **chat:** auto-retry `context_management: Extra inputs are not permitted` compaction failures — intercept error in stream, retry up to 3 times with session resume, show retry status in chat log
 * **auto-doc:** fix `maxTurns: 1` causing premature termination — agent needs multiple turns for file I/O, increased to 20
 * **auto-doc:** fix concurrent batch execution — await batch completion before scheduling next timer tick
+* **server:** align `pathToClaudeProjectName` with Claude CLI encoding (all non-alphanumeric → `-`)
 
 ### Known Issues
-
-* **search:** QuickSearch (`searchConversations`) does not respect `projectExcludePatterns` — excluded projects still appear in search results (fix pending: frontend filter in QuickSearchOverlay)
 
 ### Refactoring
 
