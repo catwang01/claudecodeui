@@ -1,10 +1,15 @@
-import { open, stat, readdir } from 'fs/promises';
+import { stat, readdir, createReadStream } from 'fs';
+import { promisify } from 'util';
 import path from 'path';
+import readline from 'readline';
+
+const statAsync = promisify(stat);
+const readdirAsync = promisify(readdir);
 
 export async function readFileTimestamps(
   filePath: string
 ): Promise<{ createdAt: string; updatedAt: string }> {
-  const s = await stat(filePath);
+  const s = await statAsync(filePath);
   return {
     createdAt: s.birthtime.toISOString(),
     updatedAt: s.mtime.toISOString(),
@@ -15,25 +20,33 @@ export async function readFirstJsonlLine<T>(
   filePath: string,
   parse: (data: unknown) => T | null
 ): Promise<T | null> {
-  let fh;
+  const fileStream = createReadStream(filePath, { encoding: 'utf8' });
+  const rl = readline.createInterface({
+    input: fileStream,
+    crlfDelay: Infinity,
+  });
+
   try {
-    fh = await open(filePath, 'r');
-    const buf = Buffer.alloc(8192);
-    const { bytesRead } = await fh.read(buf, 0, 8192, 0);
-    const text = buf.subarray(0, bytesRead).toString('utf8');
-    for (const line of text.split('\n')) {
+    for await (const line of rl) {
       const trimmed = line.trim();
       if (!trimmed) continue;
       try {
         const parsed = parse(JSON.parse(trimmed));
-        if (parsed !== null) return parsed;
-      } catch { /* skip malformed */ }
+        if (parsed !== null) {
+          rl.close();
+          fileStream.destroy();
+          return parsed;
+        }
+      } catch {
+        /* skip malformed JSON */
+      }
     }
     return null;
   } catch {
     return null;
   } finally {
-    await fh?.close();
+    rl.close();
+    fileStream.destroy();
   }
 }
 
@@ -47,14 +60,14 @@ export async function findFilesModifiedAfter(
   async function walk(dir: string): Promise<void> {
     let entries: string[];
     try {
-      entries = await readdir(dir);
+      entries = await readdirAsync(dir);
     } catch {
       return;
     }
     for (const entry of entries) {
       const fullPath = path.join(dir, entry);
       try {
-        const s = await stat(fullPath);
+        const s = await statAsync(fullPath);
         if (s.isDirectory()) {
           await walk(fullPath);
         } else if (entry.endsWith(ext)) {

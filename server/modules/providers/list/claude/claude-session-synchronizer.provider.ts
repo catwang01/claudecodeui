@@ -34,6 +34,8 @@ export const claudeSessionSynchronizer: ISessionSynchronizer = {
       const d = data as Record<string, unknown>;
       const sessionId = typeof d.sessionId === 'string' ? d.sessionId : null;
       const projectPath = typeof d.cwd === 'string' ? d.cwd : null;
+      // Continue reading lines until we find both sessionId AND cwd
+      // (first line might be queue-operation without cwd)
       if (!sessionId || !projectPath) return null;
       return { sessionId, projectPath };
     });
