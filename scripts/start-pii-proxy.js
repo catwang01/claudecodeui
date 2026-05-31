@@ -5,7 +5,7 @@
  * Uses the Python virtual environment created by setup scripts
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { existsSync } from 'node:fs';
@@ -33,9 +33,25 @@ function getPythonExecutable() {
   }
 }
 
+function syncDependencies(pythonExe) {
+  const requirementsFile = join(piiProxyDir, 'requirements.txt');
+  if (!existsSync(requirementsFile)) return;
+  try {
+    console.log('[pii-proxy] Syncing Python dependencies...');
+    execFileSync(pythonExe, ['-m', 'pip', 'install', '-q', '-r', requirementsFile], {
+      cwd: piiProxyDir,
+      stdio: 'inherit',
+    });
+  } catch (e) {
+    console.warn('[pii-proxy] Warning: pip install failed, continuing anyway:', e.message);
+  }
+}
+
 function startPiiProxy() {
   const pythonExe = getPythonExecutable();
   const port = process.env.PII_PROXY_PORT || '18090';
+
+  syncDependencies(pythonExe);
 
   console.log(`[pii-proxy] Starting PII proxy on port ${port}...`);
   console.log(`[pii-proxy] Using Python: ${pythonExe}`);
