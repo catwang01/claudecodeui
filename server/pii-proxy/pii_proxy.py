@@ -12,7 +12,7 @@ import logging
 import pathlib
 import time
 import asyncio
-from functools import lru_cache
+import threading
 from collections import deque
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
@@ -113,6 +113,8 @@ _log_buffer: deque = deque(maxlen=200)
 
 _pii_groups: dict = {}  # token_key → {entity_type, masked, hits: deque}
 _MAX_PII_GROUPS = 200
+_pii_groups_lock = threading.Lock()
+_ds_lock = threading.Lock()
 
 _TAG_EXTRACT_RE = re.compile(r"<PII:([A-Z_]+)>([^<]+)</PII>")
 
@@ -130,21 +132,22 @@ def _record_pii_hits(after: str, req_id: str, ts: str, label: str) -> None:
         entity_type = m.group(1)
         encrypted = m.group(2)
         token_key = encrypted  # deterministic: same plaintext → same ciphertext
-        if token_key not in _pii_groups:
-            if len(_pii_groups) >= _MAX_PII_GROUPS:
-                oldest = next(iter(_pii_groups))
-                del _pii_groups[oldest]
-            try:
-                original = _decrypt(encrypted)
-                masked = _mask_value(original)
-            except Exception:
-                masked = "****"
-            _pii_groups[token_key] = {
-                "entity_type": entity_type,
-                "masked": masked,
-                "hits": deque(maxlen=200),
-            }
-        _pii_groups[token_key]["hits"].appendleft({"req_id": req_id, "ts": ts, "label": label})
+        with _pii_groups_lock:
+            if token_key not in _pii_groups:
+                if len(_pii_groups) >= _MAX_PII_GROUPS:
+                    oldest = next(iter(_pii_groups))
+                    del _pii_groups[oldest]
+                try:
+                    original = _decrypt(encrypted)
+                    masked = _mask_value(original)
+                except Exception:
+                    masked = "****"
+                _pii_groups[token_key] = {
+                    "entity_type": entity_type,
+                    "masked": masked,
+                    "hits": deque(maxlen=200),
+                }
+            _pii_groups[token_key]["hits"].appendleft({"req_id": req_id, "ts": ts, "label": label})
 
 # ---------------------------------------------------------------------------
 # Diff logging helper
@@ -270,6 +273,13 @@ _nlp_engine = NlpEngineProvider(nlp_configuration={
 _analyzer = AnalyzerEngine(nlp_engine=_nlp_engine)
 _analyzer.registry.add_recognizer(PasswordValueRecognizer())
 
+# ---------------------------------------------------------------------------
+# Disk cache for anonymize_text (persistent across restarts, no size eviction)
+# ---------------------------------------------------------------------------
+import diskcache as dc
+_CACHE_DIR = pathlib.Path.home() / ".cache" / "pii-proxy" / "anonymize"
+_disk_cache = dc.Cache(str(_CACHE_DIR), size_limit=int(2e9))  # 2 GB limit
+
 
 def _scan_secrets(text: str) -> List[RecognizerResult]:
     """用 detect-secrets 扫描文本，逐行定位 secret 偏移量后返回 RecognizerResult 列表。"""
@@ -277,7 +287,7 @@ def _scan_secrets(text: str) -> List[RecognizerResult]:
         return []
     results = []
     offset = 0
-    with _ds_transient(_DS_CONFIG):
+    with _ds_lock, _ds_transient(_DS_CONFIG):
         for line in text.splitlines(keepends=True):
             for secret in _ds_scan_line(line):
                 val = secret.secret_value
@@ -300,7 +310,7 @@ _PASSWORD_HINT_RE = re.compile(
     re.IGNORECASE,
 )
 
-@lru_cache(maxsize=512)
+@_disk_cache.memoize()
 def anonymize_text(text: str) -> str:
     if not text or not text.strip():
         return text
