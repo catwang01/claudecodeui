@@ -80,7 +80,7 @@ export default defineConfig(({ mode }) => {
       port: parseInt(env.VITE_PORT) || 5173,
       allowedHosts: ['claude-test.catwang.top'],
       warmup: {
-        clientFiles: ['./src/main.jsx', './src/main.tsx', './src/**/*.tsx', './src/**/*.ts'],
+        clientFiles: ['./src/main.jsx', './src/**/*.tsx', './src/**/*.ts'],
       },
       proxy: {
         '/api': `http://${proxyHost}:${serverPort}`,

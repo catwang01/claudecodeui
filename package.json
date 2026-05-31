@@ -28,7 +28,7 @@
     "server:dev-watch": "tsx watch --tsconfig server/tsconfig.json server/index.js",
     "server:prod": "node dist-server/server/index.js",
     "server": "npm run server:dev",
-    "client": "vite --force",
+    "client": "vite",
     "build": "npm run build:client && npm run build:server && cp -r dist dist-server/dist",
     "build:client": "vite build",
     "prebuild:server": "node -e \"require('node:fs').rmSync('dist-server', { recursive: true, force: true })\"",
