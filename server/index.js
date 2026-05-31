@@ -232,7 +232,7 @@ async function setupProjectsWatcher() {
             try {
                 // Sync changed file to sessions DB so getProjects()/getSessions() read up-to-date data
                 if (filePath && (filePath.endsWith('.jsonl') || filePath.endsWith('.json'))) {
-                    sessionSynchronizerService.synchronizeProviderFile(provider, filePath)
+                    await sessionSynchronizerService.synchronizeProviderFile(provider, filePath)
                         .catch(err => console.error('[WARN] DB sync failed for', filePath, err));
                 }
 
