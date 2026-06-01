@@ -23,7 +23,7 @@
     "url": "https://github.com/siteboon/claudecodeui/issues"
   },
   "scripts": {
-    "dev": "concurrently --kill-others \"npm run pii-proxy\" \"wait-on -t 30000 tcp:18090 && npm run server:dev\" \"wait-on -t 30000 tcp:18090 && npm run client\"",
+    "dev": "concurrently --kill-others \"npm run pii-proxy:dev\" \"node scripts/wait-pii-proxy.js && npm run server:dev\" \"node scripts/wait-pii-proxy.js && npm run client\"",
     "server:dev": "tsx --tsconfig server/tsconfig.json server/index.js",
     "server:dev-watch": "tsx watch --tsconfig server/tsconfig.json server/index.js",
     "server:prod": "node dist-server/server/index.js",
@@ -37,8 +37,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p server/tsconfig.json",
     "lint": "eslint src/ server/",
     "lint:fix": "eslint src/ server/ --fix",
-    "start": "npm run build && concurrently --kill-others \"npm run pii-proxy\" \"wait-on -t 30000 tcp:18090 && npm run server:prod\"",
+    "start": "npm run build && concurrently --kill-others \"npm run pii-proxy\" \"node scripts/wait-pii-proxy.js && npm run server:prod\"",
     "pii-proxy": "node scripts/start-pii-proxy.js",
+    "pii-proxy:dev": "cross-env PII_PROXY_PORT=18091 node scripts/start-pii-proxy.js",
     "release": "./release.sh",
     "prepublishOnly": "npm run build",
     "postinstall": "node scripts/fix-node-pty.js && node scripts/setup-pii-proxy.js",
