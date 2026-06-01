@@ -31,6 +31,31 @@ function wsLog(direction, sessionId, data) {
 }
 // ───────────────────────────────────────────────────────────────────────────
 
+// ── HTTP REST API 日志 ──────────────────────────────────────────────────────
+// 环境变量 HTTP_LOG_FILE 指定路径时启用，例如：HTTP_LOG_FILE=/tmp/http.log npm run dev
+const HTTP_LOG_FILE = process.env.HTTP_LOG_FILE || null;
+const httpLogStream = HTTP_LOG_FILE
+    ? fs.createWriteStream(HTTP_LOG_FILE, { flags: 'a' })
+    : null;
+
+function httpLogMiddleware(req, res, next) {
+    if (!httpLogStream) return next();
+    const start = Date.now();
+    const { method, url } = req;
+    res.on('finish', () => {
+        const line = JSON.stringify({
+            ts: new Date().toISOString(),
+            method,
+            url,
+            status: res.statusCode,
+            ms: Date.now() - start,
+        });
+        httpLogStream.write(line + '\n');
+    });
+    next();
+}
+// ───────────────────────────────────────────────────────────────────────────
+
 // ANSI color codes for terminal output
 const colors = {
     reset: '\x1b[0m',
@@ -64,7 +89,8 @@ import pty from 'node-pty';
 import fetch from 'node-fetch';
 import mime from 'mime-types';
 
-import { getProjects, getSessions, renameProject, deleteSession, forkSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, searchConversations } from './projects.js';
+import { getProjects, getSessions, renameProject, deleteSession, forkSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, clearSessionMessagesCache, searchConversations } from './projects.js';
+import { clearFetchHistoryCache } from './providers/claude/adapter.js';
 import { queryClaudeSDK, abortClaudeSDKSession, isClaudeSDKSessionActive, getClaudeSDKSessionStartTime, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
 import { pendingLocalIdMappings, saveLocalIdMapping } from './localids.js';
 import { spawnCursor, abortCursorSession, isCursorSessionActive, getActiveCursorSessions } from './cursor-cli.js';
@@ -221,43 +247,73 @@ async function setupProjectsWatcher() {
     );
     projectsWatchers = [];
 
+    // ── Batched broadcast ─────────────────────────────────────────────────────
+    // Collect sync results from all providers, then do ONE getProjects() + broadcast
+    // per 500 ms window (max wait 2000 ms). This prevents N broadcasts when N files
+    // change simultaneously (e.g. bulk write, new session with many hook events).
+    const BROADCAST_DEBOUNCE_MS = 500;
+    const BROADCAST_MAX_WAIT_MS = 2000;
+    let pendingBroadcast = { changeTypes: new Set(), providers: new Set(), sessionIds: new Set() };
+    let broadcastDebounceTimer = null;
+    let broadcastMaxWaitTimer = null;
+
+    async function flushBroadcast() {
+        if (broadcastDebounceTimer) { clearTimeout(broadcastDebounceTimer); broadcastDebounceTimer = null; }
+        if (broadcastMaxWaitTimer) { clearTimeout(broadcastMaxWaitTimer); broadcastMaxWaitTimer = null; }
+
+        const { changeTypes, providers, sessionIds } = pendingBroadcast;
+        pendingBroadcast = { changeTypes: new Set(), providers: new Set(), sessionIds: new Set() };
+
+        clearProjectDirectoryCache();
+        try {
+            const updatedProjects = await getProjects();
+            const updateMessage = JSON.stringify({
+                type: 'projects_updated',
+                projects: updatedProjects,
+                timestamp: new Date().toISOString(),
+                changeType: [...changeTypes][0] ?? 'change',
+                watchProvider: [...providers][0] ?? 'claude',
+                updatedSessionIds: [...sessionIds],
+                batched: sessionIds.size > 1,
+            });
+            connectedClients.forEach(client => {
+                if (client.readyState === WebSocket.OPEN) client.send(updateMessage);
+            });
+        } catch (error) {
+            console.error('[ERROR] flushBroadcast failed:', error);
+        }
+    }
+
+    function scheduleBroadcast(changeType, provider, sessionId) {
+        pendingBroadcast.changeTypes.add(changeType);
+        pendingBroadcast.providers.add(provider);
+        if (sessionId) pendingBroadcast.sessionIds.add(sessionId);
+
+        if (broadcastDebounceTimer) clearTimeout(broadcastDebounceTimer);
+        broadcastDebounceTimer = setTimeout(() => { flushBroadcast().catch(() => {}); }, BROADCAST_DEBOUNCE_MS);
+        if (!broadcastMaxWaitTimer) {
+            broadcastMaxWaitTimer = setTimeout(() => { flushBroadcast().catch(() => {}); }, BROADCAST_MAX_WAIT_MS);
+        }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     // Helper: build a per-provider debounced handler so provider/rootPath are
     // captured by closure rather than passed as arguments.
     // Uses a per-provider serial promise queue so that immediate 'add' events
     // from multiple providers never race through the shared isGetProjectsRunning guard.
-    function makeProviderHandler(provider, rootPath) {
+    function makeProviderHandler(provider) {
         let queue = Promise.resolve();
 
         async function handleEvent(eventType, filePath) {
             try {
+                let sessionId = null;
                 // Sync changed file to sessions DB so getProjects()/getSessions() read up-to-date data
                 if (filePath && (filePath.endsWith('.jsonl') || filePath.endsWith('.json'))) {
-                    await sessionSynchronizerService.synchronizeProviderFile(provider, filePath)
-                        .catch(err => console.error('[WARN] DB sync failed for', filePath, err));
+                    sessionId = await sessionSynchronizerService.synchronizeProviderFile(provider, filePath)
+                        .catch(err => { console.error('[WARN] DB sync failed for', filePath, err); return null; });
                 }
-
-                // Clear project directory cache when files change
-                clearProjectDirectoryCache();
-
-                // Get updated projects list (no progress broadcast — watcher updates are silent)
-                const updatedProjects = await getProjects();
-
-                // Notify all connected clients about the project changes
-                const updateMessage = JSON.stringify({
-                    type: 'projects_updated',
-                    projects: updatedProjects,
-                    timestamp: new Date().toISOString(),
-                    changeType: eventType,
-                    changedFile: path.relative(rootPath, filePath),
-                    watchProvider: provider,
-                });
-
-                connectedClients.forEach(client => {
-                    if (client.readyState === WebSocket.OPEN) {
-                        client.send(updateMessage);
-                    }
-                });
-
+                // Schedule batched broadcast (deduped across all providers)
+                scheduleBroadcast(eventType, provider, sessionId);
             } catch (error) {
                 console.error('[ERROR] Error handling project changes:', error);
             }
@@ -280,8 +336,8 @@ async function setupProjectsWatcher() {
             // Ensure provider folders exist before creating the watcher so watching stays active.
             await fsPromises.mkdir(rootPath, { recursive: true });
 
-            // Each provider gets its own debounced handler (provider/rootPath captured by closure)
-            const handle = makeProviderHandler(provider, rootPath);
+            // Each provider gets its own debounced handler (provider captured by closure)
+            const handle = makeProviderHandler(provider);
 
             // Initialize chokidar watcher with optimized settings
             const watcher = chokidar.watch(rootPath, {
@@ -299,8 +355,8 @@ async function setupProjectsWatcher() {
             // Set up event listeners
             watcher
                 .on('add', (filePath) => { resolveLocalIdIfPending(filePath); if (filePath.endsWith('.jsonl')) handle('add', filePath); })
-                .on('change', (filePath) => { resolveLocalIdIfPending(filePath); if (filePath.endsWith('.jsonl')) handle('change', filePath); })
-                .on('unlink', (filePath) => { if (filePath.endsWith('.jsonl')) handle('unlink', filePath); })
+                .on('change', (filePath) => { resolveLocalIdIfPending(filePath); if (filePath.endsWith('.jsonl')) { const sid = path.basename(filePath, '.jsonl'); clearSessionMessagesCache(sid); clearFetchHistoryCache(sid); handle('change', filePath); } })
+                .on('unlink', (filePath) => { if (filePath.endsWith('.jsonl')) { const sid = path.basename(filePath, '.jsonl'); clearSessionMessagesCache(sid); clearFetchHistoryCache(sid); handle('unlink', filePath); } })
                 .on('addDir', (dirPath) => handle('addDir', dirPath))
                 .on('unlinkDir', (dirPath) => handle('unlinkDir', dirPath))
                 .on('error', (error) => {
@@ -432,6 +488,7 @@ const wss = new WebSocketServer({
 app.locals.wss = wss;
 
 app.use(cors({ exposedHeaders: ['X-Refreshed-Token'] }));
+app.use(httpLogMiddleware);
 app.use(express.json({
     limit: '50mb',
     type: (req) => {
