@@ -250,9 +250,9 @@ const _geminiCliCache     = makeTtlCache();
 // In-memory cache for getSessionMessages results, keyed by sessionId.
 // Invalidated when the JSONL file's mtime or size changes (active sessions get new writes).
 // Entries: { mtime, size, result }
-const sessionMessagesCache = new Map(); // sessionId → { mtime, size, result }
-function _sessionMessagesCacheSet(sessionId, mtime, size, result) {
-  sessionMessagesCache.set(sessionId, { mtime, size, result });
+const sessionMessagesCache = new Map(); // sessionId → { mtime, size, messages, usedIds, agentToolsCache }
+function _sessionMessagesCacheSet(sessionId, mtime, size, messages, usedIds, agentToolsCache) {
+  sessionMessagesCache.set(sessionId, { mtime, size, messages, usedIds, agentToolsCache });
 }
 function clearSessionMessagesCache(sessionId) {
   if (sessionId) sessionMessagesCache.delete(sessionId);
@@ -1179,98 +1179,83 @@ async function getSessionMessages(projectName, sessionId, limit = null, offset =
   const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
 
   try {
-    // Subagent files live at {projectDir}/{sessionId}/subagents/agent-{agentId}.jsonl.
-    // No need to pre-scan all session directories — the path is fully determined by
-    // the current sessionId + agentId (collected below after reading the main JSONL).
     const sessionSubagentsDir = path.join(projectDir, sessionId, 'subagents');
-
-    // Determine which JSONL files to read.
-    // Fast path: {sessionId}.jsonl exists → read only that file (contains the full session
-    // history, including any parent history copied in during SDK forks).
-    // Fast path: {sessionId}.jsonl exists → read only that file.
-    // If the file doesn't exist, return empty immediately — do NOT fall back to
-    // scanning all files in the project directory (that path reads thousands of
-    // JSONL files and takes 15-22 s on large projects like observer-sessions).
     const sessionFile = path.join(projectDir, `${sessionId}.jsonl`);
+
     let primaryFileStat = null;
     try {
       primaryFileStat = await fs.stat(sessionFile);
     } catch {
       return { messages: [], total: 0, hasMore: false };
     }
-    const filesToRead = [{ filePath: sessionFile, filterBySessionId: false }];
 
-    // Cache check: only for the fast-path (single session file), limit=null full-load.
-    // If the file hasn't changed (same mtime + size), return cached result immediately.
-    if (limit === null && primaryFileStat) {
-      const cached = sessionMessagesCache.get(sessionId);
-      if (cached &&
-          cached.mtime === primaryFileStat.mtimeMs &&
-          cached.size  === primaryFileStat.size) {
-        return cached.result;
+    const currentSize = primaryFileStat.size;
+    const cached = limit === null ? sessionMessagesCache.get(sessionId) : null;
+
+    // ── Cache hit: file unchanged ──────────────────────────────────────────
+    if (cached && cached.size === currentSize) {
+      const sortedMessages = cached.messages;
+      if (limit === null) return sortedMessages;
+      const total = sortedMessages.length;
+      const startIndex = Math.max(0, total - offset - limit);
+      return { messages: sortedMessages.slice(startIndex, total - offset), total, hasMore: startIndex > 0, offset, limit };
+    }
+
+    // ── Read file (full or incremental delta) ──────────────────────────────
+    const isIncremental = cached && cached.size < currentSize;
+    const startOffset = isIncremental ? cached.size : 0;
+    const readSize = currentSize - startOffset;
+
+    let newMessages = [];
+    if (readSize > 0) {
+      const buf = Buffer.allocUnsafe(readSize);
+      const fh = await fs.open(sessionFile, 'r');
+      try { await fh.read(buf, 0, readSize, startOffset); } finally { await fh.close(); }
+      const text = buf.toString('utf8');
+      for (const line of text.split('\n')) {
+        if (!line.trim()) continue;
+        try { newMessages.push(JSON.parse(line)); } catch { /* skip malformed */ }
       }
     }
 
-    const messages = [];
-    // Map of agentId -> tools for subagent tool grouping
-    const agentToolsCache = new Map();
+    // ── Merge with cached messages ─────────────────────────────────────────
+    const messages = isIncremental ? [...cached.messages, ...newMessages] : newMessages;
 
-    for (const { filePath, filterBySessionId } of filesToRead) {
-      const fileStream = fsSync.createReadStream(filePath);
-      const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
-      for await (const line of rl) {
-        if (line.trim()) {
-          try {
-            const entry = JSON.parse(line);
-            if (!filterBySessionId || entry.sessionId === sessionId) {
-              messages.push(entry);
-            }
-          } catch (parseError) {
-            // Silently skip malformed JSONL lines (common with concurrent writes)
-          }
-        }
+    // ── Subagent tools (only load new agentIds) ────────────────────────────
+    const agentToolsCache = isIncremental ? new Map(cached.agentToolsCache) : new Map();
+    const newAgentIds = new Set();
+    for (const msg of newMessages) {
+      if (msg.toolUseResult?.agentId) newAgentIds.add(msg.toolUseResult.agentId);
+    }
+    if (!isIncremental) {
+      for (const msg of messages) {
+        if (msg.toolUseResult?.agentId) newAgentIds.add(msg.toolUseResult.agentId);
       }
     }
-
-    // Collect agentIds from Task tool results
-    const agentIds = new Set();
-    for (const message of messages) {
-      if (message.toolUseResult?.agentId) {
-        agentIds.add(message.toolUseResult.agentId);
-      }
-    }
-
-    // Load agent tools for each agentId found
-    for (const agentId of agentIds) {
+    for (const agentId of newAgentIds) {
+      if (agentToolsCache.has(agentId)) continue;
       const agentFilePath = path.join(sessionSubagentsDir, `agent-${agentId}.jsonl`);
       try {
         await fs.access(agentFilePath);
-        const tools = await parseAgentTools(agentFilePath);
-        agentToolsCache.set(agentId, tools);
-      } catch {
-        // agent file doesn't exist - skip
+        agentToolsCache.set(agentId, await parseAgentTools(agentFilePath));
+      } catch { /* agent file doesn't exist */ }
+    }
+    for (const message of messages) {
+      if (message.toolUseResult?.agentId) {
+        const tools = agentToolsCache.get(message.toolUseResult.agentId);
+        if (tools?.length) message.subagentTools = tools;
       }
     }
 
-    // Attach agent tools to their parent Task messages
-    for (const message of messages) {
-      if (message.toolUseResult?.agentId) {
-        const agentId = message.toolUseResult.agentId;
-        const agentTools = agentToolsCache.get(agentId);
-        if (agentTools && agentTools.length > 0) {
-          message.subagentTools = agentTools;
-        }
-      }
-    }
-    // Sort messages by timestamp
+    // ── Sort ───────────────────────────────────────────────────────────────
     const sortedMessages = messages.sort((a, b) =>
       new Date(a.timestamp || 0) - new Date(b.timestamp || 0)
     );
 
-    // Ensure every message has a stable id (JSONL entries use uuid, not id).
-    // Track used ids to handle content collisions (e.g. identical queue-operation entries).
-    const usedIds = new Set();
-    for (const msg of sortedMessages) {
+    // ── Stable IDs (only assign for new messages) ──────────────────────────
+    const usedIds = isIncremental ? new Set(cached.usedIds) : new Set();
+    const toAssign = isIncremental ? newMessages : sortedMessages;
+    for (const msg of toAssign) {
       if (!msg.id) {
         let candidate = msg.uuid || generateStableMessageId(sessionId, msg.timestamp, msg.message?.content);
         let suffix = 0;
@@ -1285,31 +1270,16 @@ async function getSessionMessages(projectName, sessionId, limit = null, offset =
       }
     }
 
-    const total = sortedMessages.length;
-
-    // If no limit is specified, return all messages (backward compatibility)
+    // ── Cache update ───────────────────────────────────────────────────────
     if (limit === null) {
-      // Store in cache if we have a reliable stat (single session file fast-path)
-      if (primaryFileStat) {
-        _sessionMessagesCacheSet(sessionId, primaryFileStat.mtimeMs, primaryFileStat.size, sortedMessages);
-      }
+      _sessionMessagesCacheSet(sessionId, primaryFileStat.mtimeMs, currentSize, sortedMessages, usedIds, agentToolsCache);
       return sortedMessages;
     }
 
-    // Apply pagination - for recent messages, we need to slice from the end
-    // offset 0 should give us the most recent messages
+    const total = sortedMessages.length;
     const startIndex = Math.max(0, total - offset - limit);
-    const endIndex = total - offset;
-    const paginatedMessages = sortedMessages.slice(startIndex, endIndex);
-    const hasMore = startIndex > 0;
+    return { messages: sortedMessages.slice(startIndex, total - offset), total, hasMore: startIndex > 0, offset, limit };
 
-    return {
-      messages: paginatedMessages,
-      total,
-      hasMore,
-      offset,
-      limit
-    };
   } catch (error) {
     console.error(`Error reading messages for session ${sessionId}:`, error);
     return limit === null ? [] : { messages: [], total: 0, hasMore: false };
