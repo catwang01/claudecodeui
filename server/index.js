@@ -119,7 +119,7 @@ import sttRoutes from './routes/stt.js';
 import { createNormalizedMessage } from './providers/types.js';
 import { getProvider } from './providers/registry.js';
 import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
-import { initializeDatabase, sessionNamesDb, sessionDb, applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, applyLastAutoDocAt, applyReadState, appConfigDb } from './database/db.js';
+import { initializeDatabase, sessionNamesDb, sessionDb, sessionFileCache, sessionsDb, applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, applyLastAutoDocAt, applyReadState, appConfigDb } from './database/db.js';
 import { startAutoDocTimer } from './auto-doc.js';
 import { stopAllTapSessions, tapViewerProxyForSession } from './tap.js';
 import { sessionSynchronizerService } from './modules/providers/index.js';
@@ -711,8 +711,13 @@ app.delete('/api/projects/:projectName/sessions/:sessionId', authenticateToken, 
     try {
         const { projectName, sessionId } = req.params;
         console.log(`[API] Deleting session: ${sessionId} from project: ${projectName}`);
+        const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
+        const sessionFile = path.join(projectDir, `${sessionId}.jsonl`);
         await deleteSession(projectName, sessionId);
         sessionNamesDb.deleteName(sessionId, 'claude');
+        // Clean up DB record and file cache so the session stops appearing in project lists
+        sessionsDb.deleteSessionById(sessionId);
+        sessionFileCache.delete(sessionFile);
         console.log(`[API] Session ${sessionId} deleted successfully`);
         res.json({ success: true });
     } catch (error) {

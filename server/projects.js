@@ -221,6 +221,44 @@ async function detectTaskMasterFolder(projectPath) {
 // Cache for extracted project directories
 const projectDirectoryCache = new Map();
 
+// TTL cache for expensive per-project operations called on every getProjects() invocation.
+// Watcher fires up to every 300-500ms; without caching each call spawns git, opens SQLite,
+// reads package.json, etc. for every project, saturating the libuv 4-thread pool.
+const PROJECT_META_TTL_MS = 30_000; // 30 seconds
+
+function makeTtlCache() {
+  const store = new Map(); // projectPath → { value, time }
+  return {
+    get(key) {
+      const entry = store.get(key);
+      if (!entry) return undefined;
+      if (Date.now() - entry.time > PROJECT_META_TTL_MS) { store.delete(key); return undefined; }
+      return entry.value;
+    },
+    set(key, value) { store.set(key, { value, time: Date.now() }); },
+    delete(key) { store.delete(key); },
+    clear() { store.clear(); },
+  };
+}
+
+const _gitBranchCache     = makeTtlCache();
+const _cursorSessionsCache = makeTtlCache();
+const _taskMasterCache    = makeTtlCache();
+const _displayNameCache   = makeTtlCache(); // keyed by projectPath; effectively permanent (package.json rarely changes)
+const _geminiCliCache     = makeTtlCache();
+
+// In-memory cache for getSessionMessages results, keyed by sessionId.
+// Invalidated when the JSONL file's mtime or size changes (active sessions get new writes).
+// Entries: { mtime, size, result }
+const sessionMessagesCache = new Map(); // sessionId → { mtime, size, result }
+function _sessionMessagesCacheSet(sessionId, mtime, size, result) {
+  sessionMessagesCache.set(sessionId, { mtime, size, result });
+}
+function clearSessionMessagesCache(sessionId) {
+  if (sessionId) sessionMessagesCache.delete(sessionId);
+  else sessionMessagesCache.clear();
+}
+
 // Clear cache when needed (called when project files change)
 function clearProjectDirectoryCache() {
   projectDirectoryCache.clear();
@@ -463,7 +501,12 @@ async function getProjects(progressCallback = null) {
       });
     }
 
-    const autoDisplayName = await generateDisplayName(claudeDirName, projectPath);
+    // generateDisplayName reads package.json — cache it
+    let autoDisplayName = _displayNameCache.get(projectPath);
+    if (autoDisplayName === undefined) {
+      autoDisplayName = await generateDisplayName(claudeDirName, projectPath);
+      _displayNameCache.set(projectPath, autoDisplayName);
+    }
 
     const project = {
       name: claudeDirName,
@@ -478,29 +521,10 @@ async function getProjects(progressCallback = null) {
       sessionMeta: { hasMore: false, total: 0 },
     };
 
-    // Claude sessions: query DB index directly, enrich via session_file_cache
+    // Claude sessions: read from DB + session_file_cache (no filesystem I/O)
     const claudeRows = sessionsDb.getSessionsByProjectPath(projectPath)
       .filter(row => row.provider === 'claude' && row.jsonl_path);
-    const claudeSessions = [];
-    for (const row of claudeRows) {
-      const meta = await getSessionFileMeta(row.jsonl_path).catch(() => null);
-      if (!meta?.sessionId) continue;
-      const lastActivity = meta.lastActivity ? new Date(meta.lastActivity) : meta.mtime;
-      claudeSessions.push({
-        id: row.session_id,
-        summary: row.custom_name
-          || (meta.lastUserMessage
-            ? (meta.lastUserMessage.length > 50
-              ? meta.lastUserMessage.slice(0, 50) + '...'
-              : meta.lastUserMessage)
-            : 'New Session'),
-        messageCount: meta.messageCount,
-        lastActivity,
-        cwd: meta.cwd || '',
-        lastUserMessage: meta.lastUserMessage,
-        lastAssistantMessage: meta.lastAssistantMessage,
-      });
-    }
+    const claudeSessions = buildSessionsFromCache(claudeRows);
     claudeSessions.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
 
     const filteredClaude = autoDocPreFilter ? autoDocPreFilter(claudeSessions) : claudeSessions;
@@ -516,20 +540,46 @@ async function getProjects(progressCallback = null) {
       total: sessionsDb.countSessionsByProjectPath(projectPath),
     };
 
-    // Non-Claude providers: keep existing functions
-    const [cursorResult, codexResult, geminiResult, taskMasterResult, gitBranchResult] =
-      await Promise.allSettled([
-        getCursorSessions(projectPath),
-        getCodexSessions(projectPath, { indexRef: codexSessionsIndexRef }),
-        (async () => {
-          const uiSessions = sessionManager.getProjectSessions(projectPath) || [];
-          const cliSessions = await getGeminiCliSessions(projectPath);
-          const uiIds = new Set(uiSessions.map(s => s.id));
-          return [...uiSessions, ...cliSessions.filter(s => !uiIds.has(s.id))];
-        })(),
-        detectTaskMasterFolder(projectPath),
-        getProjectGitBranch(projectPath),
-      ]);
+    // Non-Claude providers: cache expensive I/O (git, SQLite, file reads) with 30s TTL.
+    // getProjects() is called on every watcher event (~300-500ms); without caching these
+    // operations saturate the libuv thread pool and block fs.stat calls in fetchHistory.
+    const cachedCursorSessions  = _cursorSessionsCache.get(projectPath);
+    const cachedTaskMaster      = _taskMasterCache.get(projectPath);
+    const cachedGitBranch       = _gitBranchCache.get(projectPath);
+    const cachedGeminiCli       = _geminiCliCache.get(projectPath);
+
+    const needsCursor    = cachedCursorSessions === undefined;
+    const needsTaskMaster = cachedTaskMaster === undefined;
+    const needsGitBranch  = cachedGitBranch === undefined;
+    const needsGeminiCli  = cachedGeminiCli === undefined;
+
+    const promises = await Promise.allSettled([
+      needsCursor    ? getCursorSessions(projectPath)    : Promise.resolve(cachedCursorSessions),
+      getCodexSessions(projectPath, { indexRef: codexSessionsIndexRef }),
+      (async () => {
+        const uiSessions = sessionManager.getProjectSessions(projectPath) || [];
+        let cliSessions;
+        if (needsGeminiCli) {
+          cliSessions = await getGeminiCliSessions(projectPath);
+          _geminiCliCache.set(projectPath, cliSessions);
+        } else {
+          cliSessions = cachedGeminiCli;
+        }
+        const uiIds = new Set(uiSessions.map(s => s.id));
+        return [...uiSessions, ...cliSessions.filter(s => !uiIds.has(s.id))];
+      })(),
+      needsTaskMaster ? detectTaskMasterFolder(projectPath) : Promise.resolve(cachedTaskMaster),
+      needsGitBranch  ? getProjectGitBranch(projectPath)    : Promise.resolve(cachedGitBranch),
+    ]);
+
+    const [cursorResult, codexResult, geminiResult, taskMasterResult, gitBranchResult] = promises;
+
+    if (needsCursor && cursorResult.status === 'fulfilled')
+      _cursorSessionsCache.set(projectPath, cursorResult.value);
+    if (needsTaskMaster && taskMasterResult.status === 'fulfilled')
+      _taskMasterCache.set(projectPath, taskMasterResult.value);
+    if (needsGitBranch && gitBranchResult.status === 'fulfilled')
+      _gitBranchCache.set(projectPath, gitBranchResult.value);
 
     project.cursorSessions = cursorResult.status === 'fulfilled' ? cursorResult.value : [];
     applyCustomSessionNames(project.cursorSessions, 'cursor');
@@ -790,28 +840,8 @@ async function getSessions(projectName, limit = 5, offset = 0, preFilter = null)
       return getSessionsLegacy(projectName, limit, offset, preFilter);
     }
 
-    // Enrich each session with file metadata (via session_file_cache)
-    const sessions = [];
-    for (const row of sessionRows) {
-      const meta = await getSessionFileMeta(row.jsonl_path).catch(() => null);
-      if (!meta?.sessionId) continue;
-
-      const lastActivity = meta.lastActivity ? new Date(meta.lastActivity) : meta.mtime;
-      sessions.push({
-        id: row.session_id,
-        summary: row.custom_name
-          || (meta.lastUserMessage
-            ? (meta.lastUserMessage.length > 50
-              ? meta.lastUserMessage.slice(0, 50) + '...'
-              : meta.lastUserMessage)
-            : 'New Session'),
-        messageCount: meta.messageCount,
-        lastActivity,
-        cwd: meta.cwd || '',
-        lastUserMessage: meta.lastUserMessage,
-        lastAssistantMessage: meta.lastAssistantMessage,
-      });
-    }
+    // Enrich each session from session_file_cache (no filesystem I/O)
+    const sessions = buildSessionsFromCache(sessionRows);
 
     sessions.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
 
@@ -895,6 +925,63 @@ async function getSessionsLegacy(projectName, limit = 5, offset = 0, preFilter =
  */
 function isSubAgentEntry(entry) {
   return Boolean(entry.parentToolUseId || entry.isMeta);
+}
+
+/**
+ * Build a session list from DB rows + session_file_cache.
+ * When a row exists in `sessions` but not in `session_file_cache` (cache miss),
+ * we still include the session using the info already available in the DB row,
+ * and kick off an async getSessionFileMeta() to populate the cache for next time.
+ *
+ * @param {Array<{session_id, jsonl_path, custom_name, project_path, updated_at}>} rows
+ * @returns {Array<{id, summary, messageCount, lastActivity, cwd, lastUserMessage, lastAssistantMessage}>}
+ */
+function buildSessionsFromCache(rows) {
+  const filePaths = rows.map(r => r.jsonl_path).filter(Boolean);
+  const cacheMap = sessionFileCache.getBatch(filePaths);
+
+  const sessions = [];
+  for (const row of rows) {
+    if (!row.jsonl_path) continue;
+    const cached = cacheMap.get(row.jsonl_path);
+
+    if (!cached?.session_id) {
+      // Cache miss: session is in DB but session_file_cache hasn't been populated yet.
+      // Include it with whatever we know from the sessions row, and backfill the cache async.
+      getSessionFileMeta(row.jsonl_path).catch(() => { /* best-effort */ });
+
+      sessions.push({
+        id: row.session_id,
+        summary: row.custom_name || 'New Session',
+        messageCount: 0,
+        lastActivity: new Date(row.updated_at || 0),
+        cwd: row.project_path || '',
+        lastUserMessage: null,
+        lastAssistantMessage: null,
+      });
+      continue;
+    }
+
+    const lastActivity = cached.last_activity
+      ? new Date(cached.last_activity)
+      : new Date(cached.updated_at || 0);
+
+    sessions.push({
+      id: row.session_id,
+      summary: row.custom_name
+        || (cached.last_user_message
+          ? (cached.last_user_message.length > 50
+            ? cached.last_user_message.slice(0, 50) + '...'
+            : cached.last_user_message)
+          : 'New Session'),
+      messageCount: cached.message_count || 0,
+      lastActivity,
+      cwd: cached.cwd || '',
+      lastUserMessage: cached.last_user_message || null,
+      lastAssistantMessage: cached.last_assistant_message || null,
+    });
+  }
+  return sessions;
 }
 
 // Incremental .jsonl metadata scan with SQLite cache.
@@ -1092,45 +1179,36 @@ async function getSessionMessages(projectName, sessionId, limit = null, offset =
   const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
 
   try {
-    // Scan for agent files in session subdirectories: {projectDir}/{sessionId}/subagents/agent-{id}.jsonl
-    const agentFilesMap = new Map(); // agentFileName -> full path
-    try {
-      const entries = await fs.readdir(projectDir, { withFileTypes: true });
-      for (const sessionDir of entries.filter(e => e.isDirectory())) {
-        const subagentsDir = path.join(projectDir, sessionDir.name, 'subagents');
-        try {
-          const subagentFiles = await fs.readdir(subagentsDir);
-          for (const file of subagentFiles) {
-            if (file.endsWith('.jsonl') && file.startsWith('agent-')) {
-              agentFilesMap.set(file, path.join(subagentsDir, file));
-            }
-          }
-        } catch (err) {
-          // Session directory may not have subagents subdirectory - skip
-        }
-      }
-    } catch (err) {
-      // Project directory may not be scannable - continue without agent files
-    }
+    // Subagent files live at {projectDir}/{sessionId}/subagents/agent-{agentId}.jsonl.
+    // No need to pre-scan all session directories — the path is fully determined by
+    // the current sessionId + agentId (collected below after reading the main JSONL).
+    const sessionSubagentsDir = path.join(projectDir, sessionId, 'subagents');
 
     // Determine which JSONL files to read.
     // Fast path: {sessionId}.jsonl exists → read only that file (contains the full session
     // history, including any parent history copied in during SDK forks).
-    // Fallback: scan all files and filter by entry.sessionId (legacy / edge-case sessions
-    // that have no dedicated file).
+    // Fast path: {sessionId}.jsonl exists → read only that file.
+    // If the file doesn't exist, return empty immediately — do NOT fall back to
+    // scanning all files in the project directory (that path reads thousands of
+    // JSONL files and takes 15-22 s on large projects like observer-sessions).
     const sessionFile = path.join(projectDir, `${sessionId}.jsonl`);
-    let filesToRead; // array of { filePath, filterBySessionId }
+    let primaryFileStat = null;
     try {
-      await fs.access(sessionFile);
-      filesToRead = [{ filePath: sessionFile, filterBySessionId: false }];
+      primaryFileStat = await fs.stat(sessionFile);
     } catch {
-      const allFiles = await fs.readdir(projectDir);
-      const jsonlFiles = allFiles.filter(f => f.endsWith('.jsonl') && !f.startsWith('agent-'));
-      filesToRead = jsonlFiles.map(f => ({ filePath: path.join(projectDir, f), filterBySessionId: true }));
-    }
-
-    if (filesToRead.length === 0) {
       return { messages: [], total: 0, hasMore: false };
+    }
+    const filesToRead = [{ filePath: sessionFile, filterBySessionId: false }];
+
+    // Cache check: only for the fast-path (single session file), limit=null full-load.
+    // If the file hasn't changed (same mtime + size), return cached result immediately.
+    if (limit === null && primaryFileStat) {
+      const cached = sessionMessagesCache.get(sessionId);
+      if (cached &&
+          cached.mtime === primaryFileStat.mtimeMs &&
+          cached.size  === primaryFileStat.size) {
+        return cached.result;
+      }
     }
 
     const messages = [];
@@ -1164,11 +1242,13 @@ async function getSessionMessages(projectName, sessionId, limit = null, offset =
 
     // Load agent tools for each agentId found
     for (const agentId of agentIds) {
-      const agentFileName = `agent-${agentId}.jsonl`;
-      if (agentFilesMap.has(agentFileName)) {
-        const agentFilePath = agentFilesMap.get(agentFileName);
+      const agentFilePath = path.join(sessionSubagentsDir, `agent-${agentId}.jsonl`);
+      try {
+        await fs.access(agentFilePath);
         const tools = await parseAgentTools(agentFilePath);
         agentToolsCache.set(agentId, tools);
+      } catch {
+        // agent file doesn't exist - skip
       }
     }
 
@@ -1209,6 +1289,10 @@ async function getSessionMessages(projectName, sessionId, limit = null, offset =
 
     // If no limit is specified, return all messages (backward compatibility)
     if (limit === null) {
+      // Store in cache if we have a reliable stat (single session file fast-path)
+      if (primaryFileStat) {
+        _sessionMessagesCacheSet(sessionId, primaryFileStat.mtimeMs, primaryFileStat.size, sortedMessages);
+      }
       return sortedMessages;
     }
 
@@ -1316,11 +1400,14 @@ async function deleteSession(projectName, sessionId) {
 
   try {
     await fs.unlink(sessionFile);
-    return true;
   } catch (error) {
-    console.error(`Error deleting session ${sessionId} from project ${projectName}:`, error);
-    throw error;
+    if (error.code !== 'ENOENT') {
+      console.error(`Error deleting session ${sessionId} from project ${projectName}:`, error);
+      throw error;
+    }
+    // File already gone — still proceed to clean up DB records
   }
+  return true;
 }
 
 // Check if a project is empty (has no sessions)
@@ -2756,6 +2843,7 @@ export {
   saveProjectConfig,
   extractProjectDirectory,
   clearProjectDirectoryCache,
+  clearSessionMessagesCache,
   getCodexSessions,
   getCodexSessionMessages,
   deleteCodexSession,

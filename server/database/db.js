@@ -713,6 +713,19 @@ const sessionFileCache = {
   get: (filePath) =>
     db.prepare('SELECT * FROM session_file_cache WHERE file_path = ?').get(filePath),
 
+  // Batch fetch: given an array of file paths, return a Map<filePath, row>.
+  // Uses a single SQL query with IN clause — O(1) round trips regardless of N.
+  getBatch: (filePaths) => {
+    if (!filePaths || filePaths.length === 0) return new Map();
+    const placeholders = filePaths.map(() => '?').join(',');
+    const rows = db.prepare(
+      `SELECT * FROM session_file_cache WHERE file_path IN (${placeholders})`
+    ).all(...filePaths);
+    const map = new Map();
+    for (const row of rows) map.set(row.file_path, row);
+    return map;
+  },
+
   upsert: (data) =>
     db.prepare(`
       INSERT INTO session_file_cache
