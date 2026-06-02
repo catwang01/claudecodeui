@@ -227,7 +227,8 @@ const projectDirectoryCache = new Map();
 const PROJECT_META_TTL_MS = 30_000; // 30 seconds
 
 function makeTtlCache() {
-  const store = new Map(); // projectPath → { value, time }
+  const store = new Map();    // key → { value, time }
+  const inflight = new Map(); // key → Promise  (in-flight dedup)
   return {
     get(key) {
       const entry = store.get(key);
@@ -237,7 +238,26 @@ function makeTtlCache() {
     },
     set(key, value) { store.set(key, { value, time: Date.now() }); },
     delete(key) { store.delete(key); },
-    clear() { store.clear(); },
+    clear() { store.clear(); inflight.clear(); },
+    /**
+     * Fetch with dedup: if a fetch for this key is already in-flight, wait for it
+     * instead of spawning a parallel fetch (cache stampede prevention).
+     */
+    async fetchOnce(key, fetchFn) {
+      const cached = this.get(key);
+      if (cached !== undefined) return cached;
+      if (inflight.has(key)) return inflight.get(key);
+      const p = Promise.resolve().then(() => fetchFn()).then(value => {
+        this.set(key, value);
+        inflight.delete(key);
+        return value;
+      }).catch(err => {
+        inflight.delete(key);
+        throw err;
+      });
+      inflight.set(key, p);
+      return p;
+    },
   };
 }
 
@@ -548,45 +568,36 @@ async function getProjects(progressCallback = null) {
     };
 
     // Non-Claude providers: cache expensive I/O (git, SQLite, file reads) with 30s TTL.
-    // getProjects() is called on every watcher event (~300-500ms); without caching these
-    // operations saturate the libuv thread pool and block fs.stat calls in fetchHistory.
-    const cachedCursorSessions  = _cursorSessionsCache.get(projectPath);
-    const cachedTaskMaster      = _taskMasterCache.get(projectPath);
-    const cachedGitBranch       = _gitBranchCache.get(projectPath);
-    const cachedGeminiCli       = _geminiCliCache.get(projectPath);
-
-    const needsCursor    = cachedCursorSessions === undefined;
-    const needsTaskMaster = cachedTaskMaster === undefined;
-    const needsGitBranch  = cachedGitBranch === undefined;
-    const needsGeminiCli  = cachedGeminiCli === undefined;
-
-    const promises = await Promise.allSettled([
-      needsCursor    ? getCursorSessions(projectPath)    : Promise.resolve(cachedCursorSessions),
-      getCodexSessions(projectPath, { indexRef: codexSessionsIndexRef }),
-      (async () => {
-        const uiSessions = sessionManager.getProjectSessions(projectPath) || [];
-        let cliSessions;
-        if (needsGeminiCli) {
-          cliSessions = await getGeminiCliSessions(projectPath);
-          _geminiCliCache.set(projectPath, cliSessions);
-        } else {
-          cliSessions = cachedGeminiCli;
-        }
-        const uiIds = new Set(uiSessions.map(s => s.id));
-        return [...uiSessions, ...cliSessions.filter(s => !uiIds.has(s.id))];
-      })(),
-      needsTaskMaster ? detectTaskMasterFolder(projectPath) : Promise.resolve(cachedTaskMaster),
-      needsGitBranch  ? getProjectGitBranch(projectPath)    : Promise.resolve(cachedGitBranch),
-    ]);
+    // fetchOnce() deduplicates in-flight requests — prevents cache stampede.
+    // If all values are already cached, resolve immediately; otherwise kick off async fetch
+    // and use empty/null placeholders so the first response is never blocked by cold I/O.
+    const allCached =
+      _cursorSessionsCache.get(projectPath) !== undefined &&
+      _taskMasterCache.get(projectPath) !== undefined &&
+      _gitBranchCache.get(projectPath) !== undefined &&
+      _geminiCliCache.get(projectPath) !== undefined;
+    const promises = allCached
+      ? await Promise.allSettled([
+          Promise.resolve(_cursorSessionsCache.get(projectPath)),
+          getCodexSessions(projectPath, { indexRef: codexSessionsIndexRef }),
+          Promise.resolve([...sessionManager.getProjectSessions(projectPath) || [], ..._geminiCliCache.get(projectPath) || []]),
+          Promise.resolve(_taskMasterCache.get(projectPath)),
+          Promise.resolve(_gitBranchCache.get(projectPath)),
+        ])
+      : await Promise.allSettled([
+          _cursorSessionsCache.fetchOnce(projectPath, () => getCursorSessions(projectPath)),
+          getCodexSessions(projectPath, { indexRef: codexSessionsIndexRef }),
+          (async () => {
+            const uiSessions = sessionManager.getProjectSessions(projectPath) || [];
+            const cliSessions = await _geminiCliCache.fetchOnce(projectPath, () => getGeminiCliSessions(projectPath));
+            const uiIds = new Set(uiSessions.map(s => s.id));
+            return [...uiSessions, ...cliSessions.filter(s => !uiIds.has(s.id))];
+          })(),
+          _taskMasterCache.fetchOnce(projectPath, () => detectTaskMasterFolder(projectPath)),
+          _gitBranchCache.fetchOnce(projectPath, () => getProjectGitBranch(projectPath)),
+        ]);
 
     const [cursorResult, codexResult, geminiResult, taskMasterResult, gitBranchResult] = promises;
-
-    if (needsCursor && cursorResult.status === 'fulfilled')
-      _cursorSessionsCache.set(projectPath, cursorResult.value);
-    if (needsTaskMaster && taskMasterResult.status === 'fulfilled')
-      _taskMasterCache.set(projectPath, taskMasterResult.value);
-    if (needsGitBranch && gitBranchResult.status === 'fulfilled')
-      _gitBranchCache.set(projectPath, gitBranchResult.value);
 
     project.cursorSessions = cursorResult.status === 'fulfilled' ? cursorResult.value : [];
     applyCustomSessionNames(project.cursorSessions, 'cursor');
