@@ -667,7 +667,10 @@ app.post('/api/system/update', authenticateToken, async (req, res) => {
 app.get('/api/projects', authenticateToken, async (req, res) => {
     try {
         const silent = req.query.silent === 'true';
+        const t0 = Date.now();
         const projects = await getProjects(silent ? undefined : broadcastProgress);
+        const elapsed = Date.now() - t0;
+        if (elapsed > 500) console.log(`[SLOW getProjects] total=${elapsed}ms projects=${projects.length}`);
         res.json(projects);
     } catch (error) {
         res.status(500).json({ error: error.message });

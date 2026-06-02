@@ -465,8 +465,13 @@ function buildExcludedSessionIds(provider = 'claude') {
 }
 
 async function getProjects(progressCallback = null) {
+  const _t0 = Date.now();
   const projects = [];
-  const codexSessionsIndexRef = { sessionsByProject: null };
+
+  // Pre-build codex index once before parallel project processing.
+  // Without this, Promise.all would trigger 13 concurrent buildCodexSessionsIndex() calls.
+  const codexIndex = await getCachedCodexIndex();
+  const codexSessionsIndexRef = { sessionsByProject: codexIndex };
 
   const excludedSessionIds = buildExcludedSessionIds('claude');
   const autoDocPreFilter = excludedSessionIds.size > 0
@@ -487,8 +492,8 @@ async function getProjects(progressCallback = null) {
 
   const totalProjects = dbProjects.length;
 
-  for (let i = 0; i < dbProjects.length; i++) {
-    const dbProject = dbProjects[i];
+  const projectResults = await Promise.all(dbProjects.map(async (dbProject, i) => {
+    const _tp = Date.now();
     const projectPath = dbProject.project_path;
     const claudeDirName = dbProject.claude_dir_name || pathToClaudeProjectName(projectPath);
 
@@ -522,7 +527,9 @@ async function getProjects(progressCallback = null) {
     };
 
     // Claude sessions: read from DB + session_file_cache (no filesystem I/O)
-    const claudeRows = sessionsDb.getSessionsByProjectPath(projectPath)
+    // Fetch only top 45 claude sessions from DB (we only show 15, but leave room for
+    // autoDoc/hidden filtering to discard some). Avoids loading 600+ rows for large projects.
+    const claudeRows = sessionsDb.getSessionsByProjectPathPage(projectPath, 45, 0)
       .filter(row => row.provider === 'claude' && row.jsonl_path);
     const claudeSessions = buildSessionsFromCache(claudeRows);
     claudeSessions.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
@@ -610,12 +617,20 @@ async function getProjects(progressCallback = null) {
 
     project.currentBranch = gitBranchResult.status === 'fulfilled' ? gitBranchResult.value : null;
 
-    projects.push(project);
-  }
+    const _tpElapsed = Date.now() - _tp;
+    if (_tpElapsed > 200) console.log(`[SLOW getProjects project] ${path.basename(projectPath)} ${_tpElapsed}ms`);
+
+    return project;
+  }));
+
+  projects.push(...projectResults);
 
   if (progressCallback) {
     progressCallback({ phase: 'complete', current: totalProjects, total: totalProjects });
   }
+
+  const _elapsed = Date.now() - _t0;
+  if (_elapsed > 500) console.log(`[SLOW getProjects] total=${_elapsed}ms projects=${projects.length}`);
 
   return projects;
 }
