@@ -89,7 +89,7 @@ import pty from 'node-pty';
 import fetch from 'node-fetch';
 import mime from 'mime-types';
 
-import { getProjects, getSessions, renameProject, deleteSession, forkSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, clearSessionMessagesCache, searchConversations } from './projects.js';
+import { getProjects, getSessions, renameProject, deleteSession, forkSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, clearSessionMessagesCache, searchConversations, getSessionFileMeta } from './projects.js';
 import { clearFetchHistoryCache } from './providers/claude/adapter.js';
 import { queryClaudeSDK, abortClaudeSDKSession, isClaudeSDKSessionActive, getClaudeSDKSessionStartTime, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
 import { pendingLocalIdMappings, saveLocalIdMapping } from './localids.js';
@@ -355,7 +355,7 @@ async function setupProjectsWatcher() {
             // Set up event listeners
             watcher
                 .on('add', (filePath) => { resolveLocalIdIfPending(filePath); if (filePath.endsWith('.jsonl')) handle('add', filePath); })
-                .on('change', (filePath) => { resolveLocalIdIfPending(filePath); if (filePath.endsWith('.jsonl')) { const sid = path.basename(filePath, '.jsonl'); clearSessionMessagesCache(sid); clearFetchHistoryCache(sid); handle('change', filePath); } })
+                .on('change', (filePath) => { resolveLocalIdIfPending(filePath); if (filePath.endsWith('.jsonl')) { const sid = path.basename(filePath, '.jsonl'); clearSessionMessagesCache(sid); clearFetchHistoryCache(sid); getSessionFileMeta(filePath).catch(() => {}); handle('change', filePath); } })
                 .on('unlink', (filePath) => { if (filePath.endsWith('.jsonl')) { const sid = path.basename(filePath, '.jsonl'); clearSessionMessagesCache(sid); clearFetchHistoryCache(sid); handle('unlink', filePath); } })
                 .on('addDir', (dirPath) => handle('addDir', dirPath))
                 .on('unlinkDir', (dirPath) => handle('unlinkDir', dirPath))
