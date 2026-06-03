@@ -1998,6 +1998,7 @@ function handleShellConnection(ws) {
                 const hasSession = data.hasSession;
                 const provider = data.provider || 'claude';
                 const initialCommand = data.initialCommand;
+                const skipPermissions = data.skipPermissions || false;
                 const isPlainShell = data.isPlainShell || (!!initialCommand && !hasSession) || provider === 'plain-shell';
                 urlDetectionBuffer = '';
                 announcedAuthUrls.clear();
@@ -2148,14 +2149,15 @@ function handleShellConnection(ws) {
                     } else {
                         // Claude (default provider)
                         const command = initialCommand || 'claude';
+                        const skipFlag = skipPermissions ? ' --dangerously-skip-permissions' : '';
                         if (hasSession && sessionId) {
                             if (os.platform() === 'win32') {
-                                shellCommand = `claude --resume "${sessionId}"; if ($LASTEXITCODE -ne 0) { claude }`;
+                                shellCommand = `claude --resume "${sessionId}"${skipFlag}; if ($LASTEXITCODE -ne 0) { claude${skipFlag} }`;
                             } else {
-                                shellCommand = `claude --resume "${sessionId}" || claude`;
+                                shellCommand = `claude --resume "${sessionId}"${skipFlag} || claude${skipFlag}`;
                             }
                         } else {
-                            shellCommand = command;
+                            shellCommand = `${command}${skipFlag}`;
                         }
                     }
 

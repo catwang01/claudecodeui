@@ -59,6 +59,7 @@ export default function Shell({
     authUrlVersion,
     connectToShell,
     disconnectFromShell,
+    markUserDisconnected,
     openAuthUrlInBrowser,
     copyAuthUrlToClipboard,
   } = useShellRuntime({
@@ -243,6 +244,32 @@ export default function Shell({
       })
     : t('shell.startCli', { projectName: selectedProject.displayName });
 
+  const provider = isPlainShell
+    ? null
+    : (selectedSession?.__provider ?? (localStorage.getItem('selected-provider') || 'claude'));
+
+  const sessionId = isPlainShell ? null : (selectedSession?.id ?? null);
+  const shortSessionId = sessionId ? sessionId.slice(0, 8) : null;
+
+  const commandArgs = isPlainShell
+    ? (initialCommand || null)
+    : (() => {
+        switch (provider) {
+          case 'claude':
+            return shortSessionId ? `claude --resume ${shortSessionId}...` : 'claude';
+          case 'gemini':
+            return shortSessionId ? `gemini --resume ${shortSessionId}...` : 'gemini';
+          case 'cursor':
+            return shortSessionId ? `cursor-agent --resume=${shortSessionId}...` : 'cursor-agent';
+          case 'codex':
+            return shortSessionId ? `codex resume ${shortSessionId}...` : 'codex';
+          case 'copilot':
+            return shortSessionId ? `copilot --resume ${shortSessionId}...` : 'copilot';
+          default:
+            return null;
+        }
+      })();
+
   const overlayMode = !isInitialized ? 'loading' : isConnecting ? 'connecting' : !isConnected ? 'connect' : null;
   const overlayDescription = overlayMode === 'connecting' ? connectingDescription : readyDescription;
 
@@ -254,7 +281,7 @@ export default function Shell({
         isRestarting={isRestarting}
         hasSession={Boolean(selectedSession)}
         sessionDisplayNameShort={sessionDisplayNameShort}
-        onDisconnect={disconnectFromShell}
+        onDisconnect={() => { markUserDisconnected(); disconnectFromShell(); }}
         onRestart={handleRestartShell}
         statusNewSessionText={t('shell.status.newSession')}
         statusInitializingText={t('shell.status.initializing')}
@@ -281,6 +308,7 @@ export default function Shell({
             connectLabel={t('shell.actions.connect')}
             connectTitle={t('shell.actions.connectTitle')}
             connectingLabel={t('shell.connecting')}
+            commandArgs={commandArgs ?? undefined}
             onConnect={connectToShell}
           />
         )}

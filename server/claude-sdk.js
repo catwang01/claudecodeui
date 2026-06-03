@@ -696,12 +696,14 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
     const STALL_TIMEOUT_MS = options.stallTimeoutMs ?? 120000;
     const MAX_STALL_RETRIES = 3;
-    const MAX_CONTEXT_MGMT_RETRIES = 3;
+    const MAX_CONTEXT_MGMT_RETRIES = 1; // reduced: first attempt uses /compact, not blind retry
     const MAX_TOKEN_LIMIT_RETRIES = 2;
     let stallRetryCount = 0;
     let contextMgmtRetryCount = 0;
     let tokenLimitRetryCount = 0;
     let retryExhausted = false;
+    // Two-phase compaction: phase 1 sends /compact, phase 2 resumes to continue original task
+    let compactPhase = false;
 
     let _msgCount = 0;
     const pendingDownloadToolIds = new Set();
@@ -709,7 +711,6 @@ async function queryClaudeSDK(command, options = {}, ws) {
     while (true) {
       let hasContextMgmtError = false;
       let hasApiStreamError = false;
-      let hasTokenLimitError = false;
       const abortController = new AbortController();
       const queryEnv = {
         ...sdkOptions.env,
@@ -718,7 +719,24 @@ async function queryClaudeSDK(command, options = {}, ws) {
       };
 
       // On retry, resume the session from disk; first run uses the original prompt.
-      const isRetry = (stallRetryCount > 0 || contextMgmtRetryCount > 0 || tokenLimitRetryCount > 0) && capturedSessionId;
+      const isRetry = (stallRetryCount > 0 || contextMgmtRetryCount > 0 || tokenLimitRetryCount > 0 || compactPhase) && capturedSessionId;
+
+      // Determine the prompt for this iteration:
+      // - compactPhase=true (phase 2 after /compact): empty resume to continue original task
+      // - contextMgmtRetryCount===1 (phase 1): send /compact to trigger native CLI compaction
+      // - other retries: empty resume
+      // - first run: original user prompt
+      let promptForThisRun;
+      if (compactPhase) {
+        promptForThisRun = ''; // phase 2: resume after /compact, continue original task
+        compactPhase = false;
+      } else if (contextMgmtRetryCount === 1) {
+        promptForThisRun = '/compact'; // phase 1: trigger native CLI compaction
+      } else if (isRetry) {
+        promptForThisRun = '';
+      } else {
+        promptForThisRun = finalCommand;
+      }
 
       const queryOpts = {
         ...sdkOptions,
@@ -730,7 +748,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
       let queryInstance;
       try {
         queryInstance = query({
-          prompt: isRetry ? '' : finalCommand,
+          prompt: promptForThisRun,
           options: queryOpts,
         });
       } catch (hookError) {
@@ -796,14 +814,8 @@ async function queryClaudeSDK(command, options = {}, ws) {
       // also carry error: 'unknown' (e.g. invalid_request surfaced synthetically in future SDK versions).
       if (message.type === 'assistant' && message.error === 'unknown' &&
           message.message?.model === '<synthetic>') {
-        const errorText = message.message?.content?.[0]?.text || '';
-        if (errorText.includes('model_max_prompt_tokens_exceeded')) {
-          hasTokenLimitError = true;
-          appendToSessionLog(capturedSessionId || sessionId || 'unknown', `[${new Date().toISOString()}] [SDK] token limit exceeded, will compact and retry`);
-        } else {
-          hasApiStreamError = true;
-          appendToSessionLog(capturedSessionId || sessionId || 'unknown', `[${new Date().toISOString()}] [SDK] synthetic API error detected (error: unknown), will retry`);
-        }
+        hasApiStreamError = true;
+        appendToSessionLog(capturedSessionId || sessionId || 'unknown', `[${new Date().toISOString()}] [SDK] synthetic API error detected (error: unknown), will retry`);
         continue; // skip normalization; handled after the for-await loop
       }
 
@@ -897,6 +909,23 @@ async function queryClaudeSDK(command, options = {}, ws) {
           continue; // retry with resume
         }
 
+        // Token limit exceeded thrown as exception (not synthetic message) — force compaction and retry
+        const isTokenLimitError = forAwaitError.message?.includes('model_max_prompt_tokens_exceeded');
+        if (isTokenLimitError && tokenLimitRetryCount < MAX_TOKEN_LIMIT_RETRIES) {
+          tokenLimitRetryCount++;
+          console.warn(`[TOKEN-LIMIT-RETRY] Session ${capturedSessionId} hit token limit (thrown), sending /compact to trigger native CLI compaction (attempt ${tokenLimitRetryCount}/${MAX_TOKEN_LIMIT_RETRIES})`);
+          // Use two-phase /compact approach: bypass SDK's broken context_management API parameter.
+          // Phase 1: send /compact so claude CLI handles compaction natively.
+          // compactPhase=true tells next iteration (phase 2) to resume with empty prompt to continue.
+          compactPhase = true;
+          ws.send(createNormalizedMessage({ kind: 'status', text: 'token_limit_retry', retryCount: tokenLimitRetryCount, maxRetries: MAX_TOKEN_LIMIT_RETRIES, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+          continue;
+        } else if (isTokenLimitError) {
+          retryExhausted = true;
+          ws.send(createNormalizedMessage({ kind: 'error', content: 'Context too large after compaction retries. Please start a new session.', sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+          break;
+        }
+
         // Non-retryable: propagate to outer catch
         throw forAwaitError;
       }
@@ -904,28 +933,20 @@ async function queryClaudeSDK(command, options = {}, ws) {
       // context_management compaction error detected in stream — retry transparently
       if (hasContextMgmtError && contextMgmtRetryCount < MAX_CONTEXT_MGMT_RETRIES) {
         contextMgmtRetryCount++;
-        console.warn(`[CONTEXT-MGMT-RETRY] Session ${capturedSessionId} compaction failed (Extra inputs), retry ${contextMgmtRetryCount}/${MAX_CONTEXT_MGMT_RETRIES}`);
+        console.warn(`[CONTEXT-MGMT-RETRY] Session ${capturedSessionId} compaction failed (Extra inputs), sending /compact to trigger native CLI compaction (attempt ${contextMgmtRetryCount}/${MAX_CONTEXT_MGMT_RETRIES})`);
+        // Phase 1: send /compact as user message so claude CLI handles compaction natively,
+        // bypassing the SDK's broken context_management API parameter.
+        // compactPhase=true tells next iteration (phase 2) to resume with empty prompt to continue.
+        compactPhase = true;
         ws.send(createNormalizedMessage({ kind: 'status', text: 'context_mgmt_retry', retryCount: contextMgmtRetryCount, maxRetries: MAX_CONTEXT_MGMT_RETRIES, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
         continue;
       } else if (hasContextMgmtError) {
         // All retries exhausted — surface the error to the user
         retryExhausted = true;
-        ws.send(createNormalizedMessage({ kind: 'error', content: 'Context compaction failed after retries (context_management: Extra inputs are not permitted). Try /compact manually or start a new session.', sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+        ws.send(createNormalizedMessage({ kind: 'error', content: 'Context compaction failed after retries. Try /compact manually or start a new session.', sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
       }
 
       // Token limit exceeded — force compaction by setting a very low autoCompactThreshold and resume
-      if (hasTokenLimitError && tokenLimitRetryCount < MAX_TOKEN_LIMIT_RETRIES) {
-        tokenLimitRetryCount++;
-        console.warn(`[TOKEN-LIMIT-RETRY] Session ${capturedSessionId} hit token limit, forcing compaction and retry ${tokenLimitRetryCount}/${MAX_TOKEN_LIMIT_RETRIES}`);
-        // Force compaction on next resume: SDK will compact when context exceeds this low threshold
-        sdkOptions.autoCompactThreshold = 0.1;
-        ws.send(createNormalizedMessage({ kind: 'status', text: 'token_limit_retry', retryCount: tokenLimitRetryCount, maxRetries: MAX_TOKEN_LIMIT_RETRIES, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
-        continue;
-      } else if (hasTokenLimitError) {
-        retryExhausted = true;
-        ws.send(createNormalizedMessage({ kind: 'error', content: 'Context too large after compaction retries. Please start a new session.', sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
-      }
-
       // SDK synthetic API error (e.g. stream idle timeout) — retry using resume
       if (hasApiStreamError && stallRetryCount < MAX_STALL_RETRIES) {
         stallRetryCount++;

@@ -5,6 +5,7 @@ import type { Terminal } from '@xterm/xterm';
 import type { Project, ProjectSession } from '../../../types/app';
 import { TERMINAL_INIT_DELAY_MS } from '../constants/constants';
 import { getShellWebSocketUrl, parseShellMessage, sendSocketMessage } from '../utils/socket';
+import { getClaudeSettings } from '../../chat/utils/chatStorage';
 import { logger } from '../../../utils/logger';
 
 const ANSI_ESCAPE_REGEX =
@@ -34,6 +35,7 @@ type UseShellConnectionResult = {
   closeSocket: () => void;
   connectToShell: () => void;
   disconnectFromShell: () => void;
+  markUserDisconnected: () => void;
 };
 
 export function useShellConnection({
@@ -55,6 +57,7 @@ export function useShellConnection({
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const connectingRef = useRef(false);
+  const userDisconnectedRef = useRef(false);
 
   const handleProcessCompletion = useCallback(
     (output: string) => {
@@ -153,6 +156,7 @@ export function useShellConnection({
               rows: currentTerminal.rows,
               initialCommand: initialCommandRef.current,
               isPlainShell: isPlainShellRef.current,
+              skipPermissions: getClaudeSettings().skipPermissions,
             });
           }, TERMINAL_INIT_DELAY_MS);
         };
@@ -201,12 +205,19 @@ export function useShellConnection({
       return;
     }
 
+    userDisconnectedRef.current = false;
     connectingRef.current = true;
     setIsConnecting(true);
     connectWebSocket(true);
   }, [connectWebSocket, isConnected, isConnecting, isInitialized]);
 
+  const markUserDisconnected = useCallback(() => {
+    userDisconnectedRef.current = true;
+  }, []);
+
   const disconnectFromShell = useCallback(() => {
+    // NOTE: does NOT set userDisconnectedRef — callers that want to block
+    // auto-reconnect (user-initiated disconnect) should call markUserDisconnected first.
     closeSocket();
     clearTerminalScreen();
     setIsConnected(false);
@@ -216,7 +227,7 @@ export function useShellConnection({
   }, [clearTerminalScreen, closeSocket, setAuthUrl]);
 
   useEffect(() => {
-    if (!autoConnect || !isInitialized || isConnecting || isConnected) {
+    if (!autoConnect || !isInitialized || isConnecting || isConnected || userDisconnectedRef.current) {
       return;
     }
 
@@ -229,5 +240,6 @@ export function useShellConnection({
     closeSocket,
     connectToShell,
     disconnectFromShell,
+    markUserDisconnected,
   };
 }

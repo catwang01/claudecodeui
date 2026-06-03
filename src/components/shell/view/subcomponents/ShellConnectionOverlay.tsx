@@ -5,6 +5,7 @@ type ShellConnectionOverlayProps = {
   connectLabel: string;
   connectTitle: string;
   connectingLabel: string;
+  commandArgs?: string;
   onConnect: () => void;
 };
 
@@ -15,6 +16,7 @@ export default function ShellConnectionOverlay({
   connectLabel,
   connectTitle,
   connectingLabel,
+  commandArgs,
   onConnect,
 }: ShellConnectionOverlayProps) {
   if (mode === 'loading') {
@@ -40,6 +42,11 @@ export default function ShellConnectionOverlay({
             <span>{connectLabel}</span>
           </button>
           <p className="mt-3 px-2 text-sm text-gray-400">{description}</p>
+          {commandArgs && (
+            <code className="mt-2 inline-block rounded bg-gray-800 px-2 py-1 font-mono text-xs text-gray-300">
+              {commandArgs}
+            </code>
+          )}
         </div>
       </div>
     );
@@ -53,6 +60,11 @@ export default function ShellConnectionOverlay({
           <span className="text-base font-medium">{connectingLabel}</span>
         </div>
         <p className="mt-3 px-2 text-sm text-gray-400">{description}</p>
+        {commandArgs && (
+          <code className="mt-2 inline-block rounded bg-gray-800 px-2 py-1 font-mono text-xs text-gray-300">
+            {commandArgs}
+          </code>
+        )}
       </div>
     </div>
   );
