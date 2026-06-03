@@ -8,7 +8,7 @@ import { useChatProviderState } from '../hooks/useChatProviderState';
 import { useChatSessionState } from '../hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
-import { CLAUDE_MODELS, CURSOR_MODELS, CODEX_MODELS, GEMINI_MODELS } from '../../../../shared/modelConstants';
+import { CLAUDE_MODELS, CURSOR_MODELS, CODEX_MODELS, GEMINI_MODELS, COPILOT_MODELS } from '../../../../shared/modelConstants';
 import { useSessionStore } from '../../../stores/useSessionStore';
 import { useWebSocket } from '../../../contexts/WebSocketContext';
 import { api } from '../../../utils/api';
@@ -82,6 +82,8 @@ function ChatInterface({
     setCodexModel,
     geminiModel,
     setGeminiModel,
+    copilotModel,
+    setCopilotModel,
     permissionMode,
     pendingPermissionRequests,
     setPendingPermissionRequests,
@@ -210,6 +212,7 @@ function ChatInterface({
     claudeModel,
     codexModel,
     geminiModel,
+    copilotModel,
     isLoading,
     canAbortSession,
     tokenBudget,
@@ -441,6 +444,8 @@ function ChatInterface({
           setCodexModel={setCodexModel}
           geminiModel={geminiModel}
           setGeminiModel={setGeminiModel}
+          copilotModel={copilotModel}
+          setCopilotModel={setCopilotModel}
           tasksEnabled={tasksEnabled}
           isTaskMasterInstalled={isTaskMasterInstalled}
           onShowAllTasks={onShowAllTasks}
@@ -550,17 +555,20 @@ function ChatInterface({
           currentModel={
             provider === 'claude' ? claudeModel :
             provider === 'cursor' ? cursorModel :
-            provider === 'codex' ? codexModel : geminiModel
+            provider === 'codex' ? codexModel :
+            provider === 'copilot' ? copilotModel : geminiModel
           }
           modelOptions={
             provider === 'claude' ? CLAUDE_MODELS.OPTIONS :
             provider === 'cursor' ? CURSOR_MODELS.OPTIONS :
-            provider === 'codex' ? CODEX_MODELS.OPTIONS : GEMINI_MODELS.OPTIONS
+            provider === 'codex' ? CODEX_MODELS.OPTIONS :
+            provider === 'copilot' ? COPILOT_MODELS.OPTIONS : GEMINI_MODELS.OPTIONS
           }
           onModelChange={(value) => {
             if (provider === 'claude') { setClaudeModel(value); localStorage.setItem('claude-model', value); }
             else if (provider === 'cursor') { setCursorModel(value); localStorage.setItem('cursor-model', value); }
             else if (provider === 'codex') { setCodexModel(value); localStorage.setItem('codex-model', value); }
+            else if (provider === 'copilot') { setCopilotModel(value); localStorage.setItem('copilot-model', value); }
             else { setGeminiModel(value); localStorage.setItem('gemini-model', value); }
           }}
         />
