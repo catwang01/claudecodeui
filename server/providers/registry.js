@@ -11,6 +11,7 @@ import { claudeAdapter } from './claude/adapter.js';
 import { cursorAdapter } from './cursor/adapter.js';
 import { codexAdapter } from './codex/adapter.js';
 import { geminiAdapter } from './gemini/adapter.js';
+import { copilotAdapter } from './copilot/adapter.js';
 
 /**
  * @typedef {import('./types.js').ProviderAdapter} ProviderAdapter
@@ -25,6 +26,7 @@ providers.set('claude', claudeAdapter);
 providers.set('cursor', cursorAdapter);
 providers.set('codex', codexAdapter);
 providers.set('gemini', geminiAdapter);
+providers.set('copilot', copilotAdapter);
 
 /**
  * Get a provider adapter by name.
