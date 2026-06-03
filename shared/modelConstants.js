@@ -94,3 +94,21 @@ export const GEMINI_MODELS = {
 
   DEFAULT: "gemini-3.1-pro-preview",
 };
+
+/**
+ * GitHub Copilot Models
+ * Values must match model IDs supported by the Copilot CLI.
+ * Use client.listModels() at runtime to get the full list.
+ */
+export const COPILOT_MODELS = {
+  OPTIONS: [
+    { value: "gpt-4.1", label: "GPT-4.1" },
+    { value: "gpt-4o", label: "GPT-4o" },
+    { value: "gpt-4.5", label: "GPT-4.5" },
+    { value: "claude-sonnet-4.5", label: "Claude Sonnet 4.5" },
+    { value: "o3", label: "o3" },
+    { value: "o4-mini", label: "o4-mini" },
+  ],
+
+  DEFAULT: "gpt-4.1",
+};

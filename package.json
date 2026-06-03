@@ -23,7 +23,7 @@
     "url": "https://github.com/siteboon/claudecodeui/issues"
   },
   "scripts": {
-    "dev": "concurrently --kill-others \"npm run pii-proxy:dev\" \"node scripts/wait-pii-proxy.js && npm run server:dev\" \"node scripts/wait-pii-proxy.js && npm run client\"",
+    "dev": "cross-env PII_PROXY_PORT=18091 concurrently --kill-others \"npm run pii-proxy\" \"node scripts/wait-pii-proxy.js && npm run server:dev\" \"node scripts/wait-pii-proxy.js && npm run client\"",
     "server:dev": "tsx --tsconfig server/tsconfig.json server/index.js",
     "server:dev-watch": "tsx watch --tsconfig server/tsconfig.json server/index.js",
     "server:prod": "node dist-server/server/index.js",
@@ -39,7 +39,6 @@
     "lint:fix": "eslint src/ server/ --fix",
     "start": "npm run build && concurrently --kill-others \"npm run pii-proxy\" \"node scripts/wait-pii-proxy.js && npm run server:prod\"",
     "pii-proxy": "node scripts/start-pii-proxy.js",
-    "pii-proxy:dev": "cross-env PII_PROXY_PORT=18091 node scripts/start-pii-proxy.js",
     "release": "./release.sh",
     "prepublishOnly": "npm run build",
     "postinstall": "node scripts/fix-node-pty.js && node scripts/setup-pii-proxy.js",
@@ -77,6 +76,7 @@
     "@codemirror/lang-python": "^6.2.1",
     "@codemirror/merge": "^6.11.1",
     "@codemirror/theme-one-dark": "^6.1.2",
+    "@github/copilot-sdk": "^1.0.0",
     "@iarna/toml": "^2.2.5",
     "@octokit/rest": "^22.0.0",
     "@openai/codex-sdk": "^0.101.0",
