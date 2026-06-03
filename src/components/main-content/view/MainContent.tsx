@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import ChatInterface from '../../chat/view/ChatInterface';
 import FileTree from '../../file-tree/view/FileTree';
-import StandaloneShell from '../../standalone-shell/view/StandaloneShell';
+import ShellSessionPool from '../../shell-pool/ShellSessionPool';
 import GitPanel from '../../git-panel/view/GitPanel';
 import PluginTabContent from '../../plugins/view/PluginTabContent';
 import type { MainContentProps } from '../types/types';
@@ -147,16 +147,13 @@ function MainContent({
             </div>
           )}
 
-          {activeTab === 'shell' && (
-            <div className="h-full w-full overflow-hidden">
-              <StandaloneShell
-                project={selectedProject}
-                session={selectedSession}
-                showHeader={false}
-                isActive={activeTab === 'shell'}
-              />
-            </div>
-          )}
+          <div className={`h-full w-full overflow-hidden ${activeTab === 'shell' ? 'block' : 'hidden'}`}>
+            <ShellSessionPool
+              project={selectedProject}
+              activeSession={selectedSession}
+              isActive={activeTab === 'shell'}
+            />
+          </div>
 
           {activeTab === 'git' && (
             <div className="h-full overflow-hidden">
