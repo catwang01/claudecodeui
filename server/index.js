@@ -92,6 +92,7 @@ import mime from 'mime-types';
 import { getProjects, getSessions, renameProject, deleteSession, forkSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, clearSessionMessagesCache, searchConversations, getSessionFileMeta } from './projects.js';
 import { clearFetchHistoryCache } from './providers/claude/adapter.js';
 import { queryClaudeSDK, abortClaudeSDKSession, isClaudeSDKSessionActive, getClaudeSDKSessionStartTime, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
+import { queryCopilotSDK, abortCopilotSession, isCopilotSessionActive, getCopilotSessionStartTime, getActiveCopilotSessions } from './copilot-sdk.js';
 import { pendingLocalIdMappings, saveLocalIdMapping } from './localids.js';
 import { spawnCursor, abortCursorSession, isCursorSessionActive, getActiveCursorSessions } from './cursor-cli.js';
 import { queryCodex, abortCodexSession, isCodexSessionActive, getActiveCodexSessions } from './openai-codex.js';
@@ -1826,6 +1827,12 @@ function handleChatConnection(ws, request) {
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
                 console.log('🤖 Model:', data.options?.model || 'default');
                 await queryCodex(data.command, data.options, writer);
+            } else if (data.type === 'copilot-command') {
+                console.log('[DEBUG] Copilot message:', data.command || '[Continue/Resume]');
+                console.log('[DEBUG] Project:', data.options?.cwd || 'Unknown');
+                console.log('[DEBUG] Session:', data.options?.sessionId ? 'Resume' : 'New');
+                console.log('[DEBUG] Model:', data.options?.model || 'default');
+                await queryCopilotSDK(data.command, data.options, writer);
             } else if (data.type === 'gemini-command') {
                 console.log('[DEBUG] Gemini message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || data.options?.cwd || 'Unknown');
@@ -1851,6 +1858,8 @@ function handleChatConnection(ws, request) {
                     success = abortCodexSession(data.sessionId);
                 } else if (provider === 'gemini') {
                     success = abortGeminiSession(data.sessionId);
+                } else if (provider === 'copilot') {
+                    success = abortCopilotSession(data.sessionId);
                 } else {
                     // Use Claude Agents SDK
                     success = await abortClaudeSDKSession(data.sessionId);
@@ -1885,6 +1894,8 @@ function handleChatConnection(ws, request) {
                         isActive = isCodexSessionActive(sessionId);
                     } else if (prov === 'gemini') {
                         isActive = isGeminiSessionActive(sessionId);
+                    } else if (prov === 'copilot') {
+                        isActive = isCopilotSessionActive(sessionId);
                     } else {
                         isActive = isClaudeSDKSessionActive(sessionId);
                         if (isActive) {
