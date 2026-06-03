@@ -42,6 +42,7 @@ interface UseChatComposerStateArgs {
   claudeModel: string;
   codexModel: string;
   geminiModel: string;
+  copilotModel: string;
   isLoading: boolean;
   canAbortSession: boolean;
   tokenBudget: Record<string, unknown> | null;
@@ -111,6 +112,7 @@ export function useChatComposerState({
   claudeModel,
   codexModel,
   geminiModel,
+  copilotModel,
   isLoading,
   canAbortSession,
   tokenBudget,
@@ -286,7 +288,7 @@ export function useChatComposerState({
           projectName: selectedProject.name,
           sessionId: selectedSession?.id || currentSessionId,
           provider,
-          model: provider === 'cursor' ? cursorModel : provider === 'codex' ? codexModel : provider === 'gemini' ? geminiModel : claudeModel,
+          model: provider === 'cursor' ? cursorModel : provider === 'codex' ? codexModel : provider === 'gemini' ? geminiModel : provider === 'copilot' ? copilotModel : claudeModel,
           tokenUsage: tokenBudget,
         };
 
@@ -717,6 +719,21 @@ export function useChatComposerState({
             permissionMode: permissionMode === 'plan' ? 'default' : permissionMode,
           },
         });
+      } else if (provider === 'copilot') {
+        sendMessage({
+          type: 'copilot-command',
+          command: messageContent,
+          sessionId: effectiveSessionId,
+          options: {
+            cwd: resolvedProjectPath,
+            projectPath: resolvedProjectPath,
+            sessionId: effectiveSessionId,
+            resume: Boolean(effectiveSessionId),
+            model: copilotModel,
+            sessionSummary,
+            permissionMode,
+          },
+        });
       } else if (provider === 'gemini') {
         sendMessage({
           type: 'gemini-command',
@@ -774,6 +791,7 @@ export function useChatComposerState({
       attachedFiles,
       claudeModel,
       codexModel,
+      copilotModel,
       currentSessionId,
       cursorModel,
       executeCommand,
