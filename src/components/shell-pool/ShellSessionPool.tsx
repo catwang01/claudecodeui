@@ -32,15 +32,20 @@ export default function ShellSessionPool({
     }
   }, [project.path]);
 
-  // Add new session to pool (or update lastActiveAt) when activeSession changes
+  // Add new session to pool when first seen; for existing sessions only update lastActiveAt
+  // (preserve the original session object reference so Shell does not get new props)
   useEffect(() => {
     if (!activeSession) return;
     setPool((prev) => {
       const next = new Map(prev);
-      next.set(activeSession.id, {
-        session: activeSession,
-        lastActiveAt: Date.now(),
-      });
+      const existing = prev.get(activeSession.id);
+      if (existing) {
+        // Already in pool - preserve session reference, only refresh timestamp
+        next.set(activeSession.id, { ...existing, lastActiveAt: Date.now() });
+      } else {
+        // New session - add to pool
+        next.set(activeSession.id, { session: activeSession, lastActiveAt: Date.now() });
+      }
       return next;
     });
   }, [activeSession]);
