@@ -20,3 +20,14 @@ export function getConnectableHost(host) {
   }
   return isWildcardHost(host) || isLoopbackHost(host) ? 'localhost' : host;
 }
+
+// Use 127.0.0.1 for server-to-server proxy targets (e.g. Vite → Express).
+// On macOS, 'localhost' resolves to ::1 (IPv6) first; if the server only
+// listens on IPv4, the IPv6 connect hangs until timeout and Vite's http.Agent
+// connection pool stacks up, making every subsequent proxied request slower.
+export function getProxyHost(host) {
+  if (!host) {
+    return '127.0.0.1';
+  }
+  return isWildcardHost(host) || isLoopbackHost(host) ? '127.0.0.1' : host;
+}

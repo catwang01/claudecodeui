@@ -7,6 +7,19 @@ import { parseFrontmatter } from '../utils/frontmatter.js';
 
 const router = express.Router();
 
+// Cache skills list to avoid re-scanning ~40 SKILL.md files on every request.
+// Skills only change when plugins are installed/updated, so a 60s TTL is fine.
+// Without caching, cold macOS APFS reads across 7 plugin directories take 400-700ms
+// and can spike to several seconds under I/O contention.
+let _skillsCache = null;
+let _skillsCacheTime = 0;
+const SKILLS_CACHE_TTL_MS = 60_000;
+
+export function invalidateSkillsCache() {
+  _skillsCache = null;
+  _skillsCacheTime = 0;
+}
+
 /**
  * GET /api/providers/:provider/skills
  * List skills from installed Claude plugins.
@@ -20,8 +33,15 @@ router.get('/:provider/skills', async (req, res) => {
   }
 
   try {
+    const now = Date.now();
+    if (_skillsCache && now - _skillsCacheTime < SKILLS_CACHE_TTL_MS) {
+      return res.json({ success: true, data: { skills: _skillsCache } });
+    }
+
     const claudeHome = path.join(os.homedir(), '.claude');
     const skills = await listClaudePluginSkills(claudeHome);
+    _skillsCache = skills;
+    _skillsCacheTime = now;
     res.json({ success: true, data: { skills } });
   } catch (error) {
     console.error('Error listing provider skills:', error);

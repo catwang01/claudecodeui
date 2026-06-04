@@ -92,7 +92,22 @@ import mime from 'mime-types';
 import { getProjects, getSessions, renameProject, deleteSession, forkSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, clearSessionMessagesCache, searchConversations, getSessionFileMeta } from './projects.js';
 import { clearFetchHistoryCache } from './providers/claude/adapter.js';
 import { queryClaudeSDK, abortClaudeSDKSession, isClaudeSDKSessionActive, getClaudeSDKSessionStartTime, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
-import { queryCopilotSDK, abortCopilotSession, isCopilotSessionActive, getCopilotSessionStartTime, getActiveCopilotSessions } from './copilot-sdk.js';
+let queryCopilotSDK, abortCopilotSession, isCopilotSessionActive, getCopilotSessionStartTime, getActiveCopilotSessions;
+try {
+  const copilotModule = await import('./copilot-sdk.js');
+  queryCopilotSDK = copilotModule.queryCopilotSDK;
+  abortCopilotSession = copilotModule.abortCopilotSession;
+  isCopilotSessionActive = copilotModule.isCopilotSessionActive;
+  getCopilotSessionStartTime = copilotModule.getCopilotSessionStartTime;
+  getActiveCopilotSessions = copilotModule.getActiveCopilotSessions;
+} catch (e) {
+  console.warn('[copilot-sdk] @github/copilot-sdk not available, Copilot features disabled:', e.message);
+  queryCopilotSDK = async () => { throw new Error('Copilot SDK not available'); };
+  abortCopilotSession = () => {};
+  isCopilotSessionActive = () => false;
+  getCopilotSessionStartTime = () => null;
+  getActiveCopilotSessions = () => [];
+}
 import { pendingLocalIdMappings, saveLocalIdMapping } from './localids.js';
 import { spawnCursor, abortCursorSession, isCursorSessionActive, getActiveCursorSessions } from './cursor-cli.js';
 import { queryCodex, abortCodexSession, isCodexSessionActive, getActiveCodexSessions } from './openai-codex.js';

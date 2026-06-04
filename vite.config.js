@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 import { viteStaticCopy } from 'vite-plugin-static-copy'
 import { createReadStream } from 'fs'
 import { resolve } from 'path'
-import { getConnectableHost, normalizeLoopbackHost } from './shared/networkHosts.js'
+import { getConnectableHost, normalizeLoopbackHost, getProxyHost } from './shared/networkHosts.js'
 
 // onnxruntime-web loads these .mjs files via dynamic import() at runtime.
 // Vite dev server refuses to serve public/ files as ES modules, so we intercept
@@ -42,7 +42,7 @@ export default defineConfig(({ mode }) => {
   // URLs and proxy targets.
   const host = normalizeLoopbackHost(configuredHost)
 
-  const proxyHost = getConnectableHost(configuredHost)
+  const proxyHost = getProxyHost(configuredHost)
   // TODO: Remove support for legacy PORT variables in all locations in a future major release, leaving only SERVER_PORT.
   const serverPort = env.SERVER_PORT || env.PORT || 3001
 

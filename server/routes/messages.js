@@ -40,19 +40,30 @@ router.get('/:sessionId/messages', async (req, res) => {
     const offset = parseInt(req.query.offset || '0', 10);
     const afterId = req.query.after_id || null;
 
+    const _t0 = Date.now();
+    const _timings = {};
+
     const adapter = getProvider(provider);
     if (!adapter) {
       const available = getAllProviders().join(', ');
       return res.status(400).json({ error: `Unknown provider: ${provider}. Available: ${available}` });
     }
 
+    // Fast path for after_id: only read/normalize new messages since the last known ID.
+    if (afterId && typeof adapter.fetchHistoryAfter === 'function') {
+      const result = await adapter.fetchHistoryAfter(sessionId, afterId, { projectName, projectPath });
+      return res.json(result);
+    }
+
     // Fetch ALL messages first so JSONL merge sees the full picture, then paginate.
+    const _t1 = Date.now();
     const fullResult = await adapter.fetchHistory(sessionId, {
       projectName,
       projectPath,
       limit: null,
       offset: 0,
     });
+    _timings.fetchHistory = Date.now() - _t1;
 
     // Merge local user messages not yet persisted by the SDK.
     // Only role=user messages from local JSONL are considered — the rest are debug artifacts.
@@ -70,7 +81,9 @@ router.get('/:sessionId/messages', async (req, res) => {
     //     the local JSONL only contains the orphans themselves), binary-search the server list by
     //     timestamp and insert at the chronologically correct position.
     //   Last resort — append at end: no timestamp available (shouldn't happen in practice).
+    const _t2 = Date.now();
     const localMsgs = await readMessages(sessionId);
+    _timings.readLocalMsgs = Date.now() - _t2;
     const localUserMsgs = localMsgs.filter(m => m.id?.startsWith('local_'));
     if (localUserMsgs.length > 0) {
       const serverIds = new Set(fullResult.messages.map(m => m.id));
@@ -172,6 +185,11 @@ router.get('/:sessionId/messages', async (req, res) => {
     const start = limit !== null ? Math.max(0, total - offset - limit) : 0;
     const end = limit !== null ? Math.max(0, total - offset) : total;
     const pageMessages = allMessages.slice(start, end);
+
+    _timings.total = Date.now() - _t0;
+    if (_timings.total > 500) {
+      console.log(`[SLOW messages] ${sessionId} total=${_timings.total}ms fetchHistory=${_timings.fetchHistory}ms readLocalMsgs=${_timings.readLocalMsgs}ms msgs=${total}`);
+    }
 
     return res.json({      messages: pageMessages,
       total,

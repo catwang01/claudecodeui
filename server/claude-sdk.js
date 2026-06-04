@@ -762,9 +762,14 @@ async function queryClaudeSDK(command, options = {}, ws) {
         });
       }
 
-      // Track the query instance for abort capability
-      if (capturedSessionId) {
-        addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws, abortController);
+      // Track the query instance for abort capability.
+      // Use capturedSessionId if known (resume), otherwise fall back to the
+      // caller-supplied sessionId so that isProcessing / startTime are
+      // available immediately — even during the silent compaction phase
+      // before the SDK yields its first message.
+      const trackId = capturedSessionId || sessionId;
+      if (trackId) {
+        addSession(trackId, queryInstance, tempImagePaths, tempDir, ws, abortController);
       }
 
       // Process streaming messages
@@ -779,6 +784,11 @@ async function queryClaudeSDK(command, options = {}, ws) {
       if (message.session_id && !capturedSessionId) {
 
         capturedSessionId = message.session_id;
+        // If we pre-registered under the caller-supplied sessionId (which may
+        // differ from the SDK-assigned capturedSessionId), remove that entry first.
+        if (sessionId && sessionId !== capturedSessionId) {
+          removeSession(sessionId);
+        }
         addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws);
 
         // Set session ID on writer
