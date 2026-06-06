@@ -20,8 +20,8 @@ const baseProps = {
 describe('RightPanel', () => {
   it('shows "Files" and "Git" tab buttons', () => {
     render(<RightPanel {...baseProps} />);
-    expect(screen.getByRole('button', { name: /files/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /git/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /files/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /git/i })).toBeInTheDocument();
   });
 
   it('renders FileTree when activeTab is "files"', () => {
@@ -39,8 +39,15 @@ describe('RightPanel', () => {
   it('calls onTabChange when Git tab is clicked', () => {
     const onTabChange = vi.fn();
     render(<RightPanel {...baseProps} onTabChange={onTabChange} />);
-    fireEvent.click(screen.getByRole('button', { name: /git/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /git/i }));
     expect(onTabChange).toHaveBeenCalledWith('git');
+  });
+
+  it('calls onTabChange when Files tab is clicked', () => {
+    const onTabChange = vi.fn();
+    render(<RightPanel {...baseProps} activeTab="git" onTabChange={onTabChange} />);
+    fireEvent.click(screen.getByRole('tab', { name: /files/i }));
+    expect(onTabChange).toHaveBeenCalledWith('files');
   });
 
   it('calls onClose when ✕ button is clicked', () => {

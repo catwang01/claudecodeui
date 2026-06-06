@@ -23,28 +23,32 @@ export default function RightPanel({
     <div className="flex min-w-0 flex-1 flex-col overflow-hidden border-l border-border/60 bg-background">
       {/* Panel header */}
       <div className="flex flex-shrink-0 items-center gap-1 border-b border-border/60 px-2 py-1.5">
-        <button
-          aria-label="Files"
-          onClick={() => onTabChange('files')}
-          className={`rounded px-2.5 py-1 text-sm font-medium transition-colors ${
-            activeTab === 'files'
-              ? 'bg-muted text-foreground'
-              : 'text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          Files
-        </button>
-        <button
-          aria-label="Git"
-          onClick={() => onTabChange('git')}
-          className={`rounded px-2.5 py-1 text-sm font-medium transition-colors ${
-            activeTab === 'git'
-              ? 'bg-muted text-foreground'
-              : 'text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          Git
-        </button>
+        <div role="tablist">
+          <button
+            role="tab"
+            aria-selected={activeTab === 'files'}
+            onClick={() => onTabChange('files')}
+            className={`rounded px-2.5 py-1 text-sm font-medium transition-colors ${
+              activeTab === 'files'
+                ? 'bg-muted text-foreground'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            Files
+          </button>
+          <button
+            role="tab"
+            aria-selected={activeTab === 'git'}
+            onClick={() => onTabChange('git')}
+            className={`rounded px-2.5 py-1 text-sm font-medium transition-colors ${
+              activeTab === 'git'
+                ? 'bg-muted text-foreground'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            Git
+          </button>
+        </div>
 
         <div className="flex-1" />
 
@@ -58,7 +62,7 @@ export default function RightPanel({
       </div>
 
       {/* Panel content */}
-      <div className="min-h-0 flex-1 overflow-hidden">
+      <div role="tabpanel" className="min-h-0 flex-1 overflow-hidden">
         {activeTab === 'files' ? (
           <FileTree selectedProject={selectedProject} onFileOpen={onFileOpen} />
         ) : (
