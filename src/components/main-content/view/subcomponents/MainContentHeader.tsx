@@ -71,7 +71,7 @@ export default function MainContentHeader({
           )}
         </div>
 
-        {activeTab === 'chat' && (onToggleFiles || onToggleGit) && (
+        {(onToggleFiles || onToggleGit) && (
           <div className="flex flex-shrink-0 items-center gap-1">
             {onToggleFiles && (
               <button
