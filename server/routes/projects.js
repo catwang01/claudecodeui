@@ -32,7 +32,6 @@ export const FORBIDDEN_PATHS = [
   '/lib',
   '/lib64',
   '/opt',
-  '/tmp',
   '/run',
   // Windows
   'C:\\Windows',
@@ -113,8 +112,12 @@ export async function validateWorkspacePath(requestedPath) {
     // Resolve the workspace root to its real path
     const resolvedWorkspaceRoot = await fs.realpath(WORKSPACES_ROOT);
 
+    // /tmp and its subdirectories are explicitly allowed regardless of WORKSPACES_ROOT.
+    const isTmpPath = realPath === '/tmp' || realPath.startsWith('/tmp' + path.sep);
+
     // Ensure the resolved path is contained within the allowed workspace root
-    if (!realPath.startsWith(resolvedWorkspaceRoot + path.sep) &&
+    if (!isTmpPath &&
+        !realPath.startsWith(resolvedWorkspaceRoot + path.sep) &&
         realPath !== resolvedWorkspaceRoot) {
       return {
         valid: false,
@@ -134,7 +137,8 @@ export async function validateWorkspacePath(requestedPath) {
         const realTarget = await fs.realpath(resolvedTarget);
 
         if (!realTarget.startsWith(resolvedWorkspaceRoot + path.sep) &&
-            realTarget !== resolvedWorkspaceRoot) {
+            realTarget !== resolvedWorkspaceRoot &&
+            realTarget !== '/tmp' && !realTarget.startsWith('/tmp' + path.sep)) {
           return {
             valid: false,
             error: 'Symlink target is outside the allowed workspace root'
