@@ -45,6 +45,7 @@ export default function ChangesView({
 }: ChangesViewProps) {
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
+  const [stagedFiles, setStagedFiles] = useState<Set<string>>(new Set());
 
   const changedFiles = useMemo(() => getAllChangedFiles(gitStatus), [gitStatus]);
   const hasExpandedFiles = expandedFiles.size > 0;
@@ -52,15 +53,14 @@ export default function ChangesView({
   useEffect(() => {
     if (!gitStatus || gitStatus.error) {
       setSelectedFiles(new Set());
+      setStagedFiles(new Set());
       return;
     }
 
-    // Remove any selected files that no longer exist in the status
-    setSelectedFiles((prev) => {
-      const allFiles = new Set(getAllChangedFiles(gitStatus));
-      const next = new Set([...prev].filter((f) => allFiles.has(f)));
-      return next;
-    });
+    // Remove any selected/staged files that no longer exist in the status
+    const allFiles = new Set(getAllChangedFiles(gitStatus));
+    setSelectedFiles((prev) => new Set([...prev].filter((f) => allFiles.has(f))));
+    setStagedFiles((prev) => new Set([...prev].filter((f) => allFiles.has(f))));
   }, [gitStatus]);
 
   useEffect(() => {
@@ -97,6 +97,16 @@ export default function ChangesView({
     });
   }, []);
 
+  const stageSelected = useCallback(() => {
+    setStagedFiles((prev) => new Set([...prev, ...selectedFiles]));
+    setSelectedFiles(new Set());
+  }, [selectedFiles]);
+
+  const unstageSelected = useCallback(() => {
+    setStagedFiles((prev) => new Set([...prev].filter((f) => !selectedFiles.has(f))));
+    setSelectedFiles(new Set());
+  }, [selectedFiles]);
+
   const requestFileAction = useCallback(
     (filePath: string, status: FileStatusCode) => {
       if (status === 'U') {
@@ -123,18 +133,28 @@ export default function ChangesView({
 
   const commitSelectedFiles = useCallback(
     (message: string) => {
-      return onCommitChanges(message, Array.from(selectedFiles));
+      return onCommitChanges(message, Array.from(stagedFiles));
     },
-    [onCommitChanges, selectedFiles],
+    [onCommitChanges, stagedFiles],
   );
 
   const generateMessageForSelection = useCallback(() => {
-    return onGenerateCommitMessage(Array.from(selectedFiles));
-  }, [onGenerateCommitMessage, selectedFiles]);
+    return onGenerateCommitMessage(Array.from(stagedFiles));
+  }, [onGenerateCommitMessage, stagedFiles]);
 
   const unstagedFiles = useMemo(
-    () => new Set(changedFiles.filter((f) => !selectedFiles.has(f))),
-    [changedFiles, selectedFiles],
+    () => new Set(changedFiles.filter((f) => !stagedFiles.has(f))),
+    [changedFiles, stagedFiles],
+  );
+
+  const hasSelectedInChanges = useMemo(
+    () => Array.from(selectedFiles).some((f) => unstagedFiles.has(f)),
+    [selectedFiles, unstagedFiles],
+  );
+
+  const hasSelectedInStaged = useMemo(
+    () => Array.from(selectedFiles).some((f) => stagedFiles.has(f)),
+    [selectedFiles, stagedFiles],
   );
 
   return (
@@ -142,7 +162,7 @@ export default function ChangesView({
       <CommitComposer
         isMobile={isMobile}
         projectPath={projectPath}
-        selectedFileCount={selectedFiles.size}
+        selectedFileCount={stagedFiles.size}
         isHidden={hasExpandedFiles}
         onCommit={commitSelectedFiles}
         onGenerateMessage={generateMessageForSelection}
@@ -193,18 +213,28 @@ export default function ChangesView({
             {/* STAGED section */}
             <div className="flex items-center justify-between border-b border-border/60 bg-muted/30 px-3 py-1.5">
               <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                Staged ({selectedFiles.size})
+                Staged ({stagedFiles.size})
               </span>
-              {selectedFiles.size > 0 && (
-                <button
-                  onClick={() => setSelectedFiles(new Set())}
-                  className="text-xs text-primary transition-colors hover:text-primary/80"
-                >
-                  Unstage All
-                </button>
-              )}
+              <div className="flex items-center gap-2">
+                {hasSelectedInStaged && (
+                  <button
+                    onClick={unstageSelected}
+                    className="text-xs text-primary transition-colors hover:text-primary/80"
+                  >
+                    Unstage Selected
+                  </button>
+                )}
+                {stagedFiles.size > 0 && !hasSelectedInStaged && (
+                  <button
+                    onClick={() => { setStagedFiles(new Set()); setSelectedFiles(new Set()); }}
+                    className="text-xs text-primary transition-colors hover:text-primary/80"
+                  >
+                    Unstage All
+                  </button>
+                )}
+              </div>
             </div>
-            {selectedFiles.size === 0 ? (
+            {stagedFiles.size === 0 ? (
               <div className="px-3 py-2 text-xs text-muted-foreground italic">No staged files</div>
             ) : (
               <FileChangeList
@@ -214,7 +244,7 @@ export default function ChangesView({
                 selectedFiles={selectedFiles}
                 isMobile={isMobile}
                 wrapText={wrapText}
-                filePaths={selectedFiles}
+                filePaths={stagedFiles}
                 onToggleSelected={toggleFileSelected}
                 onToggleExpanded={toggleFileExpanded}
                 onOpenFile={(filePath) => { void onOpenFile(filePath); }}
@@ -228,14 +258,24 @@ export default function ChangesView({
               <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 Changes ({unstagedFiles.size})
               </span>
-              {unstagedFiles.size > 0 && (
-                <button
-                  onClick={() => setSelectedFiles(new Set(changedFiles))}
-                  className="text-xs text-primary transition-colors hover:text-primary/80"
-                >
-                  Stage All
-                </button>
-              )}
+              <div className="flex items-center gap-2">
+                {hasSelectedInChanges && (
+                  <button
+                    onClick={stageSelected}
+                    className="text-xs text-primary transition-colors hover:text-primary/80"
+                  >
+                    Stage Selected
+                  </button>
+                )}
+                {unstagedFiles.size > 0 && !hasSelectedInChanges && (
+                  <button
+                    onClick={() => { setStagedFiles(new Set(changedFiles)); setSelectedFiles(new Set()); }}
+                    className="text-xs text-primary transition-colors hover:text-primary/80"
+                  >
+                    Stage All
+                  </button>
+                )}
+              </div>
             </div>
             {unstagedFiles.size === 0 ? (
               <div className="px-3 py-2 text-xs text-muted-foreground italic">All changes staged</div>
