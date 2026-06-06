@@ -73,30 +73,36 @@ export default function MainContentHeader({
 
         {activeTab === 'chat' && (onToggleFiles || onToggleGit) && (
           <div className="flex flex-shrink-0 items-center gap-1">
-            <button
-              aria-label="Toggle files panel"
-              title="Files"
-              onClick={onToggleFiles}
-              className={`rounded p-1.5 transition-colors ${
-                rightPanelOpen && rightPanelActiveTab === 'files'
-                  ? 'bg-muted text-foreground'
-                  : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-              }`}
-            >
-              <Folder className="h-4 w-4" />
-            </button>
-            <button
-              aria-label="Toggle git panel"
-              title="Source Control"
-              onClick={onToggleGit}
-              className={`rounded p-1.5 transition-colors ${
-                rightPanelOpen && rightPanelActiveTab === 'git'
-                  ? 'bg-muted text-foreground'
-                  : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-              }`}
-            >
-              <GitBranch className="h-4 w-4" />
-            </button>
+            {onToggleFiles && (
+              <button
+                aria-label="Toggle files panel"
+                aria-pressed={rightPanelOpen && rightPanelActiveTab === 'files'}
+                title="Files"
+                onClick={onToggleFiles}
+                className={`rounded p-1.5 transition-colors ${
+                  rightPanelOpen && rightPanelActiveTab === 'files'
+                    ? 'bg-muted text-foreground'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                }`}
+              >
+                <Folder className="h-4 w-4" />
+              </button>
+            )}
+            {onToggleGit && (
+              <button
+                aria-label="Toggle git panel"
+                aria-pressed={rightPanelOpen && rightPanelActiveTab === 'git'}
+                title="Source Control"
+                onClick={onToggleGit}
+                className={`rounded p-1.5 transition-colors ${
+                  rightPanelOpen && rightPanelActiveTab === 'git'
+                    ? 'bg-muted text-foreground'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                }`}
+              >
+                <GitBranch className="h-4 w-4" />
+              </button>
+            )}
           </div>
         )}
       </div>
