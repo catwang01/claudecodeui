@@ -64,9 +64,17 @@ export interface RightPanelState {
 - Builds a `CodeEditorFile` object
 - Sets `editingFile`, `activeTab: 'editor'`, `open: true`
 
+**Pre-open snapshot** — in-memory only, not part of persisted state:
+```ts
+preFileOpenSnapshot: { open: boolean; activeTab: 'files' | 'git' } | null
+```
+`openFile()` saves the current `{ open, activeTab }` (coerced to `'files'` if it was `'editor'`) into `preFileOpenSnapshot` before switching to the editor tab.
+
 **New method `closeFile()`:**
-- Sets `editingFile: null`, `editorExpanded: false`
-- If `activeTab === 'editor'`, switches to `'files'` and closes the panel (or keeps panel open on 'files')
+- Sets `editingFile: null`, `editorExpanded: false`, clears `preFileOpenSnapshot`
+- Restores from snapshot:
+  - Snapshot `open: false` → close the panel entirely (`open: false, activeTab: 'files'`)
+  - Snapshot `open: true, activeTab: X` → keep panel open, switch to tab X
 
 **New method `toggleEditorExpand()`:**
 - Flips `editorExpanded`; only meaningful when `activeTab === 'editor'`
@@ -156,6 +164,7 @@ Mobile: when `isMobile` is true and `editingFile` is set, render a full-screen `
 | `width`        | ✅ localStorage | |
 | `editingFile`  | ❌ in-memory only | No cross-session file state |
 | `editorExpanded` | ❌ in-memory only | Resets on reload |
+| `preFileOpenSnapshot` | ❌ in-memory only | Discarded on closeFile() |
 
 ---
 
