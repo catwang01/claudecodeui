@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import Sidebar from '../sidebar/view/Sidebar';
 import MainContent from '../main-content/view/MainContent';
+import ResizeHandle from '../right-panel/ResizeHandle';
 import { useWebSocket } from '../../contexts/WebSocketContext';
 import { useDeviceSettings } from '../../hooks/useDeviceSettings';
 import { useSessionProtection } from '../../hooks/useSessionProtection';
@@ -10,9 +11,11 @@ import { useProjectsState } from '../../hooks/useProjectsState';
 import { PermissionToastContainer } from '../common/PermissionToastContainer';
 import { useQuickSearch } from '../../hooks/useQuickSearch';
 import QuickSearchOverlay from '../quick-search/QuickSearchOverlay';
+import { useBootstrapSettings } from '../../hooks/useBootstrapSettings';
 import type { Project } from '../../types/app';
 
 export default function AppContent() {
+  useBootstrapSettings();
   const navigate = useNavigate();
   const { sessionId } = useParams<{ sessionId?: string }>();
   const { t } = useTranslation('common');
@@ -60,6 +63,22 @@ export default function AppContent() {
 
   const [scrollToProjectToken, setScrollToProjectToken] = useState(0);
   const [scrollToProjectName, setScrollToProjectName] = useState<string | null>(null);
+
+  const SIDEBAR_MIN = 180;
+  const SIDEBAR_MAX = 480;
+  const SIDEBAR_DEFAULT = 338; // tailwind w-72 (288) + 50
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const saved = localStorage.getItem('sidebarWidth');
+    const n = saved ? parseInt(saved, 10) : NaN;
+    return isNaN(n) ? SIDEBAR_DEFAULT : Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, n));
+  });
+  const handleSidebarResize = useCallback((delta: number) => {
+    setSidebarWidth(w => {
+      const next = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, w + delta));
+      localStorage.setItem('sidebarWidth', String(next));
+      return next;
+    });
+  }, []);
 
   const handleProjectSelectWithScroll = useCallback((project: Project) => {
     handleProjectSelect(project);
@@ -170,9 +189,12 @@ export default function AppContent() {
   return (
     <div className="fixed inset-0 flex bg-background">
       {!isMobile ? (
-        <div className="h-full flex-shrink-0 border-r border-border/50">
-          <Sidebar {...sidebarSharedProps} onProjectSelect={handleProjectSelectWithScroll} processingSessions={processingSessions} scrollToProjectToken={scrollToProjectToken} scrollToProjectName={scrollToProjectName} />
-        </div>
+        <>
+          <div className="h-full flex-shrink-0" style={{ width: sidebarWidth }}>
+            <Sidebar {...sidebarSharedProps} onProjectSelect={handleProjectSelectWithScroll} processingSessions={processingSessions} scrollToProjectToken={scrollToProjectToken} scrollToProjectName={scrollToProjectName} />
+          </div>
+          <ResizeHandle onResize={handleSidebarResize} />
+        </>
       ) : (
         <div
           className={`fixed inset-0 z-50 flex transition-all duration-150 ease-out ${sidebarOpen ? 'visible opacity-100' : 'invisible opacity-0'
