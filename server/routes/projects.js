@@ -112,8 +112,15 @@ export async function validateWorkspacePath(requestedPath) {
     // Resolve the workspace root to its real path
     const resolvedWorkspaceRoot = await fs.realpath(WORKSPACES_ROOT);
 
-    // /tmp and its subdirectories are explicitly allowed regardless of WORKSPACES_ROOT.
-    const isTmpPath = realPath === '/tmp' || realPath.startsWith('/tmp' + path.sep);
+    // Resolve the OS temp directory (handles symlinks, e.g. /tmp → /private/tmp on macOS,
+    // and gives the correct path on Windows via os.tmpdir()).
+    let resolvedTmpDir;
+    try {
+      resolvedTmpDir = await fs.realpath(os.tmpdir());
+    } catch {
+      resolvedTmpDir = os.tmpdir();
+    }
+    const isTmpPath = realPath === resolvedTmpDir || realPath.startsWith(resolvedTmpDir + path.sep);
 
     // Ensure the resolved path is contained within the allowed workspace root
     if (!isTmpPath &&
@@ -138,7 +145,7 @@ export async function validateWorkspacePath(requestedPath) {
 
         if (!realTarget.startsWith(resolvedWorkspaceRoot + path.sep) &&
             realTarget !== resolvedWorkspaceRoot &&
-            realTarget !== '/tmp' && !realTarget.startsWith('/tmp' + path.sep)) {
+            realTarget !== resolvedTmpDir && !realTarget.startsWith(resolvedTmpDir + path.sep)) {
           return {
             valid: false,
             error: 'Symlink target is outside the allowed workspace root'
