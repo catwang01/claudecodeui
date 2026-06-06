@@ -13,6 +13,8 @@ describe('useChatRightPanel', () => {
       open: false,
       activeTab: 'files',
       width: 360,
+      editingFile: null,
+      editorExpanded: false,
     });
   });
 
@@ -69,6 +71,12 @@ describe('useChatRightPanel', () => {
       JSON.stringify({ open: true, activeTab: 'git', width: 450 }),
     );
     const { result } = renderHook(() => useChatRightPanel());
-    expect(result.current.state).toEqual({ open: true, activeTab: 'git', width: 450 });
+    expect(result.current.state).toEqual({
+      open: true,
+      activeTab: 'git',
+      width: 450,
+      editingFile: null,
+      editorExpanded: false,
+    });
   });
 });
