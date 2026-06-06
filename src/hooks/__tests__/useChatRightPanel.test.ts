@@ -12,7 +12,7 @@ describe('useChatRightPanel', () => {
     expect(result.current.state).toEqual({
       open: false,
       activeTab: 'files',
-      width: 360,
+      width: 468,
       editingFile: null,
       editorExpanded: false,
     });
