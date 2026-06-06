@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef } from 'react';
 
 interface ResizeHandleProps {
-  /** Called during mousemove with (currentX - startX) since last event. */
+  /**
+   * Called on each mousemove with incremental delta (currentX − prevX).
+   * Memoize with useCallback to avoid listener re-attachment during drag.
+   */
   onResize: (delta: number) => void;
 }
 
@@ -37,6 +40,12 @@ export default function ResizeHandle({ onResize }: ResizeHandleProps) {
     return () => {
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
+      // Reset cursor state if unmounted mid-drag
+      if (isDraggingRef.current) {
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        isDraggingRef.current = false;
+      }
     };
   }, [onResize]);
 
