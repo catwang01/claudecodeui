@@ -15,6 +15,11 @@ const baseProps = {
   onTabChange: vi.fn(),
   onClose: vi.fn(),
   selectedProject: null,
+  editingFile: null,
+  editorExpanded: false,
+  onCloseFile: vi.fn(),
+  onToggleEditorExpand: vi.fn(),
+  isMobile: false,
 };
 
 describe('RightPanel', () => {

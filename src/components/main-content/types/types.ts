@@ -1,5 +1,6 @@
 import type { Dispatch, SetStateAction } from 'react';
 import type { AppTab, Project, ProjectSession } from '../../../types/app';
+import type { RightPanelTab } from '../../../hooks/useChatRightPanel';
 
 export type SessionLifecycleHandler = (sessionId?: string | null) => void;
 export type SessionProcessingHandler = (sessionId?: string | null, provider?: string) => void;
@@ -69,7 +70,7 @@ export type MainContentHeaderProps = {
   onToggleFiles?: () => void;
   onToggleGit?: () => void;
   rightPanelOpen?: boolean;
-  rightPanelActiveTab?: 'files' | 'git';
+  rightPanelActiveTab?: RightPanelTab;
 };
 
 export type MainContentStateViewProps = {
