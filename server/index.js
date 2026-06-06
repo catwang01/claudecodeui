@@ -89,7 +89,7 @@ import pty from 'node-pty';
 import fetch from 'node-fetch';
 import mime from 'mime-types';
 
-import { getProjects, getSessions, renameProject, deleteSession, forkSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, clearSessionMessagesCache, searchConversations, getSessionFileMeta } from './projects.js';
+import { getProjects, getProject, getSessions, renameProject, deleteSession, forkSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, clearSessionMessagesCache, searchConversations, getSessionFileMeta } from './projects.js';
 import { clearFetchHistoryCache } from './providers/claude/adapter.js';
 import { queryClaudeSDK, abortClaudeSDKSession, isClaudeSDKSessionActive, getClaudeSDKSessionStartTime, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
 let queryCopilotSDK, abortCopilotSession, isCopilotSessionActive, getCopilotSessionStartTime, getActiveCopilotSessions;
@@ -249,6 +249,12 @@ async function resolveLocalIdIfPending(filePath) {
     } catch { /* JSONL not readable — leave pending for next watcher event */ }
 }
 
+// Cached full project list — maintained by flushBroadcast and the HTTP /api/projects handler.
+// Allows targeted single-project refresh: when only one project's file changes, we re-run
+// getProject() for that project only, replace its entry in this cache, and broadcast the
+// updated list — avoiding a full 15-project getProjects() rebuild on every file write.
+let _cachedProjectsList = null;
+
 async function setupProjectsWatcher() {
     const chokidar = (await import('chokidar')).default;
 
@@ -273,16 +279,71 @@ async function setupProjectsWatcher() {
     let broadcastDebounceTimer = null;
     let broadcastMaxWaitTimer = null;
 
+    let _flushInflight = null;
+
     async function flushBroadcast() {
         if (broadcastDebounceTimer) { clearTimeout(broadcastDebounceTimer); broadcastDebounceTimer = null; }
         if (broadcastMaxWaitTimer) { clearTimeout(broadcastMaxWaitTimer); broadcastMaxWaitTimer = null; }
+
+        // Serialise flushes: if a flush is already running, queue this one to run after it.
+        // Prevents concurrent fast-path mutations of _cachedProjectsList and double broadcasts.
+        if (_flushInflight) {
+            await _flushInflight;
+            // Reschedule so the accumulated pendingBroadcast since we started waiting gets picked up.
+            scheduleBroadcast('change', 'claude', null);
+            return;
+        }
 
         const { changeTypes, providers, sessionIds } = pendingBroadcast;
         pendingBroadcast = { changeTypes: new Set(), providers: new Set(), sessionIds: new Set() };
 
         clearProjectDirectoryCache();
+        _flushInflight = (async () => {
         try {
-            const updatedProjects = await getProjects();
+            let updatedProjects;
+
+            // Fast path: if we know which sessions changed and have a cached project list,
+            // only rebuild those specific projects instead of all projects.
+            // Falls back to full getProjects() if the cache is cold or the project can't be found.
+            const changedPaths = new Set();
+            for (const sid of sessionIds) {
+                try {
+                    const row = sessionsDb.getSessionById(sid);
+                    if (row?.project_path) changedPaths.add(row.project_path);
+                } catch { /* ignore lookup errors */ }
+            }
+
+            // Capture reference before any awaits — a concurrent full rebuild could replace
+            // _cachedProjectsList while we're inside the loop, causing stale writes.
+            const cachedRef = _cachedProjectsList;
+            let fastPathViable = changedPaths.size > 0 && !!cachedRef;
+
+            if (fastPathViable) {
+                // Targeted refresh: rebuild only the affected projects
+                console.log(`[flushBroadcast] fast-path projects=[${[...changedPaths].map(p => path.basename(p)).join(',')}]`);
+                for (const projectPath of changedPaths) {
+                    const updated = await getProject(projectPath);
+                    if (updated === null) {
+                        // Project deleted or unreadable — fall back to full rebuild
+                        fastPathViable = false;
+                        break;
+                    }
+                    const idx = cachedRef.findIndex(p => p.path === projectPath);
+                    if (idx >= 0) cachedRef[idx] = updated;
+                    else cachedRef.push(updated);
+                }
+            }
+
+            if (fastPathViable) {
+                // If _cachedProjectsList was replaced by a concurrent full rebuild during our
+                // awaits, that fresher data wins — don't broadcast our partial update over it.
+                updatedProjects = (_cachedProjectsList === cachedRef) ? cachedRef : _cachedProjectsList;
+            } else {
+                // Full rebuild: cache is cold, sessionId→project lookup failed, or project deleted
+                console.log(`[flushBroadcast] full-rebuild  reason: cachedList=${!!_cachedProjectsList} changedPaths=${changedPaths.size} sessionIds=[${[...sessionIds].join(',')}]`);
+                updatedProjects = await getProjects();
+                _cachedProjectsList = updatedProjects;
+            }
             const updateMessage = JSON.stringify({
                 type: 'projects_updated',
                 projects: updatedProjects,
@@ -298,6 +359,9 @@ async function setupProjectsWatcher() {
         } catch (error) {
             console.error('[ERROR] flushBroadcast failed:', error);
         }
+        })();
+        _flushInflight = _flushInflight.finally(() => { _flushInflight = null; });
+        await _flushInflight;
     }
 
     function scheduleBroadcast(changeType, provider, sessionId) {
@@ -687,6 +751,8 @@ app.get('/api/projects', authenticateToken, async (req, res) => {
         const projects = await getProjects(silent ? undefined : broadcastProgress);
         const elapsed = Date.now() - t0;
         if (elapsed > 500) console.log(`[SLOW getProjects] total=${elapsed}ms projects=${projects.length}`);
+        // Keep the cache warm so flushBroadcast can use the fast path immediately after
+        _cachedProjectsList = projects;
         res.json(projects);
     } catch (error) {
         res.status(500).json({ error: error.message });

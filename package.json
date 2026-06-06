@@ -23,7 +23,7 @@
     "url": "https://github.com/siteboon/claudecodeui/issues"
   },
   "scripts": {
-    "dev": "cross-env PII_PROXY_PORT=18091 concurrently --kill-others \"npm run pii-proxy\" \"node scripts/wait-pii-proxy.js && npm run server:dev\" \"node scripts/wait-pii-proxy.js && npm run client\"",
+    "dev": "cross-env PII_PROXY_PORT=18091 concurrently --kill-others \"npm run pii-proxy\" \"node scripts/wait-pii-proxy.js && npm run server:dev-watch\" \"node scripts/wait-pii-proxy.js && npm run client\"",
     "server:dev": "tsx --tsconfig server/tsconfig.json server/index.js",
     "server:dev-watch": "tsx watch --tsconfig server/tsconfig.json server/index.js",
     "server:prod": "node dist-server/server/index.js",

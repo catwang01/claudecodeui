@@ -75,9 +75,11 @@ async function getProjectGitBranch(projectPath) {
   const run = (args) => new Promise((resolve, reject) => {
     const child = spawn('git', args, { cwd: projectPath, shell: false });
     let out = '';
+    // Kill the git process after 3s to prevent indefinite hangs (git lock, network, etc.)
+    const killTimer = setTimeout(() => { child.kill(); reject(new Error('git timeout')); }, 3000);
     child.stdout.on('data', (d) => { out += d; });
-    child.on('close', (code) => { code === 0 ? resolve(out.trim()) : reject(new Error(`exit ${code}`)); });
-    child.on('error', reject);
+    child.on('close', (code) => { clearTimeout(killTimer); code === 0 ? resolve(out.trim()) : reject(new Error(`exit ${code}`)); });
+    child.on('error', (err) => { clearTimeout(killTimer); reject(err); });
   });
   try {
     const branch = await run(['symbolic-ref', '--short', 'HEAD']);
@@ -226,6 +228,30 @@ const projectDirectoryCache = new Map();
 // reads package.json, etc. for every project, saturating the libuv 4-thread pool.
 const PROJECT_META_TTL_MS = 30_000; // 30 seconds
 
+/**
+ * Simple concurrency limiter — at most `limit` async tasks run simultaneously.
+ * Remaining tasks queue and start as slots free up.
+ *
+ * Usage:
+ *   const run = makeConcurrencyLimiter(3);
+ *   await Promise.all(items.map(item => run(() => processItem(item))));
+ */
+function makeConcurrencyLimiter(limit) {
+  let active = 0;
+  const queue = [];
+  const next = () => {
+    if (active < limit && queue.length) {
+      active++;
+      const { fn, resolve, reject } = queue.shift();
+      Promise.resolve().then(fn).then(
+        (v) => { active--; resolve(v); next(); },
+        (e) => { active--; reject(e); next(); }
+      );
+    }
+  };
+  return (fn) => new Promise((resolve, reject) => { queue.push({ fn, resolve, reject }); next(); });
+}
+
 function makeTtlCache() {
   const store = new Map();    // key → { value, time }
   const inflight = new Map(); // key → Promise  (in-flight dedup)
@@ -242,16 +268,24 @@ function makeTtlCache() {
     /**
      * Fetch with dedup: if a fetch for this key is already in-flight, wait for it
      * instead of spawning a parallel fetch (cache stampede prevention).
+     * A 5-second timeout guards against hung git/SQLite promises that would otherwise
+     * keep all future callers waiting indefinitely (observed: up to 635s / 10 min hangs).
      */
-    async fetchOnce(key, fetchFn) {
+    async fetchOnce(key, fetchFn, timeoutMs = 5000) {
       const cached = this.get(key);
       if (cached !== undefined) return cached;
       if (inflight.has(key)) return inflight.get(key);
-      const p = Promise.resolve().then(() => fetchFn()).then(value => {
+      let timerId;
+      const timeout = new Promise((_, reject) => {
+        timerId = setTimeout(() => reject(new Error(`fetchOnce timeout after ${timeoutMs}ms: ${String(key).slice(-40)}`)), timeoutMs);
+      });
+      const p = Promise.race([Promise.resolve().then(() => fetchFn()), timeout]).then(value => {
+        clearTimeout(timerId);
         this.set(key, value);
         inflight.delete(key);
         return value;
       }).catch(err => {
+        clearTimeout(timerId);
         inflight.delete(key);
         throw err;
       });
@@ -484,12 +518,155 @@ function buildExcludedSessionIds(provider = 'claude') {
   return new Set([...autoDocIds, ...hiddenIds]);
 }
 
+/**
+ * Process a single dbProject row and return its full ProjectData object.
+ * Shared by getProjects (parallel all-projects rebuild) and getProject (targeted single-project refresh).
+ */
+async function getProjectData(dbProject, codexSessionsIndexRef, autoDocPreFilter) {
+  const _tp = Date.now();
+  const projectPath = dbProject.project_path;
+  const claudeDirName = dbProject.claude_dir_name || pathToClaudeProjectName(projectPath);
+
+  // generateDisplayName reads package.json — cache it
+  let autoDisplayName = _displayNameCache.get(projectPath);
+  if (autoDisplayName === undefined) {
+    autoDisplayName = await generateDisplayName(claudeDirName, projectPath);
+    _displayNameCache.set(projectPath, autoDisplayName);
+  }
+
+  const project = {
+    name: claudeDirName,
+    path: projectPath,
+    displayName: dbProject.custom_project_name || autoDisplayName,
+    fullPath: projectPath,
+    isCustomName: !!dbProject.custom_project_name,
+    sessions: [],
+    geminiSessions: [],
+    cursorSessions: [],
+    codexSessions: [],
+    sessionMeta: { hasMore: false, total: 0 },
+  };
+
+  // Claude sessions: read from DB + session_file_cache (no filesystem I/O)
+  // Fetch only top 45 claude sessions from DB (we only show 15, but leave room for
+  // autoDoc/hidden filtering to discard some). Avoids loading 600+ rows for large projects.
+  const claudeRows = sessionsDb.getSessionsByProjectPathPage(projectPath, 45, 0)
+    .filter(row => row.provider === 'claude' && row.jsonl_path);
+  const claudeSessions = buildSessionsFromCache(claudeRows);
+  claudeSessions.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
+
+  const filteredClaude = autoDocPreFilter ? autoDocPreFilter(claudeSessions) : claudeSessions;
+  applyCustomSessionNames(filteredClaude, 'claude');
+  applyHiddenFromRecents(filteredClaude, 'claude');
+  applyAutoDocFlag(filteredClaude, 'claude');
+  applyLastAutoDocAt(filteredClaude, 'claude');
+  filterHiddenAutoDocSessions(filteredClaude);
+  applyReadState(filteredClaude, 'claude');
+  project.sessions = filteredClaude.slice(0, 15);
+  project.sessionMeta = {
+    hasMore: filteredClaude.length > 15,
+    total: sessionsDb.countSessionsByProjectPath(projectPath),
+  };
+
+  // Non-Claude providers: cache expensive I/O (git, SQLite, file reads) with 30s TTL.
+  // fetchOnce() deduplicates in-flight requests — prevents cache stampede.
+  // If all values are already cached, resolve immediately; otherwise kick off async fetch
+  // and use empty/null placeholders so the first response is never blocked by cold I/O.
+  const allCached =
+    _cursorSessionsCache.get(projectPath) !== undefined &&
+    _taskMasterCache.get(projectPath) !== undefined &&
+    _gitBranchCache.get(projectPath) !== undefined &&
+    _geminiCliCache.get(projectPath) !== undefined;
+  const promises = allCached
+    ? await Promise.allSettled([
+        Promise.resolve(_cursorSessionsCache.get(projectPath)),
+        getCodexSessions(projectPath, { indexRef: codexSessionsIndexRef }),
+        Promise.resolve([...sessionManager.getProjectSessions(projectPath) || [], ..._geminiCliCache.get(projectPath) || []]),
+        Promise.resolve(_taskMasterCache.get(projectPath)),
+        Promise.resolve(_gitBranchCache.get(projectPath)),
+      ])
+    : await Promise.allSettled([
+        _cursorSessionsCache.fetchOnce(projectPath, () => getCursorSessions(projectPath)),
+        getCodexSessions(projectPath, { indexRef: codexSessionsIndexRef }),
+        (async () => {
+          const uiSessions = sessionManager.getProjectSessions(projectPath) || [];
+          const cliSessions = await _geminiCliCache.fetchOnce(projectPath, () => getGeminiCliSessions(projectPath));
+          const uiIds = new Set(uiSessions.map(s => s.id));
+          return [...uiSessions, ...cliSessions.filter(s => !uiIds.has(s.id))];
+        })(),
+        _taskMasterCache.fetchOnce(projectPath, () => detectTaskMasterFolder(projectPath)),
+        _gitBranchCache.fetchOnce(projectPath, () => getProjectGitBranch(projectPath)),
+      ]);
+
+  const [cursorResult, codexResult, geminiResult, taskMasterResult, gitBranchResult] = promises;
+
+  project.cursorSessions = cursorResult.status === 'fulfilled' ? cursorResult.value : [];
+  applyCustomSessionNames(project.cursorSessions, 'cursor');
+  applyHiddenFromRecents(project.cursorSessions, 'cursor');
+  applyReadState(project.cursorSessions, 'cursor');
+
+  project.codexSessions = codexResult.status === 'fulfilled' ? codexResult.value : [];
+  applyCustomSessionNames(project.codexSessions, 'codex');
+  applyHiddenFromRecents(project.codexSessions, 'codex');
+  applyReadState(project.codexSessions, 'codex');
+
+  project.geminiSessions = geminiResult.status === 'fulfilled' ? geminiResult.value : [];
+  applyCustomSessionNames(project.geminiSessions, 'gemini');
+  applyHiddenFromRecents(project.geminiSessions, 'gemini');
+  applyReadState(project.geminiSessions, 'gemini');
+
+  if (taskMasterResult.status === 'fulfilled') {
+    const r = taskMasterResult.value;
+    project.taskmaster = {
+      hasTaskmaster: r.hasTaskmaster,
+      hasEssentialFiles: r.hasEssentialFiles,
+      metadata: r.metadata,
+      status: r.hasTaskmaster && r.hasEssentialFiles ? 'configured' : 'not-configured',
+    };
+  } else {
+    project.taskmaster = { hasTaskmaster: false, hasEssentialFiles: false, metadata: null, status: 'error' };
+  }
+
+  project.currentBranch = gitBranchResult.status === 'fulfilled' ? gitBranchResult.value : null;
+
+  const _tpElapsed = Date.now() - _tp;
+  if (_tpElapsed > 200) console.log(`[SLOW getProjects project] ${path.basename(projectPath)} ${_tpElapsed}ms`);
+
+  return project;
+}
+
+/**
+ * Refresh a single project by its filesystem path.
+ * Used by flushBroadcast for targeted incremental updates when only one project changed.
+ * Returns null if the project is not found in the DB.
+ */
+async function getProject(projectPath) {
+  const dbProject = projectsDb.getProjectPath(projectPath);
+  if (!dbProject) return null;
+  const codexIndex = await getCachedCodexIndex();
+  const codexSessionsIndexRef = { sessionsByProject: codexIndex };
+  const excludedSessionIds = buildExcludedSessionIds('claude');
+  const autoDocPreFilter = excludedSessionIds.size > 0
+    ? (sessions) => sessions.filter(s => !excludedSessionIds.has(s.id))
+    : null;
+  return getProjectData(dbProject, codexSessionsIndexRef, autoDocPreFilter);
+}
+
+// Inflight dedup: if getProjects() is already running, new callers share the same Promise
+// instead of spawning a parallel rebuild. Prevents HTTP + watcher from doubling I/O.
+let _getProjectsInflight = null;
+
 async function getProjects(progressCallback = null) {
+  if (_getProjectsInflight) return _getProjectsInflight;
+  _getProjectsInflight = _getProjectsImpl(progressCallback).finally(() => { _getProjectsInflight = null; });
+  return _getProjectsInflight;
+}
+
+async function _getProjectsImpl(progressCallback = null) {
   const _t0 = Date.now();
-  const projects = [];
 
   // Pre-build codex index once before parallel project processing.
-  // Without this, Promise.all would trigger 13 concurrent buildCodexSessionsIndex() calls.
+  // Without this, Promise.all would trigger N concurrent buildCodexSessionsIndex() calls.
   const codexIndex = await getCachedCodexIndex();
   const codexSessionsIndexRef = { sessionsByProject: codexIndex };
 
@@ -512,129 +689,21 @@ async function getProjects(progressCallback = null) {
 
   const totalProjects = dbProjects.length;
 
-  const projectResults = await Promise.all(dbProjects.map(async (dbProject, i) => {
-    const _tp = Date.now();
-    const projectPath = dbProject.project_path;
-    const claudeDirName = dbProject.claude_dir_name || pathToClaudeProjectName(projectPath);
-
+  // Limit concurrency to 3 projects at a time to avoid saturating the libuv thread pool.
+  // Without a limit, 15 projects × 5 I/O ops each = 75 concurrent ops; the thread pool
+  // queues them all and every op shows artificially inflated wait times.
+  const runProject = makeConcurrencyLimiter(3);
+  const projects = await Promise.all(dbProjects.map((dbProject, i) => runProject(async () => {
     if (progressCallback) {
       progressCallback({
         phase: 'loading',
         current: i + 1,
         total: totalProjects,
-        currentProject: path.basename(projectPath),
+        currentProject: path.basename(dbProject.project_path),
       });
     }
-
-    // generateDisplayName reads package.json — cache it
-    let autoDisplayName = _displayNameCache.get(projectPath);
-    if (autoDisplayName === undefined) {
-      autoDisplayName = await generateDisplayName(claudeDirName, projectPath);
-      _displayNameCache.set(projectPath, autoDisplayName);
-    }
-
-    const project = {
-      name: claudeDirName,
-      path: projectPath,
-      displayName: dbProject.custom_project_name || autoDisplayName,
-      fullPath: projectPath,
-      isCustomName: !!dbProject.custom_project_name,
-      sessions: [],
-      geminiSessions: [],
-      cursorSessions: [],
-      codexSessions: [],
-      sessionMeta: { hasMore: false, total: 0 },
-    };
-
-    // Claude sessions: read from DB + session_file_cache (no filesystem I/O)
-    // Fetch only top 45 claude sessions from DB (we only show 15, but leave room for
-    // autoDoc/hidden filtering to discard some). Avoids loading 600+ rows for large projects.
-    const claudeRows = sessionsDb.getSessionsByProjectPathPage(projectPath, 45, 0)
-      .filter(row => row.provider === 'claude' && row.jsonl_path);
-    const claudeSessions = buildSessionsFromCache(claudeRows);
-    claudeSessions.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
-
-    const filteredClaude = autoDocPreFilter ? autoDocPreFilter(claudeSessions) : claudeSessions;
-    applyCustomSessionNames(filteredClaude, 'claude');
-    applyHiddenFromRecents(filteredClaude, 'claude');
-    applyAutoDocFlag(filteredClaude, 'claude');
-    applyLastAutoDocAt(filteredClaude, 'claude');
-    filterHiddenAutoDocSessions(filteredClaude);
-    applyReadState(filteredClaude, 'claude');
-    project.sessions = filteredClaude.slice(0, 15);
-    project.sessionMeta = {
-      hasMore: filteredClaude.length > 15,
-      total: sessionsDb.countSessionsByProjectPath(projectPath),
-    };
-
-    // Non-Claude providers: cache expensive I/O (git, SQLite, file reads) with 30s TTL.
-    // fetchOnce() deduplicates in-flight requests — prevents cache stampede.
-    // If all values are already cached, resolve immediately; otherwise kick off async fetch
-    // and use empty/null placeholders so the first response is never blocked by cold I/O.
-    const allCached =
-      _cursorSessionsCache.get(projectPath) !== undefined &&
-      _taskMasterCache.get(projectPath) !== undefined &&
-      _gitBranchCache.get(projectPath) !== undefined &&
-      _geminiCliCache.get(projectPath) !== undefined;
-    const promises = allCached
-      ? await Promise.allSettled([
-          Promise.resolve(_cursorSessionsCache.get(projectPath)),
-          getCodexSessions(projectPath, { indexRef: codexSessionsIndexRef }),
-          Promise.resolve([...sessionManager.getProjectSessions(projectPath) || [], ..._geminiCliCache.get(projectPath) || []]),
-          Promise.resolve(_taskMasterCache.get(projectPath)),
-          Promise.resolve(_gitBranchCache.get(projectPath)),
-        ])
-      : await Promise.allSettled([
-          _cursorSessionsCache.fetchOnce(projectPath, () => getCursorSessions(projectPath)),
-          getCodexSessions(projectPath, { indexRef: codexSessionsIndexRef }),
-          (async () => {
-            const uiSessions = sessionManager.getProjectSessions(projectPath) || [];
-            const cliSessions = await _geminiCliCache.fetchOnce(projectPath, () => getGeminiCliSessions(projectPath));
-            const uiIds = new Set(uiSessions.map(s => s.id));
-            return [...uiSessions, ...cliSessions.filter(s => !uiIds.has(s.id))];
-          })(),
-          _taskMasterCache.fetchOnce(projectPath, () => detectTaskMasterFolder(projectPath)),
-          _gitBranchCache.fetchOnce(projectPath, () => getProjectGitBranch(projectPath)),
-        ]);
-
-    const [cursorResult, codexResult, geminiResult, taskMasterResult, gitBranchResult] = promises;
-
-    project.cursorSessions = cursorResult.status === 'fulfilled' ? cursorResult.value : [];
-    applyCustomSessionNames(project.cursorSessions, 'cursor');
-    applyHiddenFromRecents(project.cursorSessions, 'cursor');
-    applyReadState(project.cursorSessions, 'cursor');
-
-    project.codexSessions = codexResult.status === 'fulfilled' ? codexResult.value : [];
-    applyCustomSessionNames(project.codexSessions, 'codex');
-    applyHiddenFromRecents(project.codexSessions, 'codex');
-    applyReadState(project.codexSessions, 'codex');
-
-    project.geminiSessions = geminiResult.status === 'fulfilled' ? geminiResult.value : [];
-    applyCustomSessionNames(project.geminiSessions, 'gemini');
-    applyHiddenFromRecents(project.geminiSessions, 'gemini');
-    applyReadState(project.geminiSessions, 'gemini');
-
-    if (taskMasterResult.status === 'fulfilled') {
-      const r = taskMasterResult.value;
-      project.taskmaster = {
-        hasTaskmaster: r.hasTaskmaster,
-        hasEssentialFiles: r.hasEssentialFiles,
-        metadata: r.metadata,
-        status: r.hasTaskmaster && r.hasEssentialFiles ? 'configured' : 'not-configured',
-      };
-    } else {
-      project.taskmaster = { hasTaskmaster: false, hasEssentialFiles: false, metadata: null, status: 'error' };
-    }
-
-    project.currentBranch = gitBranchResult.status === 'fulfilled' ? gitBranchResult.value : null;
-
-    const _tpElapsed = Date.now() - _tp;
-    if (_tpElapsed > 200) console.log(`[SLOW getProjects project] ${path.basename(projectPath)} ${_tpElapsed}ms`);
-
-    return project;
-  }));
-
-  projects.push(...projectResults);
+    return getProjectData(dbProject, codexSessionsIndexRef, autoDocPreFilter);
+  })));
 
   if (progressCallback) {
     progressCallback({ phase: 'complete', current: totalProjects, total: totalProjects });
@@ -2826,6 +2895,7 @@ async function getGeminiCliSessionMessages(sessionId) {
 
 export {
   getProjects,
+  getProject,
   getSessions,
   getSessionMessages,
   getSessionFileMeta,

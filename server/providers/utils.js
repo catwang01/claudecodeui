@@ -17,6 +17,7 @@ export const INTERNAL_CONTENT_PREFIXES = Object.freeze([
   'Caveat:',
   'This session is being continued from a previous',
   '[Request interrupted',
+  'No response requested.',
 ]);
 
 /**

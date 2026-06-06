@@ -170,6 +170,10 @@ export function normalizeMessage(raw, sessionId) {
   }
 
   // Assistant message
+  // Skip synthetic SDK messages (e.g. "No response requested." when resuming a completed session)
+  if (raw.message?.role === 'assistant' && raw.message?.model === '<synthetic>') {
+    return messages;
+  }
   if (raw.message?.role === 'assistant' && raw.message?.content) {
     if (Array.isArray(raw.message.content)) {
       let partIndex = 0;
