@@ -94,7 +94,7 @@ export default function ShellSessionPool({
               selectedProject={project}
               selectedSession={session}
               isActive={isActive && isVisible}
-              autoConnect={isActive}
+              autoConnect={isActive && isVisible}
             />
           </div>
         );

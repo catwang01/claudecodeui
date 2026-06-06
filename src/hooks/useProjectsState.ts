@@ -127,6 +127,28 @@ const readPersistedTab = (): AppTab => {
   return 'chat';
 };
 
+/** Read the last-used chat/shell tab for a specific session. Defaults to 'chat'. */
+const getSessionTab = (sessionId: string | null | undefined): AppTab => {
+  if (!sessionId) return 'chat';
+  try {
+    const stored = localStorage.getItem(`session-tab:${sessionId}`);
+    if (stored === 'chat' || stored === 'shell') return stored;
+  } catch {
+    // localStorage unavailable
+  }
+  return 'chat';
+};
+
+/** Persist the active tab for a session. Only chat/shell are stored. */
+const saveSessionTab = (sessionId: string | null | undefined, tab: AppTab): void => {
+  if (!sessionId || (tab !== 'chat' && tab !== 'shell')) return;
+  try {
+    localStorage.setItem(`session-tab:${sessionId}`, tab);
+  } catch {
+    // Silently ignore storage errors
+  }
+};
+
 export function useProjectsState({
   sessionId,
   navigate,
@@ -143,10 +165,11 @@ export function useProjectsState({
   useEffect(() => {
     try {
       localStorage.setItem('activeTab', activeTab);
+      saveSessionTab(selectedSession?.id, activeTab);
     } catch {
       // Silently ignore storage errors
     }
-  }, [activeTab]);
+  }, [activeTab, selectedSession?.id]);
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isLoadingProjects, setIsLoadingProjects] = useState(true);
@@ -407,9 +430,7 @@ export function useProjectsState({
 
       setSelectedSession(session);
 
-      if (activeTab === 'tasks' || activeTab === 'preview') {
-        setActiveTab('chat');
-      }
+      setActiveTab(getSessionTab(session.id));
 
       const provider = localStorage.getItem('selected-provider') || 'claude';
       if (provider === 'cursor') {
@@ -427,7 +448,7 @@ export function useProjectsState({
 
       navigate(`/session/${session.id}`);
     },
-    [activeTab, isMobile, navigate, projects, selectedProject?.name],
+    [isMobile, navigate, projects, selectedProject?.name],
   );
 
   const handleNewSession = useCallback(
