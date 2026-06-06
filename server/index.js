@@ -1991,6 +1991,9 @@ function handleChatConnection(ws, request) {
                         }
                     }
                     const startTime = isActive && prov === 'claude' ? getClaudeSDKSessionStartTime(sessionId) : null;
+                    if (isActive && prov === 'claude' && startTime === null) {
+                        console.warn(`[SESSION-STATUS] session ${sessionId} isActive=true but startTime=null — session entry may be missing startTime`);
+                    }
                     writer.send({ type: 'session-status', sessionId, provider: prov, isProcessing: isActive, startTime });
                 }
             } else if (data.type === 'check-session-status') {

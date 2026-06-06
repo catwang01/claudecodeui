@@ -789,7 +789,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
         if (sessionId && sessionId !== capturedSessionId) {
           removeSession(sessionId);
         }
-        addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws);
+        addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws, abortController);
 
         // Set session ID on writer
         if (ws.setSessionId && typeof ws.setSessionId === 'function') {
