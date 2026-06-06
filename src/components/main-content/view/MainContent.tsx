@@ -6,9 +6,8 @@ import type { MainContentProps } from '../types/types';
 import { useTaskMaster } from '../../../contexts/TaskMasterContext';
 import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
 import { useUiPreferences } from '../../../hooks/useUiPreferences';
-import { useEditorSidebar } from '../../code-editor/hooks/useEditorSidebar';
-import EditorSidebar from '../../code-editor/view/EditorSidebar';
 import type { Project } from '../../../types/app';
+import type { CodeEditorDiffInfo } from '../../code-editor/types/types';
 import { TaskMasterPanel } from '../../task-master';
 import MainContentHeader from './subcomponents/MainContentHeader';
 import MainContentStateView from './subcomponents/MainContentStateView';
@@ -60,27 +59,23 @@ function MainContent({
   const shouldShowTasksTab = Boolean(tasksEnabled && isTaskMasterInstalled);
 
   const {
-    editingFile,
-    editorWidth,
-    editorExpanded,
-    hasManualWidth,
-    resizeHandleRef,
-    handleFileOpen,
-    handleCloseEditor,
-    handleToggleEditorExpand,
-    handleResizeStart,
-  } = useEditorSidebar({
-    selectedProject,
-    isMobile,
-  });
-
-  const {
     state: rightPanelState,
     toggle: toggleRightPanel,
+    setActiveTab: setRightPanelTab,
     close: closeRightPanel,
     setWidth: setRightPanelWidth,
     adjustWidth: adjustRightPanelWidth,
+    openFile: openRightPanelFile,
+    closeFile: closeRightPanelFile,
+    toggleEditorExpand: toggleRightPanelEditorExpand,
   } = useChatRightPanel();
+
+  const handleFileOpen = useCallback(
+    (filePath: string, diffInfo: CodeEditorDiffInfo | null = null) => {
+      openRightPanelFile(filePath, diffInfo, selectedProject?.name);
+    },
+    [openRightPanelFile, selectedProject?.name],
+  );
 
   const handleRightPanelResize = useCallback(
     (delta: number) => adjustRightPanelWidth(delta),
@@ -109,6 +104,8 @@ function MainContent({
   if (!selectedProject) {
     return <MainContentStateView mode="empty" isMobile={isMobile} onMenuClick={onMenuClick} />;
   }
+
+  const { editorExpanded } = rightPanelState;
 
   return (
     <div className="flex h-full flex-col">
@@ -189,37 +186,32 @@ function MainContent({
           )}
         </div>
 
-        {/* Right panel (Files / Git) — hidden when editor is expanded */}
-        {rightPanelState.open && !editorExpanded && (
+        {/* Right panel (Git / Files / Editor) */}
+        {rightPanelState.open && (
           <>
-            <ResizeHandle
-              onResize={handleRightPanelResize}
-            />
-            <div style={{ width: rightPanelState.width, flexShrink: 0 }} className="flex min-h-0 flex-col overflow-hidden">
+            {!editorExpanded && (
+              <ResizeHandle onResize={handleRightPanelResize} />
+            )}
+            <div
+              style={editorExpanded ? undefined : { width: rightPanelState.width, flexShrink: 0 }}
+              className={`flex min-h-0 flex-col overflow-hidden ${editorExpanded ? 'flex-1' : ''}`}
+            >
               <RightPanel
                 activeTab={rightPanelState.activeTab}
-                onTabChange={(tab) => toggleRightPanel(tab)}
+                onTabChange={setRightPanelTab}
                 onClose={closeRightPanel}
                 selectedProject={selectedProject}
                 onFileOpen={handleFileOpen}
+                editingFile={rightPanelState.editingFile}
+                editorExpanded={editorExpanded}
+                onCloseFile={closeRightPanelFile}
+                onToggleEditorExpand={toggleRightPanelEditorExpand}
+                isMobile={isMobile}
+                projectPath={selectedProject.path}
               />
             </div>
           </>
         )}
-
-        <EditorSidebar
-          editingFile={editingFile}
-          isMobile={isMobile}
-          editorExpanded={editorExpanded}
-          editorWidth={editorWidth}
-          hasManualWidth={hasManualWidth}
-          resizeHandleRef={resizeHandleRef}
-          onResizeStart={handleResizeStart}
-          onCloseEditor={handleCloseEditor}
-          onToggleEditorExpand={handleToggleEditorExpand}
-          projectPath={selectedProject.path}
-          fillSpace={false}
-        />
       </div>
     </div>
   );
