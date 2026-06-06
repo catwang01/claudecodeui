@@ -2,6 +2,7 @@ import { getConnection } from '../modules/database/connection.js';
 import { initializeDatabase } from '../modules/database/init-db.js';
 import { runMigrations } from '../modules/database/migrations.js';
 import path from 'path';
+import os from 'os';
 import fs from 'fs';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
@@ -745,6 +746,20 @@ const sessionFileCache = {
 
   delete: (filePath) =>
     db.prepare('DELETE FROM session_file_cache WHERE file_path = ?').run(filePath),
+
+  // Return the most recent N rows ordered by last_activity (for auto-doc session collection).
+  // Only returns rows for claude JSONL files that have been fully indexed (session_id + cwd).
+  getRecentClaude: (limit) =>
+    db.prepare(`
+      SELECT file_path, session_id, cwd, message_count, last_activity, last_user_message
+      FROM session_file_cache
+      WHERE session_id IS NOT NULL
+        AND cwd IS NOT NULL AND cwd != ''
+        AND last_activity IS NOT NULL
+        AND file_path LIKE ?
+      ORDER BY last_activity DESC
+      LIMIT ?
+    `).all(path.join(os.homedir(), '.claude', 'projects', '%'), limit),
 };
 
 // Backward compatibility - keep old names pointing to new system

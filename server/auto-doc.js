@@ -11,10 +11,8 @@
 import path from 'path';
 import os from 'os';
 import { promises as fs } from 'fs';
-import fsSync from 'fs';
-import readline from 'readline';
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import { sessionDb, appConfigDb } from './database/db.js';
+import { sessionDb, appConfigDb, sessionFileCache } from './database/db.js';
 import { forkSession } from './projects.js';
 import { getActiveClaudeSDKSessions } from './claude-sdk.js';
 
@@ -44,101 +42,67 @@ function getConfig() {
   return { intervalMs, prompt, minMessageCount, model };
 }
 
-// ─── JSONL parser ─────────────────────────────────────────────────────────────
-
-/**
- * Parse a single JSONL file and return session metadata needed for scheduling.
- * Returns [{ id, messageCount, cwd, lastUserMessage, lastActivity }]
- */
-async function parseSessionsMeta(filePath) {
-  const sessions = new Map();
-
-  const fileStream = fsSync.createReadStream(filePath);
-  const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
-
-  for await (const line of rl) {
-    if (!line.trim()) continue;
-    let entry;
-    try { entry = JSON.parse(line); } catch { continue; }
-
-    const sid = entry.sessionId;
-    if (!sid) continue;
-
-    if (!sessions.has(sid)) {
-      sessions.set(sid, {
-        id: sid,
-        messageCount: 0,
-        cwd: entry.cwd || '',
-        lastUserMessage: '',
-        lastActivity: null,
-      });
-    }
-
-    const s = sessions.get(sid);
-
-    if (entry.cwd && !s.cwd) s.cwd = entry.cwd;
-
-    if (entry.timestamp) {
-      const t = new Date(entry.timestamp);
-      if (!s.lastActivity || t > s.lastActivity) s.lastActivity = t;
-    }
-
-    const role = entry.message?.role;
-    if (role === 'user' || role === 'assistant') {
-      s.messageCount++;
-      if (role === 'user') {
-        const c = entry.message.content;
-        const text = Array.isArray(c)
-          ? (c.find(p => p.type === 'text')?.text || '')
-          : (typeof c === 'string' ? c : '');
-        if (text) s.lastUserMessage = text;
-      }
-    }
-  }
-
-  return Array.from(sessions.values());
-}
-
-// ─── Session collection ───────────────────────────────────────────────────────
+// ─── Candidate selection ──────────────────────────────────────────────────────
 
 async function collectRecentSessions() {
-  const claudeDir = path.join(os.homedir(), '.claude', 'projects');
-  const all = [];
+  // Use session_file_cache DB instead of opening all JSONL files.
+  // This avoids opening ~10k fds at startup (the old collectRecentSessions() opened
+  // every single JSONL file via parseSessionsMeta, exhausting the fd table and causing
+  // posix_spawn EBADF when new sessions tried to spawn child processes).
+  const claudeProjectsDir = path.join(os.homedir(), '.claude', 'projects');
 
-  let entries;
+  let rows;
   try {
-    entries = await fs.readdir(claudeDir, { withFileTypes: true });
-  } catch {
+    // Fetch top MAX_SESSIONS * 5 candidates (generous buffer so filtering by
+    // minMessageCount + autoDoc exclusion still leaves enough).
+    rows = sessionFileCache.getRecentClaude(MAX_SESSIONS * 5);
+  } catch (err) {
+    console.warn('[AutoDoc] Failed to query session_file_cache:', err.message);
     return [];
   }
 
-  for (const dirEntry of entries.filter(e => e.isDirectory())) {
-    const projectPath = path.join(claudeDir, dirEntry.name);
-    let files;
-    try { files = await fs.readdir(projectPath); } catch { continue; }
+  const sessions = [];
+  for (const row of rows) {
+    // Extract projectName from the JSONL file path:
+    // ~/.claude/projects/{projectName}/{sessionId}.jsonl
+    const rel = path.relative(claudeProjectsDir, row.file_path);
+    const parts = rel.split(path.sep);
+    if (parts.length < 2) continue; // unexpected path shape, skip
 
-    for (const file of files.filter(f => f.endsWith('.jsonl') && !f.startsWith('agent-'))) {
-      try {
-        const filePath = path.join(projectPath, file);
-        const stat = await fs.stat(filePath);
-        const parsed = await parseSessionsMeta(filePath);
-        for (const s of parsed) {
-          s.projectName = dirEntry.name;
-          s.fileMtime = stat.mtime;
-        }
-        all.push(...parsed);
-      } catch { /* skip malformed */ }
-    }
+    const projectName = parts[0];
+
+    sessions.push({
+      id: row.session_id,
+      messageCount: row.message_count || 0,
+      cwd: row.cwd || '',
+      lastUserMessage: row.last_user_message || '',
+      lastActivity: new Date(row.last_activity),
+      projectName,
+      // fileMtime is populated lazily below — we only stat the final candidate set,
+      // not all ~10k files.
+      fileMtime: null,
+      _filePath: row.file_path,
+    });
   }
 
-  // Sort by most recent activity, return top MAX_SESSIONS
-  return all
-    .filter(s => s.lastActivity)
+  // Sort by most recent activity first, take top MAX_SESSIONS candidates
+  const candidates = sessions
+    .filter(s => s.lastActivity && !isNaN(s.lastActivity))
     .sort((a, b) => b.lastActivity - a.lastActivity)
     .slice(0, MAX_SESSIONS);
-}
 
-// ─── Candidate selection ──────────────────────────────────────────────────────
+  // Stat only the small candidate set to populate fileMtime for the active-session check.
+  await Promise.all(candidates.map(async (s) => {
+    try {
+      const stat = await fs.stat(s._filePath);
+      s.fileMtime = stat.mtime;
+    } catch {
+      // File gone — selectCandidates will still skip it via minMessageCount etc.
+    }
+  }));
+
+  return candidates;
+}
 
 async function selectCandidates(sessions, config) {
   if (!sessions.length) return [];
