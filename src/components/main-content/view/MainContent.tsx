@@ -63,7 +63,6 @@ function MainContent({
     toggle: toggleRightPanel,
     setActiveTab: setRightPanelTab,
     close: closeRightPanel,
-    setWidth: setRightPanelWidth,
     adjustWidth: adjustRightPanelWidth,
     openFile: openRightPanelFile,
     closeFile: closeRightPanelFile,
