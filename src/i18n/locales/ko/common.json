@@ -20,8 +20,6 @@
   "tabs": {
     "chat": "채팅",
     "shell": "Shell",
-    "files": "파일",
-    "git": "소스 관리",
     "tasks": "작업"
   },
   "status": {
@@ -92,8 +90,7 @@
     "createProjectMobile": "위의 메뉴 버튼을 눌러 프로젝트에 접근하세요",
     "createProjectDesktop": "사이드바의 폴더 아이콘을 클릭하여 새 프로젝트를 생성하세요",
     "newSession": "새 세션",
-    "untitledSession": "제목 없는 세션",
-    "projectFiles": "프로젝트 파일"
+    "untitledSession": "제목 없는 세션"
   },
   "fileTree": {
     "loading": "파일 로딩 중...",

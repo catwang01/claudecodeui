@@ -20,8 +20,6 @@
   "tabs": {
     "chat": "聊天",
     "shell": "终端",
-    "files": "文件",
-    "git": "源代码管理",
     "tasks": "任务"
   },
   "status": {
@@ -92,8 +90,7 @@
     "createProjectMobile": "点击上方的菜单按钮以访问项目",
     "createProjectDesktop": "点击侧边栏中的文件夹图标以创建新项目",
     "newSession": "新会话",
-    "untitledSession": "未命名会话",
-    "projectFiles": "项目文件"
+    "untitledSession": "未命名会话"
   },
   "fileTree": {
     "loading": "正在加载文件...",

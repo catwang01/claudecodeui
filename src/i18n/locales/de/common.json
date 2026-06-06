@@ -20,8 +20,6 @@
   "tabs": {
     "chat": "Chat",
     "shell": "Terminal",
-    "files": "Dateien",
-    "git": "Quellcodeverwaltung",
     "tasks": "Aufgaben"
   },
   "status": {
@@ -92,8 +90,7 @@
     "createProjectMobile": "Tipp oben auf die Menüschaltfläche, um auf Projekte zuzugreifen",
     "createProjectDesktop": "Erstell ein neues Projekt, indem du auf das Ordnersymbol in der Seitenleiste klickst",
     "newSession": "Neue Sitzung",
-    "untitledSession": "Unbenannte Sitzung",
-    "projectFiles": "Projektdateien"
+    "untitledSession": "Unbenannte Sitzung"
   },
   "fileTree": {
     "loading": "Dateien werden geladen...",
