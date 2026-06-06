@@ -15,6 +15,9 @@ import { TaskMasterPanel } from '../../task-master';
 import MainContentHeader from './subcomponents/MainContentHeader';
 import MainContentStateView from './subcomponents/MainContentStateView';
 import ErrorBoundary from './ErrorBoundary';
+import { useChatRightPanel } from '../../../hooks/useChatRightPanel';
+import RightPanel from '../../right-panel/RightPanel';
+import ResizeHandle from '../../right-panel/ResizeHandle';
 
 type TaskMasterContextValue = {
   currentProject?: Project | null;
@@ -73,6 +76,13 @@ function MainContent({
     isMobile,
   });
 
+  const {
+    state: rightPanelState,
+    toggle: toggleRightPanel,
+    close: closeRightPanel,
+    setWidth: setRightPanelWidth,
+  } = useChatRightPanel();
+
   useEffect(() => {
     const selectedProjectName = selectedProject?.name;
     const currentProjectName = currentProject?.name;
@@ -106,10 +116,21 @@ function MainContent({
         shouldShowTasksTab={shouldShowTasksTab}
         isMobile={isMobile}
         onMenuClick={onMenuClick}
+        onToggleFiles={() => toggleRightPanel('files')}
+        onToggleGit={() => toggleRightPanel('git')}
+        rightPanelOpen={rightPanelState.open}
+        rightPanelActiveTab={rightPanelState.activeTab}
       />
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <div className={`flex min-h-0 min-w-[200px] flex-col overflow-hidden ${editorExpanded ? 'hidden' : ''} flex-1`}>
+        <div
+          className={`flex min-h-0 min-w-[200px] flex-col overflow-hidden ${editorExpanded ? 'hidden' : ''}`}
+          style={
+            rightPanelState.open && !editorExpanded
+              ? { width: `calc(100% - ${rightPanelState.width}px)`, flex: 'none' }
+              : { flex: '1' }
+          }
+        >
           <div className={`h-full ${activeTab === 'chat' ? 'block' : 'hidden'}`}>
             <ErrorBoundary showDetails>
               <ChatInterface
@@ -175,6 +196,24 @@ function MainContent({
             </div>
           )}
         </div>
+
+        {/* Right panel (Files / Git) — hidden when editor is expanded */}
+        {rightPanelState.open && !editorExpanded && (
+          <>
+            <ResizeHandle
+              onResize={(delta) => setRightPanelWidth(rightPanelState.width - delta)}
+            />
+            <div style={{ width: rightPanelState.width, flexShrink: 0 }} className="flex min-h-0 flex-col overflow-hidden">
+              <RightPanel
+                activeTab={rightPanelState.activeTab}
+                onTabChange={(tab) => toggleRightPanel(tab)}
+                onClose={closeRightPanel}
+                selectedProject={selectedProject}
+                onFileOpen={handleFileOpen}
+              />
+            </div>
+          </>
+        )}
 
         <EditorSidebar
           editingFile={editingFile}
