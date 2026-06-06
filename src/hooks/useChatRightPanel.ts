@@ -16,7 +16,7 @@ const STORAGE_KEY = 'rightPanel.state';
 const DEFAULTS: RightPanelState = {
   open: false,
   activeTab: 'files',
-  width: 360,
+  width: 468,
   editingFile: null,
   editorExpanded: false,
 };
