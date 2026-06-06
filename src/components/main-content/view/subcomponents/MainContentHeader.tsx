@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState, useEffect } from 'react';
+import { Folder, GitBranch } from 'lucide-react';
 import type { MainContentHeaderProps } from '../../types/types';
 import MobileMenuButton from './MobileMenuButton';
 import MainContentTabSwitcher from './MainContentTabSwitcher';
@@ -12,6 +13,10 @@ export default function MainContentHeader({
   shouldShowTasksTab,
   isMobile,
   onMenuClick,
+  onToggleFiles,
+  onToggleGit,
+  rightPanelOpen,
+  rightPanelActiveTab,
 }: MainContentHeaderProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -65,6 +70,35 @@ export default function MainContentHeader({
             <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-6 bg-gradient-to-l from-background to-transparent" />
           )}
         </div>
+
+        {activeTab === 'chat' && (onToggleFiles || onToggleGit) && (
+          <div className="flex flex-shrink-0 items-center gap-1">
+            <button
+              aria-label="Toggle files panel"
+              title="Files"
+              onClick={onToggleFiles}
+              className={`rounded p-1.5 transition-colors ${
+                rightPanelOpen && rightPanelActiveTab === 'files'
+                  ? 'bg-muted text-foreground'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+              }`}
+            >
+              <Folder className="h-4 w-4" />
+            </button>
+            <button
+              aria-label="Toggle git panel"
+              title="Source Control"
+              onClick={onToggleGit}
+              className={`rounded p-1.5 transition-colors ${
+                rightPanelOpen && rightPanelActiveTab === 'git'
+                  ? 'bg-muted text-foreground'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+              }`}
+            >
+              <GitBranch className="h-4 w-4" />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

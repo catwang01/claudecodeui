@@ -1485,4 +1485,21 @@ router.post('/delete-untracked', async (req, res) => {
   }
 });
 
+// GET /api/git/branch?project=<projectName>
+// Lightweight endpoint: returns only the current branch name.
+// Used by the frontend to lazy-load branch info when a project is selected,
+// instead of fetching it eagerly for every project in getProjects().
+router.get('/branch', async (req, res) => {
+  try {
+    const { project } = req.query;
+    if (!project) return res.status(400).json({ error: 'project is required' });
+    const projectPath = await getActualProjectPath(project).catch(() => null);
+    if (!projectPath) return res.status(404).json({ error: 'Project not found' });
+    const branch = await getCurrentBranchName(projectPath);
+    res.json({ branch: branch || null });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;

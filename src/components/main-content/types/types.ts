@@ -65,6 +65,11 @@ export type MainContentHeaderProps = {
   shouldShowTasksTab: boolean;
   isMobile: boolean;
   onMenuClick: () => void;
+  // Right-panel toggle buttons (only rendered when activeTab === 'chat')
+  onToggleFiles?: () => void;
+  onToggleGit?: () => void;
+  rightPanelOpen?: boolean;
+  rightPanelActiveTab?: 'files' | 'git';
 };
 
 export type MainContentStateViewProps = {

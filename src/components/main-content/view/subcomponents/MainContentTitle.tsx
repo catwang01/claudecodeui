@@ -5,6 +5,7 @@ import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo'
 import type { AppTab, Project, ProjectSession } from '../../../../types/app';
 import { usePlugins } from '../../../../contexts/PluginsContext';
 import { api } from '../../../../utils/api';
+import { useProjectBranch } from '../../../../hooks/useProjectBranch';
 
 type MainContentTitleProps = {
   activeTab: AppTab;
@@ -62,6 +63,7 @@ export default function MainContentTitle({
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
   const [optimisticTitle, setOptimisticTitle] = useState<string | null>(null);
+  const currentBranch = useProjectBranch(selectedProject.name);
 
   useEffect(() => {
     setOptimisticTitle(null);
@@ -156,7 +158,7 @@ export default function MainContentTitle({
             )}
             <div className="flex min-w-0 items-center text-sm leading-tight text-muted-foreground">
               <span className="truncate">{selectedProject.displayName}</span>
-              <BranchBadge branch={selectedProject.currentBranch} />
+              <BranchBadge branch={currentBranch} />
             </div>
           </div>
         ) : showChatNewSession ? (
@@ -164,7 +166,7 @@ export default function MainContentTitle({
             <h2 className="text-sm font-semibold leading-tight text-foreground">{t('mainContent.newSession')}</h2>
             <div className="flex min-w-0 items-center text-sm leading-tight text-muted-foreground">
               <span className="truncate">{selectedProject.displayName}</span>
-              <BranchBadge branch={selectedProject.currentBranch} />
+              <BranchBadge branch={currentBranch} />
             </div>
           </div>
         ) : (
@@ -174,7 +176,7 @@ export default function MainContentTitle({
             </h2>
             <div className="flex min-w-0 items-center text-sm leading-tight text-muted-foreground">
               <span className="truncate">{selectedProject.displayName}</span>
-              <BranchBadge branch={selectedProject.currentBranch} />
+              <BranchBadge branch={currentBranch} />
             </div>
           </div>
         )}

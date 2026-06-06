@@ -295,7 +295,6 @@ function makeTtlCache() {
   };
 }
 
-const _gitBranchCache     = makeTtlCache();
 const _cursorSessionsCache = makeTtlCache();
 const _taskMasterCache    = makeTtlCache();
 const _displayNameCache   = makeTtlCache(); // keyed by projectPath; effectively permanent (package.json rarely changes)
@@ -575,7 +574,6 @@ async function getProjectData(dbProject, codexSessionsIndexRef, autoDocPreFilter
   const allCached =
     _cursorSessionsCache.get(projectPath) !== undefined &&
     _taskMasterCache.get(projectPath) !== undefined &&
-    _gitBranchCache.get(projectPath) !== undefined &&
     _geminiCliCache.get(projectPath) !== undefined;
   const promises = allCached
     ? await Promise.allSettled([
@@ -583,7 +581,6 @@ async function getProjectData(dbProject, codexSessionsIndexRef, autoDocPreFilter
         getCodexSessions(projectPath, { indexRef: codexSessionsIndexRef }),
         Promise.resolve([...sessionManager.getProjectSessions(projectPath) || [], ..._geminiCliCache.get(projectPath) || []]),
         Promise.resolve(_taskMasterCache.get(projectPath)),
-        Promise.resolve(_gitBranchCache.get(projectPath)),
       ])
     : await Promise.allSettled([
         _cursorSessionsCache.fetchOnce(projectPath, () => getCursorSessions(projectPath)),
@@ -595,10 +592,9 @@ async function getProjectData(dbProject, codexSessionsIndexRef, autoDocPreFilter
           return [...uiSessions, ...cliSessions.filter(s => !uiIds.has(s.id))];
         })(),
         _taskMasterCache.fetchOnce(projectPath, () => detectTaskMasterFolder(projectPath)),
-        _gitBranchCache.fetchOnce(projectPath, () => getProjectGitBranch(projectPath)),
       ]);
 
-  const [cursorResult, codexResult, geminiResult, taskMasterResult, gitBranchResult] = promises;
+  const [cursorResult, codexResult, geminiResult, taskMasterResult] = promises;
 
   project.cursorSessions = cursorResult.status === 'fulfilled' ? cursorResult.value : [];
   applyCustomSessionNames(project.cursorSessions, 'cursor');
@@ -627,7 +623,7 @@ async function getProjectData(dbProject, codexSessionsIndexRef, autoDocPreFilter
     project.taskmaster = { hasTaskmaster: false, hasEssentialFiles: false, metadata: null, status: 'error' };
   }
 
-  project.currentBranch = gitBranchResult.status === 'fulfilled' ? gitBranchResult.value : null;
+  project.currentBranch = null; // lazy-loaded on demand via GET /api/git/branch
 
   const _tpElapsed = Date.now() - _tp;
   if (_tpElapsed > 200) console.log(`[SLOW getProjects project] ${path.basename(projectPath)} ${_tpElapsed}ms`);
@@ -804,7 +800,7 @@ async function getProjectsLegacy(progressCallback = null) {
         sessionMeta: { hasMore: false, total: 0 },
       };
 
-      const [sessionResult, cursorSessions, codexSessions, geminiResult, taskMasterResult, gitBranchResult] =
+      const [sessionResult, cursorSessions, codexSessions, geminiResult, taskMasterResult] =
         await Promise.allSettled([
           getSessions(entry.name, 15, 0, autoDocPreFilter),
           getCursorSessions(actualProjectDir),
@@ -816,7 +812,6 @@ async function getProjectsLegacy(progressCallback = null) {
             return [...uiSessions, ...cliSessions.filter(s => !uiIds.has(s.id))];
           })(),
           detectTaskMasterFolder(actualProjectDir),
-          getProjectGitBranch(actualProjectDir),
         ]);
 
       if (sessionResult.status === 'fulfilled') {
@@ -859,7 +854,7 @@ async function getProjectsLegacy(progressCallback = null) {
         project.taskmaster = { hasTaskmaster: false, hasEssentialFiles: false, metadata: null, status: 'error' };
       }
 
-      project.currentBranch = gitBranchResult.status === 'fulfilled' ? gitBranchResult.value : null;
+      project.currentBranch = null; // lazy-loaded on demand via GET /api/git/branch
 
       projects.push(project);
     }
@@ -2934,6 +2929,7 @@ async function getGeminiCliSessionMessages(sessionId) {
 export {
   getProjects,
   getProject,
+  getProjectGitBranch,
   refreshProjectSessions,
   getSessions,
   getSessionMessages,
