@@ -89,7 +89,7 @@ import pty from 'node-pty';
 import fetch from 'node-fetch';
 import mime from 'mime-types';
 
-import { getProjects, getProject, getSessions, renameProject, deleteSession, forkSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, clearSessionMessagesCache, searchConversations, getSessionFileMeta } from './projects.js';
+import { getProjects, getProject, refreshProjectSessions, getSessions, renameProject, deleteSession, forkSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, clearSessionMessagesCache, searchConversations, getSessionFileMeta } from './projects.js';
 import { clearFetchHistoryCache } from './providers/claude/adapter.js';
 import { queryClaudeSDK, abortClaudeSDKSession, isClaudeSDKSessionActive, getClaudeSDKSessionStartTime, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
 let queryCopilotSDK, abortCopilotSession, isCopilotSessionActive, getCopilotSessionStartTime, getActiveCopilotSessions;
@@ -319,19 +319,26 @@ async function setupProjectsWatcher() {
             let fastPathViable = changedPaths.size > 0 && !!cachedRef;
 
             if (fastPathViable) {
-                // Targeted refresh: rebuild only the affected projects
+                // Targeted refresh: only update Claude sessions (from DB) in each affected project.
+                // Non-Claude providers (git branch, cursor, gemini, taskmaster) are unchanged
+                // when a JSONL file is written — skip them entirely to avoid spawning git/SQLite reads.
+                const _t0 = Date.now();
                 console.log(`[flushBroadcast] fast-path projects=[${[...changedPaths].map(p => path.basename(p)).join(',')}]`);
                 for (const projectPath of changedPaths) {
-                    const updated = await getProject(projectPath);
-                    if (updated === null) {
+                    const idx = cachedRef.findIndex(p => p.path === projectPath);
+                    if (idx < 0) {
+                        // New project not in cache — fall back to full rebuild
+                        fastPathViable = false;
+                        break;
+                    }
+                    const ok = refreshProjectSessions(cachedRef[idx], projectPath);
+                    if (!ok) {
                         // Project deleted or unreadable — fall back to full rebuild
                         fastPathViable = false;
                         break;
                     }
-                    const idx = cachedRef.findIndex(p => p.path === projectPath);
-                    if (idx >= 0) cachedRef[idx] = updated;
-                    else cachedRef.push(updated);
                 }
+                if (fastPathViable) console.log(`[flushBroadcast] fast-path done ${Date.now()-_t0}ms`);
             }
 
             if (fastPathViable) {

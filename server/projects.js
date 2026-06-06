@@ -636,8 +636,46 @@ async function getProjectData(dbProject, codexSessionsIndexRef, autoDocPreFilter
 }
 
 /**
- * Refresh a single project by its filesystem path.
- * Used by flushBroadcast for targeted incremental updates when only one project changed.
+ * Refresh only the Claude sessions of a cached project object in-place.
+ * Used by flushBroadcast fast path: when a JSONL file changes, only Claude
+ * sessions (lastActivity, summary, messageCount) need updating. Git branch,
+ * cursor/gemini/taskmaster data are unchanged and should keep their cached values.
+ *
+ * Returns true if the update succeeded, false if the project was not found in cache or DB.
+ */
+function refreshProjectSessions(cachedProject, projectPath) {
+  const dbProject = projectsDb.getProjectPath(projectPath);
+  if (!dbProject || !cachedProject) return false;
+
+  const excludedSessionIds = buildExcludedSessionIds('claude');
+  const autoDocPreFilter = excludedSessionIds.size > 0
+    ? (sessions) => sessions.filter(s => !excludedSessionIds.has(s.id))
+    : null;
+
+  const claudeRows = sessionsDb.getSessionsByProjectPathPage(projectPath, 45, 0)
+    .filter(row => row.provider === 'claude' && row.jsonl_path);
+  const claudeSessions = buildSessionsFromCache(claudeRows);
+  claudeSessions.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
+
+  const filteredClaude = autoDocPreFilter ? autoDocPreFilter(claudeSessions) : claudeSessions;
+  applyCustomSessionNames(filteredClaude, 'claude');
+  applyHiddenFromRecents(filteredClaude, 'claude');
+  applyAutoDocFlag(filteredClaude, 'claude');
+  applyLastAutoDocAt(filteredClaude, 'claude');
+  filterHiddenAutoDocSessions(filteredClaude);
+  applyReadState(filteredClaude, 'claude');
+
+  cachedProject.sessions = filteredClaude.slice(0, 15);
+  cachedProject.sessionMeta = {
+    hasMore: filteredClaude.length > 15,
+    total: sessionsDb.countSessionsByProjectPath(projectPath),
+  };
+  return true;
+}
+
+/**
+ * Refresh a single project by its filesystem path (full rebuild including all providers).
+ * Used as fallback when the cache is cold or a non-session change occurs.
  * Returns null if the project is not found in the DB.
  */
 async function getProject(projectPath) {
@@ -2896,6 +2934,7 @@ async function getGeminiCliSessionMessages(sessionId) {
 export {
   getProjects,
   getProject,
+  refreshProjectSessions,
   getSessions,
   getSessionMessages,
   getSessionFileMeta,
