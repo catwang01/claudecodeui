@@ -465,8 +465,7 @@ export const claudeAdapter = {
       try {
         const fh = await fs.open(sessionFile, 'r');
         const buf = Buffer.alloc(stat.size - cached.size);
-        await fh.read(buf, 0, buf.length, cached.size);
-        await fh.close();
+        try { await fh.read(buf, 0, buf.length, cached.size); } finally { await fh.close(); }
 
         const newRaw = buf.toString('utf8')
           .split('\n')

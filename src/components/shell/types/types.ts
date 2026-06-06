@@ -15,6 +15,7 @@ export type ShellInitMessage = {
   rows: number;
   initialCommand: string | null | undefined;
   isPlainShell: boolean;
+  skipPermissions?: boolean;
 };
 
 export type ShellResizeMessage = {
@@ -71,6 +72,7 @@ export type UseShellRuntimeResult = {
   authUrlVersion: number;
   connectToShell: () => void;
   disconnectFromShell: () => void;
+  markUserDisconnected: () => void;
   openAuthUrlInBrowser: (url?: string) => boolean;
   copyAuthUrlToClipboard: (url?: string) => Promise<boolean>;
 };

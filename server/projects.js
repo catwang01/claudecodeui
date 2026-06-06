@@ -252,6 +252,20 @@ function makeConcurrencyLimiter(limit) {
   return (fn) => new Promise((resolve, reject) => { queue.push({ fn, resolve, reject }); next(); });
 }
 
+// Concurrency-limited, deduplicated fire-and-forget for getSessionFileMeta backfill.
+// Without this, buildSessionsFromCache would fire 10,000+ concurrent fs.open calls on
+// startup (one per session with cache miss), saturating the fd table and causing
+// child_process.spawn to fail with EBADF.
+const _runFileMeta = makeConcurrencyLimiter(20); // at most 20 concurrent file opens
+const _pendingFileMeta = new Set();              // dedup: skip if already queued
+
+function scheduleSessionFileMeta(filePath) {
+  if (_pendingFileMeta.has(filePath)) return;
+  _pendingFileMeta.add(filePath);
+  _runFileMeta(() => getSessionFileMeta(filePath).catch(() => {}))
+    .finally(() => _pendingFileMeta.delete(filePath));
+}
+
 function makeTtlCache() {
   const store = new Map();    // key → { value, time }
   const inflight = new Map(); // key → Promise  (in-flight dedup)
@@ -393,19 +407,28 @@ async function generateDisplayName(projectName, actualProjectDir = null) {
 }
 
 // Read the first cwd value found in a JSONL file, then stop reading.
-// Uses a callback-based readline so we can destroy the stream early.
+// Awaits actual fd close before returning to prevent pending-close fd accumulation
+// when called in a sequential loop (e.g. extractProjectDirectory for many sessions).
 function readFirstCwdFromJsonl(filePath) {
   return new Promise((resolve) => {
     const fileStream = fsSync.createReadStream(filePath);
     const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
     let resolved = false;
+    let streamClosed = false;
+
+    // Register before any I/O so we never miss the 'close' event.
+    fileStream.once('close', () => { streamClosed = true; });
 
     function finish(cwd) {
       if (resolved) return;
       resolved = true;
       rl.close();
-      fileStream.destroy();
-      resolve(cwd);
+      if (streamClosed) {
+        resolve(cwd);
+      } else {
+        fileStream.once('close', () => resolve(cwd));
+        fileStream.destroy();
+      }
     }
 
     rl.on('line', (line) => {
@@ -1076,7 +1099,8 @@ function buildSessionsFromCache(rows) {
     if (!cached?.session_id) {
       // Cache miss: session is in DB but session_file_cache hasn't been populated yet.
       // Include it with whatever we know from the sessions row, and backfill the cache async.
-      getSessionFileMeta(row.jsonl_path).catch(() => { /* best-effort */ });
+      // Uses scheduleSessionFileMeta (concurrency-limited) to avoid opening 10k+ fds at once.
+      scheduleSessionFileMeta(row.jsonl_path);
 
       sessions.push({
         id: row.session_id,
