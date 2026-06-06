@@ -73,21 +73,6 @@ export default function MainContentHeader({
 
         {(onToggleFiles || onToggleGit) && (
           <div className="flex flex-shrink-0 items-center gap-1">
-            {onToggleFiles && (
-              <button
-                aria-label="Toggle files panel"
-                aria-pressed={rightPanelOpen && rightPanelActiveTab === 'files'}
-                title="Files"
-                onClick={onToggleFiles}
-                className={`rounded p-1.5 transition-colors ${
-                  rightPanelOpen && rightPanelActiveTab === 'files'
-                    ? 'bg-muted text-foreground'
-                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-                }`}
-              >
-                <Folder className="h-4 w-4" />
-              </button>
-            )}
             {onToggleGit && (
               <button
                 aria-label="Toggle git panel"
@@ -101,6 +86,21 @@ export default function MainContentHeader({
                 }`}
               >
                 <GitBranch className="h-4 w-4" />
+              </button>
+            )}
+            {onToggleFiles && (
+              <button
+                aria-label="Toggle files panel"
+                aria-pressed={rightPanelOpen && rightPanelActiveTab === 'files'}
+                title="Files"
+                onClick={onToggleFiles}
+                className={`rounded p-1.5 transition-colors ${
+                  rightPanelOpen && rightPanelActiveTab === 'files'
+                    ? 'bg-muted text-foreground'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                }`}
+              >
+                <Folder className="h-4 w-4" />
               </button>
             )}
           </div>
