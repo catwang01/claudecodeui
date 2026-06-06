@@ -68,7 +68,7 @@ export async function readFirstJsonlLine<T>(
 export async function findFilesModifiedAfter(
   rootDir: string,
   ext: string,
-  since: Date | null
+  since: Date | null,
 ): Promise<string[]> {
   const result: string[] = [];
 

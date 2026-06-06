@@ -67,9 +67,38 @@ import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import os from 'os';
 import sessionManager from './sessionManager.js';
-import { applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, applyLastAutoDocAt, filterHiddenAutoDocSessions, applyReadState, appConfigDb, sessionDb, sessionFileCache } from './database/db.js';
+import { applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, applyLastAutoDocAt, filterHiddenAutoDocSessions, applyReadState, appConfigDb, sessionDb, sessionFileCache, userDb, userSettingsDb } from './database/db.js';
 import { projectsDb, sessionsDb } from './modules/database/index.js';
 import { claudeSessionSynchronizer } from './modules/providers/list/claude/claude-session-synchronizer.provider.js';
+
+/**
+ * Reads project exclude patterns from the first user's settings (server-side).
+ * These are stored in user_settings under key 'claude-settings' as JSON
+ * { projectExcludePatterns: string[] }.
+ * Returns an array of regex pattern strings.
+ */
+function getServerExcludePatterns() {
+  try {
+    const firstUser = userDb.getFirstUser();
+    if (!firstUser) return [];
+    const raw = userSettingsDb.get(firstUser.id, 'claude-settings');
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed?.projectExcludePatterns) ? parsed.projectExcludePatterns : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Returns true if projectPath matches any of the given exclude patterns.
+ */
+function matchesExcludePattern(projectPath, patterns) {
+  if (!patterns.length) return false;
+  return patterns.some(p => {
+    try { return new RegExp(p, 'i').test(projectPath); } catch { return false; }
+  });
+}
 
 async function getProjectGitBranch(projectPath) {
   const run = (args) => new Promise((resolve, reject) => {
@@ -787,6 +816,7 @@ async function getProjectsLegacy(progressCallback = null) {
     : null;
 
   const isUUID = (name) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(name);
+  const serverExcludePatterns = getServerExcludePatterns();
 
   let dbProjects = [];
   try { dbProjects = projectsDb.getAllProjects(); } catch { /* ignore */ }
@@ -807,6 +837,10 @@ async function getProjectsLegacy(progressCallback = null) {
       }
 
       const actualProjectDir = await extractProjectDirectory(entry.name);
+
+      // Skip projects whose decoded path matches a user-configured exclude pattern.
+      if (matchesExcludePattern(actualProjectDir, serverExcludePatterns)) continue;
+
       const customName = projectsDb.getProjectPath(actualProjectDir)?.custom_project_name || null;
       const autoDisplayName = await generateDisplayName(entry.name, actualProjectDir);
 
@@ -1267,13 +1301,18 @@ async function getSessionFileMeta(filePath) {
 async function parseAgentTools(filePath) {
   const tools = [];
 
-  try {
-    const fileStream = fsSync.createReadStream(filePath);
-    const rl = readline.createInterface({
-      input: fileStream,
-      crlfDelay: Infinity
-    });
+  const fileStream = fsSync.createReadStream(filePath);
+  const rl = readline.createInterface({
+    input: fileStream,
+    crlfDelay: Infinity
+  });
 
+  let streamClosed = false;
+  const closedPromise = new Promise(resolve => {
+    fileStream.once('close', () => { streamClosed = true; resolve(); });
+  });
+
+  try {
     for await (const line of rl) {
       if (line.trim()) {
         try {
@@ -1315,6 +1354,10 @@ async function parseAgentTools(filePath) {
     }
   } catch (error) {
     console.warn(`Error parsing agent file ${filePath}:`, error.message);
+  } finally {
+    rl.close();
+    fileStream.destroy();
+    if (!streamClosed) await closedPromise;
   }
 
   return tools;
@@ -2018,6 +2061,11 @@ async function getCodexSessionMessages(sessionId, limit = null, offset = 0) {
       crlfDelay: Infinity
     });
 
+    let _rlClosed = false;
+    const _rlClosedP = new Promise(resolve => {
+      fileStream.once('close', () => { _rlClosed = true; resolve(); });
+    });
+
     // Helper to extract text from Codex content array
     const extractText = (content) => {
       if (!Array.isArray(content)) return content;
@@ -2035,6 +2083,7 @@ async function getCodexSessionMessages(sessionId, limit = null, offset = 0) {
         .join('\n');
     };
 
+    try {
     for await (const line of rl) {
       if (line.trim()) {
         try {
@@ -2194,6 +2243,11 @@ async function getCodexSessionMessages(sessionId, limit = null, offset = 0) {
         }
       }
     }
+    } finally {
+      rl.close();
+      fileStream.destroy();
+      if (!_rlClosed) await _rlClosedP;
+    }
 
     // Sort by timestamp
     messages.sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
@@ -2296,6 +2350,12 @@ async function searchConversations(query, limit = 50, onProjectResult = null, si
   const results = [];
   let totalMatches = 0;
   const words = safeQuery.toLowerCase().split(/\s+/).filter(w => w.length > 0);
+
+  // Merge request-supplied patterns with server-side user settings patterns.
+  const serverPatterns = getServerExcludePatterns();
+  const allExcludePatterns = serverPatterns.length > 0
+    ? [...new Set([...excludePatterns, ...serverPatterns])]
+    : excludePatterns;
   if (words.length === 0) return { results: [], totalMatches: 0, query: safeQuery };
 
   const excludedSessionIds = buildExcludedSessionIds('claude');
@@ -2381,8 +2441,8 @@ async function searchConversations(query, limit = 50, onProjectResult = null, si
       const projectDir = path.join(claudeDir, projectName);
       const actualDir = await extractProjectDirectory(projectName).catch(() => null);
 
-      if (actualDir && excludePatterns.length > 0) {
-        const isExcluded = excludePatterns.some((pattern) => {
+      if (actualDir && allExcludePatterns.length > 0) {
+        const isExcluded = allExcludePatterns.some((pattern) => {
           try { return new RegExp(pattern, 'i').test(actualDir); } catch { return false; }
         });
         if (isExcluded) { scannedProjects++; continue; }
@@ -2425,14 +2485,18 @@ async function searchConversations(query, limit = 50, onProjectResult = null, si
         let fileLastMessages = {};
         const fileMatches = [];
 
+        let _sfStream = null, _sfRl = null, _sfClosed = false, _sfClosedP = null;
         try {
-          const fileStream = fsSync.createReadStream(filePath);
-          const rl = readline.createInterface({
-            input: fileStream,
+          _sfStream = fsSync.createReadStream(filePath);
+          _sfClosedP = new Promise(resolve => {
+            _sfStream.once('close', () => { _sfClosed = true; resolve(); });
+          });
+          _sfRl = readline.createInterface({
+            input: _sfStream,
             crlfDelay: Infinity
           });
 
-          for await (const line of rl) {
+          for await (const line of _sfRl) {
             if (totalMatches >= safeLimit || isAborted()) break;
             if (!line.trim()) continue;
 
@@ -2492,7 +2556,11 @@ async function searchConversations(query, limit = 50, onProjectResult = null, si
             }
           }
         } catch {
-          continue;
+          // continue after finally
+        } finally {
+          if (_sfRl) _sfRl.close();
+          if (_sfStream) _sfStream.destroy();
+          if (!_sfClosed && _sfClosedP) await _sfClosedP;
         }
 
         if (fileMatches.length > 0) {
@@ -2570,20 +2638,27 @@ async function searchCodexSessionsForProject(
     if (getTotalMatches() >= limit || isAborted()) break;
 
     try {
-      const fileStream = fsSync.createReadStream(filePath);
-      const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
-
       // First pass: read session_meta to check project path match
       let sessionMeta = null;
-      for await (const line of rl) {
-        if (!line.trim()) continue;
+      {
+        const _fs1 = fsSync.createReadStream(filePath);
+        const _rl1 = readline.createInterface({ input: _fs1, crlfDelay: Infinity });
+        let _c1 = false;
+        const _cp1 = new Promise(r => { _fs1.once('close', () => { _c1 = true; r(); }); });
         try {
-          const entry = JSON.parse(line);
-          if (entry.type === 'session_meta' && entry.payload) {
-            sessionMeta = entry.payload;
-            break;
+          for await (const line of _rl1) {
+            if (!line.trim()) continue;
+            try {
+              const entry = JSON.parse(line);
+              if (entry.type === 'session_meta' && entry.payload) {
+                sessionMeta = entry.payload;
+                break;
+              }
+            } catch { continue; }
           }
-        } catch { continue; }
+        } finally {
+          _rl1.close(); _fs1.destroy(); if (!_c1) await _cp1;
+        }
       }
 
       // Skip sessions that don't belong to this project
@@ -2592,52 +2667,58 @@ async function searchCodexSessionsForProject(
       if (sessionProjectPath !== normalizedProjectPath) continue;
 
       // Second pass: re-read file to find matching messages
-      const fileStream2 = fsSync.createReadStream(filePath);
-      const rl2 = readline.createInterface({ input: fileStream2, crlfDelay: Infinity });
+      const _fs2 = fsSync.createReadStream(filePath);
+      const _rl2 = readline.createInterface({ input: _fs2, crlfDelay: Infinity });
+      let _c2 = false;
+      const _cp2 = new Promise(r => { _fs2.once('close', () => { _c2 = true; r(); }); });
       let lastUserMessage = null;
       const matches = [];
 
-      for await (const line of rl2) {
-        if (getTotalMatches() >= limit || isAborted()) break;
-        if (!line.trim()) continue;
+      try {
+        for await (const line of _rl2) {
+          if (getTotalMatches() >= limit || isAborted()) break;
+          if (!line.trim()) continue;
 
-        let entry;
-        try { entry = JSON.parse(line); } catch { continue; }
+          let entry;
+          try { entry = JSON.parse(line); } catch { continue; }
 
-        let text = null;
-        let role = null;
+          let text = null;
+          let role = null;
 
-        if (entry.type === 'event_msg' && entry.payload?.type === 'user_message' && entry.payload.message) {
-          text = entry.payload.message;
-          role = 'user';
-          lastUserMessage = text;
-        } else if (entry.type === 'response_item' && entry.payload?.type === 'message') {
-          const contentParts = entry.payload.content || [];
-          if (entry.payload.role === 'user') {
-            text = contentParts
-              .filter(p => p.type === 'input_text' && p.text)
-              .map(p => p.text)
-              .join(' ');
+          if (entry.type === 'event_msg' && entry.payload?.type === 'user_message' && entry.payload.message) {
+            text = entry.payload.message;
             role = 'user';
-            if (text) lastUserMessage = text;
-          } else if (entry.payload.role === 'assistant') {
-            text = contentParts
-              .filter(p => p.type === 'output_text' && p.text)
-              .map(p => p.text)
-              .join(' ');
-            role = 'assistant';
+            lastUserMessage = text;
+          } else if (entry.type === 'response_item' && entry.payload?.type === 'message') {
+            const contentParts = entry.payload.content || [];
+            if (entry.payload.role === 'user') {
+              text = contentParts
+                .filter(p => p.type === 'input_text' && p.text)
+                .map(p => p.text)
+                .join(' ');
+              role = 'user';
+              if (text) lastUserMessage = text;
+            } else if (entry.payload.role === 'assistant') {
+              text = contentParts
+                .filter(p => p.type === 'output_text' && p.text)
+                .map(p => p.text)
+                .join(' ');
+              role = 'assistant';
+            }
+          }
+
+          if (!text || !role) continue;
+          const textLower = text.toLowerCase();
+          if (!allWordsMatch(textLower)) continue;
+
+          if (matches.length < 2) {
+            const { snippet, highlights } = buildSnippet(text, textLower);
+            matches.push({ role, snippet, highlights, timestamp: entry.timestamp || null, provider: 'codex' });
+            addMatches(1);
           }
         }
-
-        if (!text || !role) continue;
-        const textLower = text.toLowerCase();
-        if (!allWordsMatch(textLower)) continue;
-
-        if (matches.length < 2) {
-          const { snippet, highlights } = buildSnippet(text, textLower);
-          matches.push({ role, snippet, highlights, timestamp: entry.timestamp || null, provider: 'codex' });
-          addMatches(1);
-        }
+      } finally {
+        _rl2.close(); _fs2.destroy(); if (!_c2) await _cp2;
       }
 
       if (matches.length > 0) {
