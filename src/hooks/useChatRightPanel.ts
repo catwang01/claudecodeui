@@ -63,5 +63,12 @@ export function useChatRightPanel() {
     }));
   }, []);
 
-  return { state, toggle, close, setWidth };
+  const adjustWidth = useCallback((delta: number) => {
+    setState((prev) => ({
+      ...prev,
+      width: Math.max(200, Math.min(800, prev.width - delta)),
+    }));
+  }, []);
+
+  return { state, toggle, close, setWidth, adjustWidth };
 }

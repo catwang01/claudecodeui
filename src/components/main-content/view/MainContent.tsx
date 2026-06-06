@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useCallback, useEffect } from 'react';
 import ChatInterface from '../../chat/view/ChatInterface';
 import FileTree from '../../file-tree/view/FileTree';
 import ShellSessionPool from '../../shell-pool/ShellSessionPool';
@@ -81,7 +81,13 @@ function MainContent({
     toggle: toggleRightPanel,
     close: closeRightPanel,
     setWidth: setRightPanelWidth,
+    adjustWidth: adjustRightPanelWidth,
   } = useChatRightPanel();
+
+  const handleRightPanelResize = useCallback(
+    (delta: number) => adjustRightPanelWidth(delta),
+    [adjustRightPanelWidth],
+  );
 
   useEffect(() => {
     const selectedProjectName = selectedProject?.name;
@@ -127,7 +133,7 @@ function MainContent({
           className={`flex min-h-0 min-w-[200px] flex-col overflow-hidden ${editorExpanded ? 'hidden' : ''}`}
           style={
             rightPanelState.open && !editorExpanded
-              ? { width: `calc(100% - ${rightPanelState.width}px)`, flex: 'none' }
+              ? { width: `calc(100% - ${rightPanelState.width + 6}px)`, flex: 'none' }
               : { flex: '1' }
           }
         >
@@ -201,7 +207,7 @@ function MainContent({
         {rightPanelState.open && !editorExpanded && (
           <>
             <ResizeHandle
-              onResize={(delta) => setRightPanelWidth(rightPanelState.width - delta)}
+              onResize={handleRightPanelResize}
             />
             <div style={{ width: rightPanelState.width, flexShrink: 0 }} className="flex min-h-0 flex-col overflow-hidden">
               <RightPanel
