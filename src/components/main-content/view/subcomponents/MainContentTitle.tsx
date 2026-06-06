@@ -19,14 +19,6 @@ function getTabTitle(activeTab: AppTab, shouldShowTasksTab: boolean, t: (key: st
     return pluginDisplayName;
   }
 
-  if (activeTab === 'files') {
-    return t('mainContent.projectFiles');
-  }
-
-  if (activeTab === 'git') {
-    return t('tabs.git');
-  }
-
   if (activeTab === 'tasks' && shouldShowTasksTab) {
     return 'TaskMaster';
   }
