@@ -67,6 +67,11 @@ export function useShellConnection({
   const hasConnectedSuccessfullyRef = useRef(false);
   // prevAutoConnectRef: detects autoConnect false→true transitions to reset connectionFailedRef.
   const prevAutoConnectRef = useRef(false);
+  // connectionIdRef: monotonically-incrementing ID stamped on each new WebSocket connection.
+  // Event handlers (onopen/onclose/onerror) are guarded with an ID check so that a stale
+  // close/error event from a previous socket (e.g. the one closed during Restart) cannot
+  // corrupt shared refs (hasConnectedSuccessfullyRef, connectionFailedRef) for the new socket.
+  const connectionIdRef = useRef(0);
 
   const handleProcessCompletion = useCallback(
     (output: string) => {
@@ -143,10 +148,12 @@ export function useShellConnection({
 
         connectingRef.current = true;
 
+        const thisConnectionId = ++connectionIdRef.current;
         const socket = new WebSocket(wsUrl);
         wsRef.current = socket;
 
         socket.onopen = () => {
+          if (connectionIdRef.current !== thisConnectionId) return;
           hasConnectedSuccessfullyRef.current = true;
           setIsConnected(true);
           setIsConnecting(false);
@@ -179,11 +186,13 @@ export function useShellConnection({
         };
 
         socket.onmessage = (event) => {
+          if (connectionIdRef.current !== thisConnectionId) return;
           const rawPayload = typeof event.data === 'string' ? event.data : String(event.data ?? '');
           handleSocketMessage(rawPayload);
         };
 
         socket.onclose = () => {
+          if (connectionIdRef.current !== thisConnectionId) return;
           setIsConnected(false);
           setIsConnecting(false);
           connectingRef.current = false;
@@ -200,6 +209,7 @@ export function useShellConnection({
         };
 
         socket.onerror = () => {
+          if (connectionIdRef.current !== thisConnectionId) return;
           setIsConnected(false);
           setIsConnecting(false);
           connectingRef.current = false;

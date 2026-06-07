@@ -418,7 +418,7 @@ export default function Shell({
         disconnectTitle={t('shell.actions.disconnectTitle')}
         restartLabel={t('shell.actions.restart')}
         restartTitle={t('shell.actions.restartTitle')}
-        disableRestart={isRestarting || isConnected}
+        disableRestart={isRestarting}
       />
 
       <div className="relative flex-1 overflow-hidden p-2">
