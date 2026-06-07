@@ -440,12 +440,15 @@ async function setupProjectsWatcher() {
             });
 
             // Set up event listeners
+            // NOTE: addDir/unlinkDir are intentionally NOT handled here. They always produce
+            // sessionId=null → scheduleBroadcast(..., null) → sessionIds=[] → full getProjects()
+            // rebuild on every new project/subagent directory creation. The 'add'/'unlink'
+            // events for the .jsonl files inside those directories are sufficient to trigger
+            // the broadcast with the correct sessionId, enabling the fast-path rebuild.
             watcher
                 .on('add', (filePath) => { resolveLocalIdIfPending(filePath); if (filePath.endsWith('.jsonl')) handle('add', filePath); })
                 .on('change', (filePath) => { resolveLocalIdIfPending(filePath); if (filePath.endsWith('.jsonl')) { const sid = path.basename(filePath, '.jsonl'); clearSessionMessagesCache(sid); clearFetchHistoryCache(sid); getSessionFileMeta(filePath).catch(() => {}); handle('change', filePath); } })
                 .on('unlink', (filePath) => { if (filePath.endsWith('.jsonl')) { const sid = path.basename(filePath, '.jsonl'); clearSessionMessagesCache(sid); clearFetchHistoryCache(sid); handle('unlink', filePath); } })
-                .on('addDir', (dirPath) => handle('addDir', dirPath))
-                .on('unlinkDir', (dirPath) => handle('unlinkDir', dirPath))
                 .on('error', (error) => {
                     console.error(`[ERROR] ${provider} watcher error:`, error);
                 })
@@ -1990,6 +1993,11 @@ function handleChatConnection(ws, request) {
                             reconnectSessionWriter(sessionId, ws);
                         }
                     }
+                    // DEBUG: log whether PTY also has this session
+                    const ptyMatch = prov === 'claude' && sessionId
+                        ? [...ptySessionsMap.entries()].find(([, e]) => e.sessionId === sessionId)
+                        : null;
+                    console.log(`[SESSION-STATUS] check sessionId=${sessionId} provider=${prov} sdkActive=${isActive} ptyMatch=${ptyMatch ? ptyMatch[0] : 'none'}`);
                     const startTime = isActive && prov === 'claude' ? getClaudeSDKSessionStartTime(sessionId) : null;
                     if (isActive && prov === 'claude' && startTime === null) {
                         console.warn(`[SESSION-STATUS] session ${sessionId} isActive=true but startTime=null — session entry may be missing startTime`);
