@@ -283,6 +283,25 @@ export function useShellConnection({
   }, [clearTerminalScreen, closeSocket, setAuthUrl]);
 
   useEffect(() => {
+    // Detect "stale connecting" state: connectingRef is true but wsRef is null,
+    // meaning the WebSocket was closed externally (e.g. React StrictMode's
+    // simulated unmount called closeSocket() without going through
+    // disconnectFromShell). React StrictMode runs cleanup synchronously before
+    // the async onclose fires, so onclose sees a matching connectionId and sets
+    // connectionFailedRef=true after the re-mount — permanently blocking
+    // auto-reconnect. Reset all connecting-related state here so the next
+    // effect run can attempt a fresh connection.
+    if (connectingRef.current && !wsRef.current) {
+      connectingRef.current = false;
+      hasConnectedSuccessfullyRef.current = false;
+      connectionFailedRef.current = false;
+      setIsConnecting(false);
+      // isConnecting (React state) in this closure is still the stale value; the
+      // setIsConnecting(false) above will trigger a re-render and the effect will
+      // run again with isConnecting=false, at which point connectToShell() fires.
+      return;
+    }
+
     // When autoConnect transitions false→true (shell tab becomes visible again),
     // reset the failure flag so we can attempt reconnection after a previous failure.
     if (autoConnect && !prevAutoConnectRef.current) {
