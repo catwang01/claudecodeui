@@ -1,10 +1,11 @@
-import { GitBranch, GitCommit, RefreshCw } from 'lucide-react';
+import { GitBranch, GitCommit, LayoutList, Network, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ConfirmationRequest, FileStatusCode, GitDiffMap, GitStatusResponse } from '../../types/types';
 import { getAllChangedFiles, hasChangedFiles } from '../../utils/gitPanelUtils';
 import CommitComposer from './CommitComposer';
 import FileChangeList from './FileChangeList';
 import FileStatusLegend from './FileStatusLegend';
+import FileTreeView from './FileTreeView';
 
 type ChangesViewProps = {
   isMobile: boolean;
@@ -46,6 +47,14 @@ export default function ChangesView({
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [stagedFiles, setStagedFiles] = useState<Set<string>>(new Set());
+  const [viewMode, setViewMode] = useState<'list' | 'tree'>(() => {
+    return (localStorage.getItem('git-view-mode') as 'list' | 'tree') ?? 'list';
+  });
+
+  const handleSetViewMode = useCallback((mode: 'list' | 'tree') => {
+    setViewMode(mode);
+    localStorage.setItem('git-view-mode', mode);
+  }, []);
 
   const changedFiles = useMemo(() => getAllChangedFiles(gitStatus), [gitStatus]);
   const hasExpandedFiles = expandedFiles.size > 0;
@@ -171,6 +180,37 @@ export default function ChangesView({
 
       {!gitStatus?.error && <FileStatusLegend isMobile={isMobile} />}
 
+      {/* List / Tree view toggle */}
+      {!gitStatus?.error && hasChangedFiles(gitStatus) && (
+        <div className="flex items-center justify-end gap-1 border-b border-border/60 bg-muted/20 px-3 py-1">
+          <span className="mr-auto text-xs text-muted-foreground">View:</span>
+          <button
+            onClick={() => handleSetViewMode('list')}
+            className={`flex items-center gap-1 rounded px-2 py-0.5 text-xs transition-colors ${
+              viewMode === 'list'
+                ? 'bg-primary text-primary-foreground'
+                : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+            }`}
+            title="Flat list view"
+          >
+            <LayoutList className="h-3 w-3" />
+            List
+          </button>
+          <button
+            onClick={() => handleSetViewMode('tree')}
+            className={`flex items-center gap-1 rounded px-2 py-0.5 text-xs transition-colors ${
+              viewMode === 'tree'
+                ? 'bg-primary text-primary-foreground'
+                : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+            }`}
+            title="Directory tree view"
+          >
+            <Network className="h-3 w-3" />
+            Tree
+          </button>
+        </div>
+      )}
+
       <div className="flex-1 overflow-y-auto">
         {isLoading ? (
           <div className="flex h-32 items-center justify-center">
@@ -235,7 +275,22 @@ export default function ChangesView({
               </div>
             </div>
             {stagedFiles.size === 0 ? (
-              <div className="px-3 py-2 text-xs text-muted-foreground italic">No staged files</div>
+              <div className="px-3 py-2 text-xs italic text-muted-foreground">No staged files</div>
+            ) : viewMode === 'tree' ? (
+              <FileTreeView
+                gitStatus={gitStatus}
+                gitDiff={gitDiff}
+                expandedFiles={expandedFiles}
+                selectedFiles={selectedFiles}
+                isMobile={isMobile}
+                wrapText={wrapText}
+                filePaths={stagedFiles}
+                onToggleSelected={toggleFileSelected}
+                onToggleExpanded={toggleFileExpanded}
+                onOpenFile={(filePath) => { void onOpenFile(filePath); }}
+                onToggleWrapText={() => onWrapTextChange(!wrapText)}
+                onRequestFileAction={requestFileAction}
+              />
             ) : (
               <FileChangeList
                 gitStatus={gitStatus}
@@ -278,7 +333,22 @@ export default function ChangesView({
               </div>
             </div>
             {unstagedFiles.size === 0 ? (
-              <div className="px-3 py-2 text-xs text-muted-foreground italic">All changes staged</div>
+              <div className="px-3 py-2 text-xs italic text-muted-foreground">All changes staged</div>
+            ) : viewMode === 'tree' ? (
+              <FileTreeView
+                gitStatus={gitStatus}
+                gitDiff={gitDiff}
+                expandedFiles={expandedFiles}
+                selectedFiles={selectedFiles}
+                isMobile={isMobile}
+                wrapText={wrapText}
+                filePaths={unstagedFiles}
+                onToggleSelected={toggleFileSelected}
+                onToggleExpanded={toggleFileExpanded}
+                onOpenFile={(filePath) => { void onOpenFile(filePath); }}
+                onToggleWrapText={() => onWrapTextChange(!wrapText)}
+                onRequestFileAction={requestFileAction}
+              />
             ) : (
               <FileChangeList
                 gitStatus={gitStatus}

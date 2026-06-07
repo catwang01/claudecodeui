@@ -5,6 +5,9 @@ import GitDiffViewer from '../shared/GitDiffViewer';
 
 type FileChangeItemProps = {
   filePath: string;
+  /** Optional display label. When set, shown as the visible text instead of filePath.
+   *  The full filePath is then shown as a tooltip. Used by tree view to show filename only. */
+  displayName?: string;
   status: FileStatusCode;
   isMobile: boolean;
   isExpanded: boolean;
@@ -20,6 +23,7 @@ type FileChangeItemProps = {
 
 export default function FileChangeItem({
   filePath,
+  displayName,
   status,
   isMobile,
   isExpanded,
@@ -64,9 +68,9 @@ export default function FileChangeItem({
               event.stopPropagation();
               onOpenFile(filePath);
             }}
-            title="Click to open file"
+            title={displayName ? filePath : 'Click to open file'}
           >
-            {filePath}
+            {displayName ?? filePath}
           </span>
 
           <span className="flex items-center gap-1">
