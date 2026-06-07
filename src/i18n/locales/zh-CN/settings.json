@@ -84,6 +84,7 @@
     "shiftTab": "Shift+Tab",
     "arrowUp": "上箭头",
     "arrowDown": "下箭头",
+    "paste": "粘贴",
     "scrollDown": "滚动到底部",
     "handle": {
       "closePanel": "关闭快捷键面板",

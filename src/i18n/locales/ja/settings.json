@@ -84,6 +84,7 @@
     "shiftTab": "Shift+Tab",
     "arrowUp": "上矢印",
     "arrowDown": "下矢印",
+    "paste": "貼り付け",
     "scrollDown": "下にスクロール",
     "handle": {
       "closePanel": "ショートカットパネルを閉じる",

@@ -84,6 +84,7 @@
     "shiftTab": "Shift+Tab",
     "arrowUp": "Pfeil oben",
     "arrowDown": "Pfeil unten",
+    "paste": "Einfügen",
     "scrollDown": "Nach unten scrollen",
     "handle": {
       "closePanel": "Tastenkürzel-Panel schließen",
