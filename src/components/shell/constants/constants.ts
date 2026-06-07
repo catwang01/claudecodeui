@@ -10,6 +10,11 @@ export const SHELL_PING_INTERVAL_MS = 25000; // keepalive ping to prevent backgr
 export const SHELL_RESTART_DELAY_MS = 200;
 export const TERMINAL_INIT_DELAY_MS = 100;
 export const TERMINAL_RESIZE_DELAY_MS = 50;
+// Safety floor: if FitAddon computes fewer cols than this, something is wrong
+// (hidden container, layout glitch, degenerate size). Revert to previous cols.
+// The min-w-[200px] left-column CSS means legitimate width is always > 184px
+// (~21 cols), so 10 is a conservative threshold that only fires in edge cases.
+export const MIN_TERMINAL_COLS = 10;
 
 // CLI prompt overlay detection
 export const PROMPT_DEBOUNCE_MS = 500;

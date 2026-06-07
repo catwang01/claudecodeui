@@ -3,7 +3,7 @@ import type { MutableRefObject } from 'react';
 import type { FitAddon } from '@xterm/addon-fit';
 import type { Terminal } from '@xterm/xterm';
 import type { Project, ProjectSession } from '../../../types/app';
-import { SHELL_PING_INTERVAL_MS, TERMINAL_INIT_DELAY_MS } from '../constants/constants';
+import { SHELL_PING_INTERVAL_MS, MIN_TERMINAL_COLS, TERMINAL_INIT_DELAY_MS } from '../constants/constants';
 import { getShellWebSocketUrl, parseShellMessage, sendSocketMessage } from '../utils/socket';
 import { getClaudeSettings } from '../../chat/utils/chatStorage';
 import { logger } from '../../../utils/logger';
@@ -168,7 +168,22 @@ export function useShellConnection({
               return;
             }
 
-            currentFitAddon.fit();
+            // Only call fit() if the terminal element has a non-zero width.
+            // If the container is hidden or not yet laid out (e.g. shell tab just
+            // activated, right panel transition), fit() would compute a tiny column
+            // count and initialize the PTY at that wrong width.
+            // In that case keep the current cols/rows (set by a prior fit or the
+            // ResizeObserver) — the ResizeObserver will send a correct resize once
+            // the container settles to its final dimensions.
+            const terminalWidth = currentTerminal.element?.offsetWidth ?? 0;
+            if (terminalWidth > 0) {
+              currentFitAddon.fit();
+              // Safety: if fit() returned an absurdly small col count (layout glitch
+              // or hidden element), reset to 80 so the PTY starts at a usable width.
+              if (currentTerminal.cols < MIN_TERMINAL_COLS) {
+                currentTerminal.resize(80, currentTerminal.rows);
+              }
+            }
 
             sendSocketMessage(socket, {
               type: 'init',

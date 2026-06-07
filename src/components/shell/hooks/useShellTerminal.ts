@@ -7,6 +7,7 @@ import { Terminal } from '@xterm/xterm';
 import type { Project } from '../../../types/app';
 import {
   CODEX_DEVICE_AUTH_URL,
+  MIN_TERMINAL_COLS,
   TERMINAL_INIT_DELAY_MS,
   TERMINAL_OPTIONS,
   TERMINAL_RESIZE_DELAY_MS,
@@ -215,6 +216,14 @@ export function useShellTerminal({
       }
 
       currentFitAddon.fit();
+      // Safety: if the container was briefly very narrow (layout glitch, animation),
+      // FitAddon can produce an unreasonably small col count.  Revert to the previous
+      // value — it's better to keep the existing col count than to corrupt the scrollback
+      // with a tiny PTY size.
+      if (currentTerminal.cols < MIN_TERMINAL_COLS) {
+        currentTerminal.resize(Math.max(80, currentTerminal.cols), currentTerminal.rows);
+        return; // Don't send resize — the PTY is at the old (valid) size
+      }
       sendSocketMessage(wsRef.current, {
         type: 'resize',
         cols: currentTerminal.cols,
@@ -251,6 +260,11 @@ export function useShellTerminal({
         }
 
         currentFitAddon.fit();
+        // Safety: revert if fit produced an unreasonably small col count (layout glitch).
+        if (currentTerminal.cols < MIN_TERMINAL_COLS) {
+          currentTerminal.resize(Math.max(80, currentTerminal.cols), currentTerminal.rows);
+          return; // Don't send resize — PTY is at the previous valid size
+        }
         sendSocketMessage(wsRef.current, {
           type: 'resize',
           cols: currentTerminal.cols,
