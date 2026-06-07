@@ -8,6 +8,11 @@ import {
   PROMPT_MAX_OPTIONS,
   PROMPT_MIN_OPTIONS,
   PROMPT_OPTION_SCAN_LINES,
+  SHELL_IDLE_CONFIRM_MS,
+  SHELL_IDLE_CONFIRM_REQUIRED,
+  SHELL_IDLE_DETECT_MS,
+  SHELL_IDLE_MAX_RETRIES,
+  SHELL_IDLE_RETRY_MS,
   SHELL_RESTART_DELAY_MS,
 } from '../constants/constants';
 import { useShellRuntime } from '../hooks/useShellRuntime';
@@ -18,6 +23,22 @@ import ShellEmptyState from './subcomponents/ShellEmptyState';
 import ShellHeader from './subcomponents/ShellHeader';
 import ShellMinimalView from './subcomponents/ShellMinimalView';
 import TerminalShortcutsPanel from './subcomponents/TerminalShortcutsPanel';
+
+// Shell prompt detection — a cursor line that matches this pattern means the
+// CLI has returned to idle (bash/zsh/fish prompt, Claude >, Oh-My-Zsh themes, etc.).
+// Covers: $ % # ❯ > › ❱ λ » → ⟩ and similar prompt-ending characters.
+const SHELL_PROMPT_REGEX = /[\$%#❯>›❱λ»→⟩]\s*$/;
+// Spinner characters — if visible on the cursor line the session is still running.
+const SPINNER_REGEX = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/;
+
+function looksLikeIdlePrompt(line: string): boolean {
+  const stripped = line.trimEnd();
+  // Very long lines are almost certainly code/output, not a prompt.
+  // Raised to 200 to accommodate complex PS1 with git branch + path info.
+  if (stripped.length > 200) return false;
+  if (SPINNER_REGEX.test(stripped)) return false;
+  return SHELL_PROMPT_REGEX.test(stripped);
+}
 
 type CliPromptOption = { number: string; label: string };
 
@@ -30,6 +51,8 @@ type ShellProps = {
   minimal?: boolean;
   autoConnect?: boolean;
   isActive?: boolean;
+  onSessionProcessing?: ((sessionId: string) => void) | null;
+  onSessionNotProcessing?: ((sessionId: string) => void) | null;
 };
 
 export default function Shell({
@@ -41,11 +64,16 @@ export default function Shell({
   minimal = false,
   autoConnect = false,
   isActive = true,
+  onSessionProcessing = null,
+  onSessionNotProcessing = null,
 }: ShellProps) {
   const { t } = useTranslation('chat');
   const [isRestarting, setIsRestarting] = useState(false);
   const [cliPromptOptions, setCliPromptOptions] = useState<CliPromptOption[] | null>(null);
   const promptCheckTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const idleCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastCursorRef = useRef<{ x: number; y: number } | null>(null);
+  const isShellProcessingRef = useRef(false); // ref avoids stale-closure issues in async callbacks
   const onOutputRef = useRef<(() => void) | null>(null);
 
   const {
@@ -132,28 +160,107 @@ export default function Shell({
     promptCheckTimer.current = setTimeout(checkBufferForPrompt, PROMPT_DEBOUNCE_MS);
   }, [checkBufferForPrompt]);
 
-  // Wire up the onOutput callback
-  useEffect(() => {
-    onOutputRef.current = schedulePromptCheck;
-  }, [schedulePromptCheck]);
+  // Check cursor line for shell prompt → mark session as no longer processing.
+  //
+  // retryCount   — how many times we retried because the prompt was NOT visible yet.
+  // confirmCount — how many consecutive checks have BOTH seen a prompt AND a stable cursor.
+  //
+  // Two guards against false idle detection:
+  //   1. looksLikeIdlePrompt: cursor line must end with a prompt character.
+  //   2. Cursor stability: cursor X/Y must not have moved since the previous check.
+  //      A running command continuously scrolls/moves the cursor; an idle shell prompt
+  //      sits motionless. If the cursor moved → reset confirmCount and retry.
+  //
+  // We require SHELL_IDLE_CONFIRM_REQUIRED consecutive confirmations (prompt + stable)
+  // before emitting "not processing". Any new terminal output cancels the pending
+  // confirmation via scheduleIdleCheck, which clears the timer and resets lastCursorRef.
+  const checkIfIdle = useCallback((retryCount = 0, confirmCount = 0) => {
+    if (!isShellProcessingRef.current) return;
+    const term = terminalRef.current;
+    if (!term) return;
+    const buf = term.buffer.active;
+    const curX = buf.cursorX;
+    const curY = buf.baseY + buf.cursorY;
+    const prev = lastCursorRef.current;
+    const isCursorStable = prev !== null && prev.x === curX && prev.y === curY;
+    lastCursorRef.current = { x: curX, y: curY };
 
-  // Cleanup prompt check timer on unmount
+    const cursorLine = buf.getLine(curY)?.translateToString().trimEnd() ?? '';
+
+    if (looksLikeIdlePrompt(cursorLine) && isCursorStable) {
+      const nextConfirm = confirmCount + 1;
+      if (nextConfirm >= SHELL_IDLE_CONFIRM_REQUIRED && selectedSession?.id) {
+        // All confirmations passed — the shell is genuinely idle.
+        isShellProcessingRef.current = false;
+        onSessionNotProcessing?.(selectedSession.id);
+        return;
+      }
+      // Need more confirmations — schedule next check soon.
+      // New output will cancel this via scheduleIdleCheck → no flicker.
+      idleCheckTimerRef.current = setTimeout(
+        () => checkIfIdle(retryCount, nextConfirm),
+        SHELL_IDLE_CONFIRM_MS,
+      );
+      return;
+    }
+
+    // Prompt not yet visible, or cursor moved (command still running) —
+    // reset confirmCount and retry if within limit.
+    if (retryCount < SHELL_IDLE_MAX_RETRIES) {
+      idleCheckTimerRef.current = setTimeout(
+        () => checkIfIdle(retryCount + 1, 0),
+        SHELL_IDLE_RETRY_MS,
+      );
+    }
+  }, [terminalRef, selectedSession?.id, onSessionNotProcessing]);
+
+  const scheduleIdleCheck = useCallback(() => {
+    if (idleCheckTimerRef.current) clearTimeout(idleCheckTimerRef.current);
+    lastCursorRef.current = null; // reset cursor baseline for this debounce cycle
+    idleCheckTimerRef.current = setTimeout(checkIfIdle, SHELL_IDLE_DETECT_MS);
+  }, [checkIfIdle]);
+
+  // Combined output handler: marks as processing + schedules both checks.
+  const handleOutput = useCallback(() => {
+    if (!isShellProcessingRef.current && isConnected && selectedSession?.id) {
+      isShellProcessingRef.current = true;
+      onSessionProcessing?.(selectedSession.id);
+    }
+    schedulePromptCheck();
+    scheduleIdleCheck();
+  }, [isConnected, selectedSession?.id, onSessionProcessing, schedulePromptCheck, scheduleIdleCheck]);
+
+  // Wire up the combined output callback
+  useEffect(() => {
+    onOutputRef.current = handleOutput;
+  }, [handleOutput]);
+
+  // Cleanup both timers on unmount
   useEffect(() => {
     return () => {
       if (promptCheckTimer.current) clearTimeout(promptCheckTimer.current);
+      if (idleCheckTimerRef.current) clearTimeout(idleCheckTimerRef.current);
     };
   }, []);
 
-  // Clear stale prompt options and cancel pending timer on disconnect
+  // Clear stale prompt options, cancel timers, and reset processing state on disconnect
   useEffect(() => {
     if (!isConnected) {
       if (promptCheckTimer.current) {
         clearTimeout(promptCheckTimer.current);
         promptCheckTimer.current = null;
       }
+      if (idleCheckTimerRef.current) {
+        clearTimeout(idleCheckTimerRef.current);
+        idleCheckTimerRef.current = null;
+      }
       setCliPromptOptions(null);
+      if (isShellProcessingRef.current && selectedSession?.id) {
+        isShellProcessingRef.current = false;
+        onSessionNotProcessing?.(selectedSession.id);
+      }
     }
-  }, [isConnected]);
+  }, [isConnected, selectedSession?.id, onSessionNotProcessing]);
 
   useEffect(() => {
     if (!isActive || !isInitialized || !isConnected) {

@@ -1,6 +1,11 @@
 import type { ITerminalOptions } from '@xterm/xterm';
 
 export const CODEX_DEVICE_AUTH_URL = 'https://auth.openai.com/codex/device';
+export const SHELL_IDLE_DETECT_MS = 10000;  // wait 10 s of silence before first idle check
+export const SHELL_IDLE_RETRY_MS = 2000;    // interval between retries when prompt not yet visible
+export const SHELL_IDLE_MAX_RETRIES = 3;    // give up after 3 retries (~6 s extra)
+export const SHELL_IDLE_CONFIRM_MS = 2000;  // interval between consecutive confirmations
+export const SHELL_IDLE_CONFIRM_REQUIRED = 2; // consecutive stable idle checks needed
 export const SHELL_PING_INTERVAL_MS = 25000; // keepalive ping to prevent background WebSocket timeout
 export const SHELL_RESTART_DELAY_MS = 200;
 export const TERMINAL_INIT_DELAY_MS = 100;

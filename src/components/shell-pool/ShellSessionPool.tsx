@@ -14,6 +14,8 @@ type ShellSessionPoolProps = {
   project: Project;
   activeSession: ProjectSession | null | undefined;
   isActive: boolean;
+  onSessionProcessing?: ((sessionId: string) => void) | null;
+  onSessionNotProcessing?: ((sessionId: string) => void) | null;
 };
 
 const IDLE_TIMEOUT_MS = 60 * 60 * 1000; // 1 hour
@@ -23,6 +25,8 @@ export default function ShellSessionPool({
   project,
   activeSession,
   isActive,
+  onSessionProcessing = null,
+  onSessionNotProcessing = null,
 }: ShellSessionPoolProps) {
   const [pool, setPool] = useState<Map<string, PoolEntry>>(new Map());
 
@@ -89,6 +93,8 @@ export default function ShellSessionPool({
               selectedSession={session}
               isActive={isActive && isVisible}
               autoConnect={isActive && isVisible}
+              onSessionProcessing={onSessionProcessing}
+              onSessionNotProcessing={onSessionNotProcessing}
             />
           </div>
         );

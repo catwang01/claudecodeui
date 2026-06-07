@@ -50,6 +50,9 @@ export type MainContentProps = {
   onSessionInactive: SessionLifecycleHandler;
   onSessionProcessing: SessionProcessingHandler;
   onSessionNotProcessing: SessionLifecycleHandler;
+  // Shell-specific callbacks — isolated from chat so they don't override each other
+  onShellSessionProcessing: SessionLifecycleHandler;
+  onShellSessionNotProcessing: SessionLifecycleHandler;
   processingSessions: Set<string>;
   onReplaceTemporarySession: SessionLifecycleHandler;
   onNavigateToSession: (targetSessionId: string) => void;

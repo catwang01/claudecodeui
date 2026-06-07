@@ -33,6 +33,8 @@ export default function AppContent() {
     markSessionAsProcessing,
     batchMarkSessionsAsProcessing,
     markSessionAsNotProcessing,
+    markShellSessionAsProcessing,
+    markShellSessionAsNotProcessing,
     replaceTemporarySession,
   } = useSessionProtection();
 
@@ -241,6 +243,8 @@ export default function AppContent() {
           onSessionInactive={markSessionAsInactive}
           onSessionProcessing={markSessionAsProcessing}
           onSessionNotProcessing={markSessionAsNotProcessing}
+          onShellSessionProcessing={markShellSessionAsProcessing}
+          onShellSessionNotProcessing={markShellSessionAsNotProcessing}
           processingSessions={processingSessions}
           onReplaceTemporarySession={replaceTemporarySession}
           onNavigateToSession={(targetSessionId: string) => navigate(`/session/${targetSessionId}`)}

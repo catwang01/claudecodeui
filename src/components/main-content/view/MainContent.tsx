@@ -43,6 +43,8 @@ function MainContent({
   onSessionInactive,
   onSessionProcessing,
   onSessionNotProcessing,
+  onShellSessionProcessing,
+  onShellSessionNotProcessing,
   processingSessions,
   onReplaceTemporarySession,
   onNavigateToSession,
@@ -167,6 +169,8 @@ function MainContent({
               project={selectedProject}
               activeSession={selectedSession}
               isActive={activeTab === 'shell'}
+              onSessionProcessing={onShellSessionProcessing}
+              onSessionNotProcessing={onShellSessionNotProcessing}
             />
           </div>
 
