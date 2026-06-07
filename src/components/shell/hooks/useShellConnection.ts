@@ -58,6 +58,15 @@ export function useShellConnection({
   const [isConnecting, setIsConnecting] = useState(false);
   const connectingRef = useRef(false);
   const userDisconnectedRef = useRef(false);
+  // connectionFailedRef: set when a fresh connection attempt fails before onopen fires.
+  // Blocks the auto-reconnect loop so "Continue in Shell" button stays visible and clickable.
+  // Cleared by: connectToShell() (user action), disconnectFromShell(), or autoConnect false→true.
+  const connectionFailedRef = useRef(false);
+  // hasConnectedSuccessfullyRef: tracks whether onopen fired for the current connection attempt.
+  // Reset on each connectToShell() call so onclose/onerror can distinguish "never connected" vs "dropped".
+  const hasConnectedSuccessfullyRef = useRef(false);
+  // prevAutoConnectRef: detects autoConnect false→true transitions to reset connectionFailedRef.
+  const prevAutoConnectRef = useRef(false);
 
   const handleProcessCompletion = useCallback(
     (output: string) => {
@@ -128,6 +137,7 @@ export function useShellConnection({
         if (!wsUrl) {
           connectingRef.current = false;
           setIsConnecting(false);
+          connectionFailedRef.current = true;
           return;
         }
 
@@ -137,6 +147,7 @@ export function useShellConnection({
         wsRef.current = socket;
 
         socket.onopen = () => {
+          hasConnectedSuccessfullyRef.current = true;
           setIsConnected(true);
           setIsConnecting(false);
           connectingRef.current = false;
@@ -176,6 +187,12 @@ export function useShellConnection({
           setIsConnected(false);
           setIsConnecting(false);
           connectingRef.current = false;
+          // If onopen never fired for this attempt, mark failure to stop the auto-reconnect
+          // loop. This keeps the "Continue in Shell" button stable and clickable.
+          // If the connection *was* established and then dropped, allow auto-reconnect.
+          if (!hasConnectedSuccessfullyRef.current) {
+            connectionFailedRef.current = true;
+          }
           // Intentionally NOT calling clearTerminalScreen() here so that
           // existing terminal content remains visible when the socket drops
           // (e.g. while the shell tab is hidden). The server replays buffered
@@ -186,11 +203,13 @@ export function useShellConnection({
           setIsConnected(false);
           setIsConnecting(false);
           connectingRef.current = false;
+          connectionFailedRef.current = true;
         };
       } catch {
         setIsConnected(false);
         setIsConnecting(false);
         connectingRef.current = false;
+        connectionFailedRef.current = true;
       }
     },
     [
@@ -215,6 +234,8 @@ export function useShellConnection({
     }
 
     userDisconnectedRef.current = false;
+    connectionFailedRef.current = false;
+    hasConnectedSuccessfullyRef.current = false;
     connectingRef.current = true;
     setIsConnecting(true);
     connectWebSocket(true);
@@ -232,11 +253,19 @@ export function useShellConnection({
     setIsConnected(false);
     setIsConnecting(false);
     connectingRef.current = false;
+    connectionFailedRef.current = false;
     setAuthUrl('');
   }, [clearTerminalScreen, closeSocket, setAuthUrl]);
 
   useEffect(() => {
-    if (!autoConnect || !isInitialized || isConnecting || isConnected || userDisconnectedRef.current) {
+    // When autoConnect transitions false→true (shell tab becomes visible again),
+    // reset the failure flag so we can attempt reconnection after a previous failure.
+    if (autoConnect && !prevAutoConnectRef.current) {
+      connectionFailedRef.current = false;
+    }
+    prevAutoConnectRef.current = autoConnect;
+
+    if (!autoConnect || !isInitialized || isConnecting || isConnected || userDisconnectedRef.current || connectionFailedRef.current) {
       return;
     }
 
