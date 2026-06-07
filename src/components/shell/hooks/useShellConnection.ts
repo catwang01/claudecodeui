@@ -96,7 +96,13 @@ export function useShellConnection({
       if (message.type === 'output') {
         const output = typeof message.data === 'string' ? message.data : '';
         handleProcessCompletion(output);
-        terminalRef.current?.write(output);
+        const term = terminalRef.current;
+        if (term) {
+          // Use the write callback so scrollToBottom runs after xterm has
+          // actually rendered the new rows — calling it synchronously would
+          // scroll before the content is in the viewport.
+          term.write(output, () => term.scrollToBottom());
+        }
         onOutputRef?.current?.();
         return;
       }
