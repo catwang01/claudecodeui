@@ -2394,6 +2394,12 @@ function handleShellConnection(ws) {
                     console.log('Terminal resize requested:', data.cols, 'x', data.rows);
                     shellProcess.resize(data.cols, data.rows);
                 }
+            } else if (data.type === 'ping') {
+                // Keepalive ping from client — respond with pong to confirm the
+                // connection is alive and reset any proxy idle-timeout counters.
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'pong' }));
+                }
             }
         } catch (error) {
             console.error('[ERROR] Shell WebSocket error:', error.message);

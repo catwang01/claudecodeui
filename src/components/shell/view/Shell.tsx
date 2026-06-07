@@ -197,6 +197,27 @@ export default function Shell({
     }, SHELL_RESTART_DELAY_MS);
   }, []);
 
+  // Debug: log whenever the connecting/loading overlay becomes visible so we
+  // can trace *why* it appeared (network drop, first connect, restart, etc.)
+  const prevOverlayModeRef = useRef<string | null>(null);
+  useEffect(() => {
+    const mode = !isInitialized ? 'loading' : isConnecting ? 'connecting' : !isConnected ? 'connect' : null;
+    if (mode !== null && mode !== prevOverlayModeRef.current) {
+      console.log('[Shell] overlay appeared:', {
+        mode,
+        projectPath: selectedProject?.path ?? null,
+        sessionId: selectedSession?.id ?? null,
+        isInitialized,
+        isConnecting,
+        isConnected,
+        autoConnect,
+        isActive,
+        isRestarting,
+      });
+    }
+    prevOverlayModeRef.current = mode;
+  }, [isInitialized, isConnecting, isConnected, selectedProject?.path, selectedSession?.id, autoConnect, isActive, isRestarting]);
+
   if (!selectedProject) {
     return (
       <ShellEmptyState

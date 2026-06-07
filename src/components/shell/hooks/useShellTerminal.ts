@@ -71,6 +71,10 @@ export function useShellTerminal({
   }, [terminalRef]);
 
   const disposeTerminal = useCallback(() => {
+    console.log('[Shell] disposeTerminal called', {
+      hadTerminal: Boolean(terminalRef.current),
+      stack: new Error().stack?.split('\n').slice(1, 5).join(' | '),
+    });
     if (terminalRef.current) {
       terminalRef.current.dispose();
       terminalRef.current = null;
@@ -203,6 +207,13 @@ export function useShellTerminal({
         return;
       }
 
+      // Skip if container is hidden at init time (e.g. terminal created while
+      // the Shell tab is not active). The ResizeObserver will fire a correct
+      // fit once the container becomes visible.
+      if (terminalContainerRef.current && terminalContainerRef.current.offsetWidth === 0) {
+        return;
+      }
+
       currentFitAddon.fit();
       sendSocketMessage(wsRef.current, {
         type: 'resize',
@@ -232,6 +243,13 @@ export function useShellTerminal({
           return;
         }
 
+        // Skip resize when container is hidden — FitAddon.proposeDimensions()
+        // has no guard for zero-dimension containers and will resize to the
+        // minimum 2×1, corrupting the scrollback buffer.
+        if (terminalContainerRef.current && terminalContainerRef.current.offsetWidth === 0) {
+          return;
+        }
+
         currentFitAddon.fit();
         sendSocketMessage(wsRef.current, {
           type: 'resize',
@@ -244,6 +262,13 @@ export function useShellTerminal({
     resizeObserver.observe(terminalContainerRef.current);
 
     return () => {
+      console.log('[Shell] useShellTerminal effect cleanup — terminal will be disposed', {
+        hasTerminal: Boolean(terminalRef.current),
+        isRestarting,
+        hasSelectedProject,
+        selectedProjectKey,
+        minimal,
+      });
       terminalContainerRef.current?.removeEventListener('copy', handleTerminalCopy);
       resizeObserver.disconnect();
       if (resizeTimeoutRef.current !== null) {

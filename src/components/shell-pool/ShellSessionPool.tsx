@@ -4,6 +4,9 @@ import Shell from '../shell/view/Shell';
 
 type PoolEntry = {
   session: ProjectSession;
+  // Store the project alongside the session so Shell instances survive project
+  // switches — the pool is no longer cleared when the active project changes.
+  project: Project;
   lastActiveAt: number;
 };
 
@@ -22,33 +25,24 @@ export default function ShellSessionPool({
   isActive,
 }: ShellSessionPoolProps) {
   const [pool, setPool] = useState<Map<string, PoolEntry>>(new Map());
-  const projectPathRef = useRef(project.path);
-
-  // When project changes, clear pool so stale sessions from old project are dropped
-  useEffect(() => {
-    if (projectPathRef.current !== project.path) {
-      projectPathRef.current = project.path;
-      setPool(new Map());
-    }
-  }, [project.path]);
 
   // Add new session to pool when first seen; for existing sessions only update lastActiveAt
-  // (preserve the original session object reference so Shell does not get new props)
+  // (preserve the original session + project references so Shell does not get new props)
   useEffect(() => {
     if (!activeSession) return;
     setPool((prev) => {
       const next = new Map(prev);
       const existing = prev.get(activeSession.id);
       if (existing) {
-        // Already in pool - preserve session reference, only refresh timestamp
+        // Already in pool — preserve session/project references, only refresh timestamp
         next.set(activeSession.id, { ...existing, lastActiveAt: Date.now() });
       } else {
-        // New session - add to pool
-        next.set(activeSession.id, { session: activeSession, lastActiveAt: Date.now() });
+        // New session — capture both session and project at entry time
+        next.set(activeSession.id, { session: activeSession, project, lastActiveAt: Date.now() });
       }
       return next;
     });
-  }, [activeSession]);
+  }, [activeSession, project]);
 
   // Cleanup idle sessions every 5 minutes
   useEffect(() => {
@@ -74,7 +68,7 @@ export default function ShellSessionPool({
   const entries = Array.from(pool.values());
   const allEntries =
     activeSession && !pool.has(activeSession.id)
-      ? [...entries, { session: activeSession, lastActiveAt: Date.now() }]
+      ? [...entries, { session: activeSession, project, lastActiveAt: Date.now() }]
       : entries;
 
   if (allEntries.length === 0) {
@@ -83,7 +77,7 @@ export default function ShellSessionPool({
 
   return (
     <>
-      {allEntries.map(({ session }) => {
+      {allEntries.map(({ session, project: entryProject }) => {
         const isVisible = session.id === activeSession?.id;
         return (
           <div
@@ -91,7 +85,7 @@ export default function ShellSessionPool({
             className={`h-full w-full ${isVisible ? 'block' : 'hidden'}`}
           >
             <Shell
-              selectedProject={project}
+              selectedProject={entryProject}
               selectedSession={session}
               isActive={isActive && isVisible}
               autoConnect={isActive && isVisible}

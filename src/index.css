@@ -730,9 +730,13 @@
     hyphens: auto;
   }
 
-  /* Force wrap long URLs and code */
+  /* Force wrap long URLs and code — only inside <pre> blocks.
+     Do NOT apply to standalone <code> elements (e.g. tool-call inputs rendered
+     by OneLineDisplay) because those rely on white-space:nowrap + overflow
+     truncation. Using the `pre code` descendant selector keeps the rule
+     scoped to fenced-code blocks inside markdown. */
   .chat-message pre,
-  .chat-message code {
+  .chat-message pre code {
     white-space: pre-wrap !important;
     word-break: break-all;
     overflow-wrap: break-word;

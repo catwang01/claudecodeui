@@ -3,7 +3,7 @@ import type { MutableRefObject } from 'react';
 import type { FitAddon } from '@xterm/addon-fit';
 import type { Terminal } from '@xterm/xterm';
 import type { Project, ProjectSession } from '../../../types/app';
-import { TERMINAL_INIT_DELAY_MS } from '../constants/constants';
+import { SHELL_PING_INTERVAL_MS, TERMINAL_INIT_DELAY_MS } from '../constants/constants';
 import { getShellWebSocketUrl, parseShellMessage, sendSocketMessage } from '../utils/socket';
 import { getClaudeSettings } from '../../chat/utils/chatStorage';
 import { logger } from '../../../utils/logger';
@@ -170,7 +170,10 @@ export function useShellConnection({
           setIsConnected(false);
           setIsConnecting(false);
           connectingRef.current = false;
-          clearTerminalScreen();
+          // Intentionally NOT calling clearTerminalScreen() here so that
+          // existing terminal content remains visible when the socket drops
+          // (e.g. while the shell tab is hidden). The server replays buffered
+          // output on reconnect, so the user won't miss anything.
         };
 
         socket.onerror = () => {
@@ -233,6 +236,23 @@ export function useShellConnection({
 
     connectToShell();
   }, [autoConnect, connectToShell, isConnected, isConnecting, isInitialized]);
+
+  // Keepalive: send a ping every SHELL_PING_INTERVAL_MS while connected to
+  // prevent network/proxy idle-timeout from silently dropping the WebSocket
+  // (especially important for background sessions that have no user activity).
+  useEffect(() => {
+    if (!isConnected) {
+      return;
+    }
+
+    const pingInterval = window.setInterval(() => {
+      sendSocketMessage(wsRef.current, { type: 'ping' });
+    }, SHELL_PING_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(pingInterval);
+    };
+  }, [isConnected, wsRef]);
 
   return {
     isConnected,

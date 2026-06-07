@@ -29,7 +29,11 @@ export type ShellInputMessage = {
   data: string;
 };
 
-export type ShellOutgoingMessage = ShellInitMessage | ShellResizeMessage | ShellInputMessage;
+export type ShellPingMessage = {
+  type: 'ping';
+};
+
+export type ShellOutgoingMessage = ShellInitMessage | ShellResizeMessage | ShellInputMessage | ShellPingMessage;
 
 export type ShellIncomingMessage =
   | { type: 'output'; data: string }
