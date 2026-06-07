@@ -2141,6 +2141,21 @@ function handleShellConnection(ws) {
 
                     clearTimeout(existingSession.timeoutId);
 
+                    // Resize the PTY to match the reconnecting client's terminal dimensions.
+                    // The client sends the fitted cols/rows in the init message; applying them
+                    // here ensures Claude CLI (and other TUI tools) wrap at the correct column
+                    // count after a Restart or tab-switch reconnect.
+                    // Note: the resize message fired by fitAddon.fit() arrives *before* init
+                    // and is silently dropped because shellProcess is still null at that point.
+                    if (data.cols && data.rows && shellProcess && shellProcess.resize) {
+                        try {
+                            shellProcess.resize(data.cols, data.rows);
+                            console.log(`📐 PTY resized on reconnect: ${data.cols}x${data.rows}`);
+                        } catch (resizeErr) {
+                            console.warn('[Shell] PTY resize on reconnect failed:', resizeErr.message);
+                        }
+                    }
+
                     ws.send(JSON.stringify({
                         type: 'output',
                         data: `\x1b[36m[Reconnected to existing session]\x1b[0m\r\n`
