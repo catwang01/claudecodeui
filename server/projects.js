@@ -722,6 +722,92 @@ function refreshProjectSessions(cachedProject, projectPath) {
 }
 
 /**
+ * Surgically update a single session in a cached project object.
+ * O(1) lookups vs refreshProjectSessions's O(N) batch queries over all sessions.
+ * Returns true on success, false if the session/project can't be found (caller should fall back).
+ */
+function surgicallyUpdateSession(cachedProject, sessionId) {
+  if (!cachedProject || !sessionId) return false;
+
+  const row = sessionsDb.getSessionById(sessionId);
+  if (!row || !row.jsonl_path) return false;
+
+  const excludedSessionIds = buildExcludedSessionIds('claude');
+
+  if (excludedSessionIds.has(sessionId)) {
+    // Excluded session — remove from cache if present
+    const idx = cachedProject.sessions.findIndex(s => s.id === sessionId);
+    if (idx >= 0) cachedProject.sessions.splice(idx, 1);
+    return true;
+  }
+
+  const cached = sessionFileCache.get(row.jsonl_path);
+  let session;
+  if (cached?.session_id) {
+    const lastActivity = cached.last_activity
+      ? new Date(cached.last_activity)
+      : new Date(cached.updated_at || 0);
+    session = {
+      id: row.session_id,
+      summary: row.custom_name
+        || (cached.last_user_message
+          ? (cached.last_user_message.length > 50
+            ? cached.last_user_message.slice(0, 50) + '...'
+            : cached.last_user_message)
+          : 'New Session'),
+      messageCount: cached.message_count || 0,
+      lastActivity,
+      cwd: cached.cwd || '',
+      lastUserMessage: cached.last_user_message || null,
+      lastAssistantMessage: cached.last_assistant_message || null,
+    };
+  } else {
+    // Cache miss — use what we have from the sessions row, backfill async
+    scheduleSessionFileMeta(row.jsonl_path);
+    session = {
+      id: row.session_id,
+      summary: row.custom_name || 'New Session',
+      messageCount: 0,
+      lastActivity: new Date(row.updated_at || 0),
+      cwd: row.project_path || '',
+      lastUserMessage: null,
+      lastAssistantMessage: null,
+    };
+  }
+
+  // Apply the same decorators as refreshProjectSessions, but on a 1-element array
+  const sessionArr = [session];
+  applyCustomSessionNames(sessionArr, 'claude');
+  applyHiddenFromRecents(sessionArr, 'claude');
+  applyAutoDocFlag(sessionArr, 'claude');
+  applyLastAutoDocAt(sessionArr, 'claude');
+  filterHiddenAutoDocSessions(sessionArr);
+  applyReadState(sessionArr, 'claude');
+
+  const idx = cachedProject.sessions.findIndex(s => s.id === sessionId);
+  if (sessionArr.length === 0) {
+    // Filtered out by a decorator (e.g. hidden auto-doc) — remove from cache
+    if (idx >= 0) cachedProject.sessions.splice(idx, 1);
+  } else {
+    if (idx >= 0) {
+      cachedProject.sessions[idx] = sessionArr[0];
+    } else {
+      cachedProject.sessions.push(sessionArr[0]);
+    }
+  }
+
+  // Re-sort by lastActivity descending and enforce the 15-session cap
+  cachedProject.sessions.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
+  if (cachedProject.sessions.length > 15) {
+    cachedProject.sessions = cachedProject.sessions.slice(0, 15);
+  }
+  const total = sessionsDb.countSessionsByProjectPath(row.project_path);
+  cachedProject.sessionMeta = { hasMore: total > 15, total };
+
+  return true;
+}
+
+/**
  * Refresh a single project by its filesystem path (full rebuild including all providers).
  * Used as fallback when the cache is cold or a non-session change occurs.
  * Returns null if the project is not found in the DB.
@@ -3036,6 +3122,7 @@ export {
   getProject,
   getProjectGitBranch,
   refreshProjectSessions,
+  surgicallyUpdateSession,
   getSessions,
   getSessionMessages,
   getSessionFileMeta,

@@ -89,7 +89,7 @@ import pty from 'node-pty';
 import fetch from 'node-fetch';
 import mime from 'mime-types';
 
-import { getProjects, getProject, refreshProjectSessions, getSessions, renameProject, deleteSession, forkSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, clearSessionMessagesCache, searchConversations, getSessionFileMeta } from './projects.js';
+import { getProjects, getProject, refreshProjectSessions, surgicallyUpdateSession, getSessions, renameProject, deleteSession, forkSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, clearSessionMessagesCache, searchConversations, getSessionFileMeta } from './projects.js';
 import { clearFetchHistoryCache } from './providers/claude/adapter.js';
 import { queryClaudeSDK, abortClaudeSDKSession, isClaudeSDKSessionActive, getClaudeSDKSessionStartTime, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
 let queryCopilotSDK, abortCopilotSession, isCopilotSessionActive, getCopilotSessionStartTime, getActiveCopilotSessions;
@@ -303,39 +303,47 @@ async function setupProjectsWatcher() {
             let updatedProjects;
 
             // Fast path: if we know which sessions changed and have a cached project list,
-            // only rebuild those specific projects instead of all projects.
+            // surgically update only those specific sessions instead of rebuilding the whole project.
             // Falls back to full getProjects() if the cache is cold or the project can't be found.
-            const changedPaths = new Set();
+            const changedByProject = new Map(); // projectPath → sessionId[]
             for (const sid of sessionIds) {
                 try {
                     const row = sessionsDb.getSessionById(sid);
-                    if (row?.project_path) changedPaths.add(row.project_path);
+                    if (row?.project_path) {
+                        const arr = changedByProject.get(row.project_path) || [];
+                        arr.push(sid);
+                        changedByProject.set(row.project_path, arr);
+                    }
                 } catch { /* ignore lookup errors */ }
             }
 
             // Capture reference before any awaits — a concurrent full rebuild could replace
             // _cachedProjectsList while we're inside the loop, causing stale writes.
             const cachedRef = _cachedProjectsList;
-            let fastPathViable = changedPaths.size > 0 && !!cachedRef;
+            let fastPathViable = changedByProject.size > 0 && !!cachedRef;
 
             if (fastPathViable) {
-                // Targeted refresh: only update Claude sessions (from DB) in each affected project.
+                // Targeted refresh: only update the changed sessions (from DB/file-cache).
                 // Non-Claude providers (git branch, cursor, gemini, taskmaster) are unchanged
                 // when a JSONL file is written — skip them entirely to avoid spawning git/SQLite reads.
                 const _t0 = Date.now();
-                console.log(`[flushBroadcast] fast-path projects=[${[...changedPaths].map(p => path.basename(p)).join(',')}]`);
-                for (const projectPath of changedPaths) {
+                const projectNames = [...changedByProject.keys()].map(p => path.basename(p)).join(',');
+                const sidCount = [...changedByProject.values()].reduce((n, a) => n + a.length, 0);
+                console.log(`[flushBroadcast] fast-path projects=[${projectNames}] sessions=${sidCount}`);
+                outer: for (const [projectPath, sids] of changedByProject) {
                     const idx = cachedRef.findIndex(p => p.path === projectPath);
                     if (idx < 0) {
                         // New project not in cache — fall back to full rebuild
                         fastPathViable = false;
                         break;
                     }
-                    const ok = refreshProjectSessions(cachedRef[idx], projectPath);
-                    if (!ok) {
-                        // Project deleted or unreadable — fall back to full rebuild
-                        fastPathViable = false;
-                        break;
+                    for (const sid of sids) {
+                        const ok = surgicallyUpdateSession(cachedRef[idx], sid);
+                        if (!ok) {
+                            // Session deleted or unreadable — fall back to full rebuild
+                            fastPathViable = false;
+                            break outer;
+                        }
                     }
                 }
                 if (fastPathViable) console.log(`[flushBroadcast] fast-path done ${Date.now()-_t0}ms`);
@@ -347,7 +355,7 @@ async function setupProjectsWatcher() {
                 updatedProjects = (_cachedProjectsList === cachedRef) ? cachedRef : _cachedProjectsList;
             } else {
                 // Full rebuild: cache is cold, sessionId→project lookup failed, or project deleted
-                console.log(`[flushBroadcast] full-rebuild  reason: cachedList=${!!_cachedProjectsList} changedPaths=${changedPaths.size} sessionIds=[${[...sessionIds].join(',')}]`);
+                console.log(`[flushBroadcast] full-rebuild  reason: cachedList=${!!_cachedProjectsList} changedProjects=${changedByProject.size} sessionIds=[${[...sessionIds].join(',')}]`);
                 updatedProjects = await getProjects();
                 _cachedProjectsList = updatedProjects;
             }
