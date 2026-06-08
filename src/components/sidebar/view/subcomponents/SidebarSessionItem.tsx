@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { Check, Clock, Edit2, EyeOff, Folder, Sparkles, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { Badge, Button } from '../../../../shared/view/ui';
@@ -59,7 +59,26 @@ type RecentsProps = {
 
 type SidebarSessionItemProps = DefaultProps | RecentsProps;
 
-export default function SidebarSessionItem(props: SidebarSessionItemProps) {
+// Props equality for React.memo — session reference is the primary guard.
+// Stable session refs are maintained by useProjectsState.setProjects, so reference equality
+// is a cheap O(1) proxy for "session data unchanged." This prevents all sessions in an active
+// project from re-rendering on every projects_updated broadcast (only the one changed session
+// gets a new reference).
+function sessionItemPropsAreEqual(prev: SidebarSessionItemProps, next: SidebarSessionItemProps): boolean {
+  if (prev.session !== next.session) return false;
+  if (prev.isProcessing !== next.isProcessing) return false;
+  if (prev.isRead !== next.isRead) return false;
+  if (prev.variant !== next.variant) return false;
+  if (prev.variant !== 'recents' && next.variant !== 'recents') {
+    // default variant: also check selection / editing state
+    if ((prev as DefaultProps).selectedSession?.id !== (next as DefaultProps).selectedSession?.id) return false;
+    if ((prev as DefaultProps).editingSession !== (next as DefaultProps).editingSession) return false;
+    if ((prev as DefaultProps).editingSessionName !== (next as DefaultProps).editingSessionName) return false;
+  }
+  return true;
+}
+
+export default memo(function SidebarSessionItem(props: SidebarSessionItemProps) {
   const { project, session, currentTime, isProcessing = false, t } = props;
   const sessionView = createSessionViewModel(session, currentTime, t, isProcessing);
   const { awaitingPermissionSessions } = useAwaitingPermissions();
@@ -463,4 +482,4 @@ export default function SidebarSessionItem(props: SidebarSessionItemProps) {
       </div>
     </div>
   );
-}
+}, sessionItemPropsAreEqual);

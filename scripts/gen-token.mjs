@@ -1,0 +1,10 @@
+import path from 'path';
+import os from 'os';
+process.env.DATABASE_PATH = path.join(os.homedir(), '.cloudcli/auth.db');
+const { default: Database } = await import('better-sqlite3');
+const db = new Database(process.env.DATABASE_PATH);
+const row = db.prepare("SELECT value FROM app_config WHERE key='jwt_secret'").get();
+const secret = row.value;
+const user = db.prepare('SELECT id, username FROM users LIMIT 1').get();
+const jwt = (await import('jsonwebtoken')).default;
+process.stdout.write(jwt.sign({ userId: user.id, username: user.username }, secret, { expiresIn: '1h' }));

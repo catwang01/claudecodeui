@@ -558,15 +558,32 @@ async function extractProjectDirectory(projectName) {
   }
 }
 
+// TTL cache for buildExcludedSessionIds — these sets (auto-doc IDs + hidden IDs) change
+// very rarely (only when user creates/hides sessions), but are queried on every fast-path
+// surgicallyUpdateSession call (2-3× per second during active sessions).
+// A 15-second TTL eliminates ~90 redundant SQLite queries per minute without any staleness risk.
+const _excludedSessionIdsCache = new Map(); // provider → { set, time }
+const EXCLUDED_IDS_TTL_MS = 15_000;
+
+function invalidateExcludedSessionIdsCache() {
+  _excludedSessionIdsCache.clear();
+}
+
 // Returns a Set of session IDs that should be excluded from all views:
 // auto-doc fork sessions + user-hidden-from-recents sessions.
 // Used by both getProjects and searchConversations to keep filtering consistent.
 function buildExcludedSessionIds(provider = 'claude') {
+  const cached = _excludedSessionIdsCache.get(provider);
+  if (cached && Date.now() - cached.time < EXCLUDED_IDS_TTL_MS) {
+    return cached.set;
+  }
   const hideAutoDocRaw = appConfigDb.get('auto_doc_hide_sessions');
   const hideAutoDoc = hideAutoDocRaw === null ? true : hideAutoDocRaw === 'true';
   const autoDocIds = hideAutoDoc ? sessionDb.getAllAutoDocSessionIds(provider) : new Set();
   const hiddenIds = sessionDb.getAllHiddenSessionIds(provider);
-  return new Set([...autoDocIds, ...hiddenIds]);
+  const result = new Set([...autoDocIds, ...hiddenIds]);
+  _excludedSessionIdsCache.set(provider, { set: result, time: Date.now() });
+  return result;
 }
 
 /**
@@ -3143,5 +3160,6 @@ export {
   getGeminiCliSessions,
   getGeminiCliSessionMessages,
   searchConversations,
-  extractTextFromContent
+  extractTextFromContent,
+  invalidateExcludedSessionIdsCache
 };

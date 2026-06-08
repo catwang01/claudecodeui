@@ -13,7 +13,7 @@ import os from 'os';
 import { promises as fs } from 'fs';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { sessionDb, appConfigDb, sessionFileCache } from './database/db.js';
-import { forkSession } from './projects.js';
+import { forkSession, invalidateExcludedSessionIdsCache } from './projects.js';
 import { getActiveClaudeSDKSessions } from './claude-sdk.js';
 
 const DEFAULT_INTERVAL_MS = parseInt(process.env.AUTO_DOC_INTERVAL_MS, 10) || 30 * 60 * 1000;
@@ -160,6 +160,7 @@ async function runSession(session, config) {
 
   // Mark the fork immediately so the frontend can identify it as an auto-doc session
   sessionDb.markAsAutoDocSession(forkedSessionId, session.id, 'claude');
+  invalidateExcludedSessionIdsCache();
 
   const env = { ...process.env };
   delete env.CLAUDECODE;

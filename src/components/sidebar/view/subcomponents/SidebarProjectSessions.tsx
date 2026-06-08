@@ -1,4 +1,5 @@
 import { ChevronDown, Plus } from 'lucide-react';
+import { memo } from 'react';
 import type { TFunction } from 'i18next';
 import { Button } from '../../../../shared/view/ui';
 import type { Project, ProjectSession, SessionProvider } from '../../../../types/app';
@@ -52,7 +53,7 @@ function SessionListSkeleton() {
   );
 }
 
-export default function SidebarProjectSessions({
+export default memo(function SidebarProjectSessions({
   project,
   isExpanded,
   sessions,
@@ -160,4 +161,15 @@ export default function SidebarProjectSessions({
       )}
     </div>
   );
-}
+}, (prev, next) =>
+  prev.sessions === next.sessions &&
+  prev.isExpanded === next.isExpanded &&
+  prev.selectedSession?.id === next.selectedSession?.id &&
+  prev.initialSessionsLoaded === next.initialSessionsLoaded &&
+  prev.isLoadingSessions === next.isLoadingSessions &&
+  prev.processingSessions === next.processingSessions &&
+  prev.readSessionIds === next.readSessionIds &&
+  prev.editingSession === next.editingSession &&
+  prev.editingSessionName === next.editingSessionName &&
+  prev.project.sessionMeta?.hasMore === next.project.sessionMeta?.hasMore,
+);

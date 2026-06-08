@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { memo, useEffect } from 'react';
 import type { TFunction } from 'i18next';
 import type { LoadingProgress, Project, ProjectSession, SessionProvider } from '../../../../types/app';
 import type {
@@ -8,6 +8,30 @@ import type {
 } from '../../types/types';
 import SidebarProjectItem from './SidebarProjectItem';
 import SidebarProjectsState from './SidebarProjectsState';
+
+// Memoize SidebarProjectItem so that unchanged projects bail out on every
+// projects_updated broadcast (2-4x/second during active sessions).
+// Primary guard: `project` reference equality — preserved by useProjectsState's
+// stable-reference setProjects update for unchanged projects.
+// Secondary guards: scalar props that drive selection/editing UI.
+const SidebarProjectItemMemo = memo(SidebarProjectItem, (prev, next) =>
+  prev.project === next.project &&
+  prev.sessions.length === next.sessions.length &&
+  prev.selectedProject?.name === next.selectedProject?.name &&
+  prev.selectedSession?.id === next.selectedSession?.id &&
+  prev.isExpanded === next.isExpanded &&
+  prev.isDeleting === next.isDeleting &&
+  prev.isStarred === next.isStarred &&
+  prev.editingProject === next.editingProject &&
+  prev.editingName === next.editingName &&
+  prev.initialSessionsLoaded === next.initialSessionsLoaded &&
+  prev.isLoadingSessions === next.isLoadingSessions &&
+  prev.editingSession === next.editingSession &&
+  prev.editingSessionName === next.editingSessionName &&
+  prev.processingSessions === next.processingSessions &&
+  prev.readSessionIds === next.readSessionIds &&
+  prev.tasksEnabled === next.tasksEnabled,
+);
 
 export type SidebarProjectListProps = {
   projects: Project[];
@@ -121,7 +145,7 @@ export default function SidebarProjectList({
       {!showProjects
         ? state
         : filteredProjects.map((project) => (
-            <SidebarProjectItem
+            <SidebarProjectItemMemo
               key={project.name}
               project={project}
               selectedProject={selectedProject}

@@ -89,7 +89,7 @@ import pty from 'node-pty';
 import fetch from 'node-fetch';
 import mime from 'mime-types';
 
-import { getProjects, getProject, refreshProjectSessions, surgicallyUpdateSession, getSessions, renameProject, deleteSession, forkSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, clearSessionMessagesCache, searchConversations, getSessionFileMeta } from './projects.js';
+import { getProjects, getProject, refreshProjectSessions, surgicallyUpdateSession, getSessions, renameProject, deleteSession, forkSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, clearSessionMessagesCache, searchConversations, getSessionFileMeta, invalidateExcludedSessionIdsCache } from './projects.js';
 import { clearFetchHistoryCache } from './providers/claude/adapter.js';
 import { queryClaudeSDK, abortClaudeSDKSession, isClaudeSDKSessionActive, getClaudeSDKSessionStartTime, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
 let queryCopilotSDK, abortCopilotSession, isCopilotSessionActive, getCopilotSessionStartTime, getActiveCopilotSessions;
@@ -289,8 +289,13 @@ async function setupProjectsWatcher() {
         // Prevents concurrent fast-path mutations of _cachedProjectsList and double broadcasts.
         if (_flushInflight) {
             await _flushInflight;
-            // Reschedule so the accumulated pendingBroadcast since we started waiting gets picked up.
-            scheduleBroadcast('change', 'claude', null);
+            // Only reschedule if there is still pending work accumulated while we were waiting.
+            // Calling scheduleBroadcast(null) here previously lost the sessionId context, causing
+            // every rescheduled flush to have sessionIds=[] → full getProjects() rebuild instead
+            // of the fast-path surgical update.
+            if (pendingBroadcast.sessionIds.size > 0 || pendingBroadcast.changeTypes.size > 0) {
+                scheduleBroadcast('change', 'claude', null);
+            }
             return;
         }
 
@@ -891,6 +896,7 @@ app.post('/api/sessions/:sessionId/hide', authenticateToken, (req, res) => {
             return res.status(400).json({ error: 'lastActivity is required' });
         }
         sessionDb.hideFromRecents(safeSessionId, provider, lastActivity);
+        invalidateExcludedSessionIdsCache();
         res.json({ success: true });
     } catch (error) {
         console.error(`[API] Error hiding session ${req.params.sessionId}:`, error);
@@ -911,6 +917,7 @@ app.delete('/api/sessions/:sessionId/hide', authenticateToken, (req, res) => {
             return res.status(400).json({ error: `Provider must be one of: ${VALID_PROVIDERS.join(', ')}` });
         }
         sessionDb.unhideFromRecents(safeSessionId, provider);
+        invalidateExcludedSessionIdsCache();
         res.json({ success: true });
     } catch (error) {
         console.error(`[API] Error unhiding session ${req.params.sessionId}:`, error);

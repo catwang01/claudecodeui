@@ -18,8 +18,10 @@ export function useSessionProtection() {
     if (!sessionId) {
       return;
     }
-
-    setActiveSessions((prev) => new Set([...prev, sessionId]));
+    setActiveSessions((prev) => {
+      if (prev.has(sessionId)) return prev; // no-op if already present
+      return new Set([...prev, sessionId]);
+    });
   }, []);
 
   const markSessionAsInactive = useCallback((sessionId?: string | null) => {
@@ -39,17 +41,27 @@ export function useSessionProtection() {
     if (!sessionId) {
       return;
     }
-
-    setProcessingSessionsMap((prev) => new Map([...prev, [sessionId, provider]]));
+    // No-op if already tracked with the same provider — avoids creating a new Map
+    // reference every 5 seconds from the check-sessions-status poll, which would
+    // cause processingSessions to rebuild and all SidebarProjectItem to re-render.
+    setProcessingSessionsMap((prev) => {
+      if (prev.get(sessionId) === provider) return prev;
+      return new Map([...prev, [sessionId, provider]]);
+    });
   }, []);
 
   const batchMarkSessionsAsProcessing = useCallback((entries: Array<{ sessionId: string; provider: string }>) => {
     setProcessingSessionsMap((prev) => {
+      let changed = false;
       const next = new Map(prev);
       for (const { sessionId, provider } of entries) {
-        if (sessionId) next.set(sessionId, provider);
+        if (sessionId && prev.get(sessionId) !== provider) {
+          next.set(sessionId, provider);
+          changed = true;
+        }
       }
-      return next;
+      // Return same reference if nothing changed
+      return changed ? next : prev;
     });
   }, []);
 
@@ -70,8 +82,10 @@ export function useSessionProtection() {
     if (!sessionId) {
       return;
     }
-
-    setShellProcessingSessions((prev) => new Set([...prev, sessionId]));
+    setShellProcessingSessions((prev) => {
+      if (prev.has(sessionId)) return prev; // no-op if already present
+      return new Set([...prev, sessionId]);
+    });
   }, []);
 
   const markShellSessionAsNotProcessing = useCallback((sessionId?: string | null) => {

@@ -293,7 +293,50 @@ export function useProjectsState({
       return;
     }
 
-    setProjects(updatedProjects);
+    setProjects((prevProjects) => {
+      if (prevProjects.length === 0) return updatedProjects;
+      if (!projectsHaveChanges(prevProjects, updatedProjects, true)) return prevProjects;
+      // Preserve stable object references for unchanged projects.
+      // React.memo on SidebarProjectItem uses reference equality on the `project` prop,
+      // so unchanged projects bail out cheaply instead of re-rendering ~200 session items.
+      return updatedProjects.map((nextProject) => {
+        const prevProject = prevProjects.find((p) => p.name === nextProject.name);
+        if (!prevProject) return nextProject;
+        // Quick field check: reuse old reference if nothing material changed
+        const sessionsUnchanged =
+          nextProject.sessions?.length === prevProject.sessions?.length &&
+          nextProject.sessions?.[0]?.id === prevProject.sessions?.[0]?.id &&
+          nextProject.sessions?.[0]?.lastActivity === prevProject.sessions?.[0]?.lastActivity &&
+          nextProject.sessions?.[0]?.messageCount === prevProject.sessions?.[0]?.messageCount;
+        const unchanged =
+          nextProject.displayName === prevProject.displayName &&
+          nextProject.fullPath === prevProject.fullPath &&
+          sessionsUnchanged &&
+          serialize(nextProject.sessionMeta) === serialize(prevProject.sessionMeta);
+        if (unchanged) return prevProject;
+        // Project changed — but preserve stable refs for individual sessions that didn't change.
+        // This lets React.memo on SidebarSessionItem bail out for the unchanged sessions.
+        if (nextProject.sessions && prevProject.sessions) {
+          const prevSessionMap = new Map(prevProject.sessions.map((s) => [s.id, s]));
+          const stableSessions = nextProject.sessions.map((nextSess) => {
+            const prevSess = prevSessionMap.get(nextSess.id);
+            if (!prevSess) return nextSess;
+            if (
+              prevSess.lastActivity === nextSess.lastActivity &&
+              prevSess.messageCount === nextSess.messageCount &&
+              prevSess.title === nextSess.title &&
+              prevSess.isRead === nextSess.isRead &&
+              prevSess.summary === nextSess.summary
+            ) {
+              return prevSess; // Stable reference — session content unchanged
+            }
+            return nextSess;
+          });
+          return { ...nextProject, sessions: stableSessions };
+        }
+        return nextProject;
+      });
+    });
 
     if (!selectedProject) {
       return;
