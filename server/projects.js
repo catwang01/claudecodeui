@@ -612,6 +612,7 @@ async function getProjectData(dbProject, codexSessionsIndexRef, autoDocPreFilter
     geminiSessions: [],
     cursorSessions: [],
     codexSessions: [],
+    copilotSessions: [],
     sessionMeta: { hasMore: false, total: 0 },
   };
 
@@ -679,6 +680,16 @@ async function getProjectData(dbProject, codexSessionsIndexRef, autoDocPreFilter
   applyCustomSessionNames(project.geminiSessions, 'gemini');
   applyHiddenFromRecents(project.geminiSessions, 'gemini');
   applyReadState(project.geminiSessions, 'gemini');
+
+  // Copilot sessions: read from DB (similar to Claude sessions)
+  const copilotRows = sessionsDb.getSessionsByProjectPathPage(projectPath, 45, 0)
+    .filter(row => row.provider === 'copilot');
+  const copilotSessions = buildSessionsFromCache(copilotRows);
+  copilotSessions.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
+  project.copilotSessions = copilotSessions.slice(0, 15);
+  applyCustomSessionNames(project.copilotSessions, 'copilot');
+  applyHiddenFromRecents(project.copilotSessions, 'copilot');
+  applyReadState(project.copilotSessions, 'copilot');
 
   if (taskMasterResult.status === 'fulfilled') {
     const r = taskMasterResult.value;

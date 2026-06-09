@@ -3,6 +3,7 @@ import { cursorSessionSynchronizer } from './list/cursor/cursor-session-synchron
 import { codexSessionSynchronizer } from './list/codex/codex-session-synchronizer.provider.js';
 import { geminiSessionSynchronizer } from './list/gemini/gemini-session-synchronizer.provider.js';
 import { opencodeSessionSynchronizer } from './list/opencode/opencode-session-synchronizer.provider.js';
+import { copilotSessionSynchronizer } from './list/copilot/copilot-session-synchronizer.provider.js';
 import type { ISessionSynchronizer } from './types.js';
 
 export const ALL_SYNCHRONIZERS: ISessionSynchronizer[] = [
@@ -11,4 +12,5 @@ export const ALL_SYNCHRONIZERS: ISessionSynchronizer[] = [
   codexSessionSynchronizer,
   geminiSessionSynchronizer,
   opencodeSessionSynchronizer,
+  copilotSessionSynchronizer,
 ];

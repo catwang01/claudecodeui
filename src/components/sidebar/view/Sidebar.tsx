@@ -151,6 +151,7 @@ function Sidebar({
           ...(project.cursorSessions || []),
           ...(project.codexSessions || []),
           ...(project.geminiSessions || []),
+          ...(project.copilotSessions || []),
         ];
         for (const session of allSessions) {
           if (session.id) {

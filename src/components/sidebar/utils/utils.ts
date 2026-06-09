@@ -163,7 +163,12 @@ export const getAllSessions = (
     __provider: 'gemini' as const,
   }));
 
-  return [...claudeSessions, ...cursorSessions, ...codexSessions, ...geminiSessions].sort(
+  const copilotSessions = (project.copilotSessions || []).map((session) => ({
+    ...session,
+    __provider: 'copilot' as const,
+  }));
+
+  return [...claudeSessions, ...cursorSessions, ...codexSessions, ...geminiSessions, ...copilotSessions].sort(
     (a, b) => getSessionDate(b).getTime() - getSessionDate(a).getTime(),
   );
 };

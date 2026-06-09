@@ -92,6 +92,7 @@ function getAllSessions(projects: Project[]): FlatSession[] {
     for (const s of project.cursorSessions ?? []) push(s, 'cursor');
     for (const s of project.codexSessions ?? []) push(s, 'codex');
     for (const s of project.geminiSessions ?? []) push(s, 'gemini');
+    for (const s of project.copilotSessions ?? []) push(s, 'copilot');
   }
   return sessions;
 }

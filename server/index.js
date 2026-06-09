@@ -2981,9 +2981,14 @@ async function startServer() {
             await setupProjectsWatcher();
 
             // Sync all provider sessions to DB on startup (non-blocking)
-            sessionSynchronizerService.synchronizeSessions().catch(err => {
+            console.log('[DEBUG] About to call sessionSynchronizerService.synchronizeSessions()');
+            try {
+                await sessionSynchronizerService.synchronizeSessions();
+                console.log('[DEBUG] Session synchronization completed successfully');
+            } catch (err) {
                 console.error('[sessions-sync] Initial sync failed:', err);
-            });
+                console.error('[sessions-sync] Error stack:', err.stack);
+            }
 
             // Start auto-doc background timer
             startAutoDocTimer();
