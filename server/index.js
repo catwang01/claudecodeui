@@ -2275,6 +2275,16 @@ function handleShellConnection(ws) {
                         } else {
                             shellCommand = command;
                         }
+                    } else if (provider === 'copilot') {
+                        // GitHub Copilot CLI
+                        // Note: Copilot SDK integration exists but shell mode requires the copilot CLI to be installed
+                        const command = initialCommand || 'gh copilot';
+                        if (hasSession && sessionId) {
+                            // Copilot doesn't support session resume via CLI - start fresh
+                            shellCommand = command;
+                        } else {
+                            shellCommand = command;
+                        }
                     } else {
                         // Claude (default provider)
                         const command = initialCommand || 'claude';

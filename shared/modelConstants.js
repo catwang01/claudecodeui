@@ -102,13 +102,12 @@ export const GEMINI_MODELS = {
  */
 export const COPILOT_MODELS = {
   OPTIONS: [
-    { value: "gpt-4.1", label: "GPT-4.1" },
-    { value: "gpt-4o", label: "GPT-4o" },
-    { value: "gpt-4.5", label: "GPT-4.5" },
+    { value: "gpt-5.5", label: "GPT-5.5" },
+    { value: "gpt-5.4", label: "GPT-5.4" },
+    { value: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
     { value: "claude-sonnet-4.5", label: "Claude Sonnet 4.5" },
-    { value: "o3", label: "o3" },
-    { value: "o4-mini", label: "o4-mini" },
+    { value: "claude-sonnet-4.6", label: "Claude Sonnet 4.6" },
   ],
 
-  DEFAULT: "gpt-4.1",
+  DEFAULT: "gpt-5.5",
 };

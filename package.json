@@ -23,7 +23,7 @@
     "url": "https://github.com/siteboon/claudecodeui/issues"
   },
   "scripts": {
-    "dev": "cross-env PII_PROXY_PORT=18091 concurrently --kill-others \"npm run pii-proxy\" \"node scripts/wait-pii-proxy.js && npm run server:dev-watch\" \"node scripts/wait-pii-proxy.js && npm run client\"",
+    "dev": "cross-env PII_PROXY_PORT=18091 concurrently --kill-others \"npm run pii-proxy\" \"node scripts/wait-pii-proxy.js && npm run server:dev\" \"node scripts/wait-pii-proxy.js && npm run client\"",
     "server:dev": "tsx --tsconfig server/tsconfig.json server/index.js",
     "server:dev-watch": "tsx watch --tsconfig server/tsconfig.json server/index.js",
     "server:prod": "node dist-server/server/index.js",
@@ -76,6 +76,7 @@
     "@codemirror/lang-python": "^6.2.1",
     "@codemirror/merge": "^6.11.1",
     "@codemirror/theme-one-dark": "^6.1.2",
+    "@github/copilot-sdk": "^1.0.0",
     "@iarna/toml": "^2.2.5",
     "@octokit/rest": "^22.0.0",
     "@openai/codex-sdk": "^0.101.0",
@@ -132,6 +133,7 @@
     "@commitlint/cli": "^20.4.3",
     "@commitlint/config-conventional": "^20.4.3",
     "@eslint/js": "^9.39.3",
+    "@playwright/test": "^1.60.0",
     "@release-it/conventional-changelog": "^10.0.5",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
