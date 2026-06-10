@@ -46,6 +46,10 @@ const getProviderCommand = ({
     return IS_PLATFORM ? 'codex login --device-auth' : 'codex login';
   }
 
+  if (provider === 'copilot') {
+    return 'copilot login';
+  }
+
   return 'gemini status';
 };
 
@@ -53,6 +57,7 @@ const getProviderTitle = (provider: CliProvider) => {
   if (provider === 'claude') return 'Claude CLI Login';
   if (provider === 'cursor') return 'Cursor CLI Login';
   if (provider === 'codex') return 'Codex CLI Login';
+  if (provider === 'copilot') return 'GitHub Copilot Login';
   return 'Gemini CLI Configuration';
 };
 

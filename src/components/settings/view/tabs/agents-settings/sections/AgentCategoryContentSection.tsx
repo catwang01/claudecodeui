@@ -13,6 +13,10 @@ export default function AgentCategoryContentSection({
   onCursorPermissionsChange,
   codexPermissionMode,
   onCodexPermissionModeChange,
+  geminiPermissionMode,
+  onGeminiPermissionModeChange,
+  copilotPermissionMode,
+  onCopilotPermissionModeChange,
   mcpServers,
   cursorMcpServers,
   codexMcpServers,
@@ -81,6 +85,22 @@ export default function AgentCategoryContentSection({
           agent="codex"
           permissionMode={codexPermissionMode}
           onPermissionModeChange={onCodexPermissionModeChange}
+        />
+      )}
+
+      {selectedCategory === 'permissions' && selectedAgent === 'gemini' && (
+        <PermissionsContent
+          agent="gemini"
+          permissionMode={geminiPermissionMode}
+          onPermissionModeChange={onGeminiPermissionModeChange}
+        />
+      )}
+
+      {selectedCategory === 'permissions' && selectedAgent === 'copilot' && (
+        <PermissionsContent
+          agent="copilot"
+          permissionMode={copilotPermissionMode}
+          onPermissionModeChange={onCopilotPermissionModeChange}
         />
       )}
 

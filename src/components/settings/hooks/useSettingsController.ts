@@ -15,6 +15,7 @@ import type {
   CodeEditorSettingsState,
   CodexMcpFormState,
   CodexPermissionMode,
+  CopilotPermissionMode,
   CursorPermissionsState,
   GeminiPermissionMode,
   McpServer,
@@ -226,6 +227,7 @@ export function useSettingsController({ isOpen, initialTab, projects, onClose }:
   ));
   const [codexPermissionMode, setCodexPermissionMode] = useState<CodexPermissionMode>('default');
   const [geminiPermissionMode, setGeminiPermissionMode] = useState<GeminiPermissionMode>('default');
+  const [copilotPermissionMode, setCopilotPermissionMode] = useState<CopilotPermissionMode>('default');
 
   const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
   const [cursorMcpServers, setCursorMcpServers] = useState<McpServer[]>([]);
@@ -247,6 +249,7 @@ export function useSettingsController({ isOpen, initialTab, projects, onClose }:
   const [cursorAuthStatus, setCursorAuthStatus] = useState<AuthStatus>(DEFAULT_AUTH_STATUS);
   const [codexAuthStatus, setCodexAuthStatus] = useState<AuthStatus>(DEFAULT_AUTH_STATUS);
   const [geminiAuthStatus, setGeminiAuthStatus] = useState<AuthStatus>(DEFAULT_AUTH_STATUS);
+  const [copilotAuthStatus, setCopilotAuthStatus] = useState<AuthStatus>(DEFAULT_AUTH_STATUS);
 
   const setAuthStatusByProvider = useCallback((provider: AgentProvider, status: AuthStatus) => {
     if (provider === 'claude') {
@@ -261,6 +264,11 @@ export function useSettingsController({ isOpen, initialTab, projects, onClose }:
 
     if (provider === 'gemini') {
       setGeminiAuthStatus(status);
+      return;
+    }
+
+    if (provider === 'copilot') {
+      setCopilotAuthStatus(status);
       return;
     }
 
@@ -710,6 +718,9 @@ export function useSettingsController({ isOpen, initialTab, projects, onClose }:
       const geminiData = await fetchPref<{ permissionMode?: GeminiPermissionMode }>('gemini-settings', 'gemini-settings');
       setGeminiPermissionMode(geminiData?.permissionMode || 'default');
 
+      const copilotData = await fetchPref<{ permissionMode?: CopilotPermissionMode }>('copilot-settings', 'copilot-settings');
+      setCopilotPermissionMode(copilotData?.permissionMode || 'default');
+
       const editorData = await fetchPref<CodeEditorSettingsState>('code-editor-settings', '__legacy-code-editor__');
       if (editorData) {
         setCodeEditorSettings({
@@ -821,6 +832,7 @@ export function useSettingsController({ isOpen, initialTab, projects, onClose }:
         }),
         savePref('codex-settings', { permissionMode: codexPermissionMode }),
         savePref('gemini-settings', { permissionMode: geminiPermissionMode }),
+        savePref('copilot-settings', { permissionMode: copilotPermissionMode }),
         savePref('code-editor-settings', codeEditorSettings),
         authenticatedFetch('/api/settings/notification-preferences', {
           method: 'PUT',
@@ -844,6 +856,7 @@ export function useSettingsController({ isOpen, initialTab, projects, onClose }:
     cursorPermissions.skipPermissions,
     notificationPreferences,
     geminiPermissionMode,
+    copilotPermissionMode,
     projectSortOrder,
     projectExcludePatterns,
     recentsTagLimit,
@@ -888,6 +901,7 @@ export function useSettingsController({ isOpen, initialTab, projects, onClose }:
     void checkAuthStatus('cursor');
     void checkAuthStatus('codex');
     void checkAuthStatus('gemini');
+    void checkAuthStatus('copilot');
   }, [checkAuthStatus, initialTab, isOpen, loadSettings]);
 
   useEffect(() => {
@@ -999,6 +1013,9 @@ export function useSettingsController({ isOpen, initialTab, projects, onClose }:
     geminiAuthStatus,
     geminiPermissionMode,
     setGeminiPermissionMode,
+    copilotAuthStatus,
+    copilotPermissionMode,
+    setCopilotPermissionMode,
     openLoginForProvider,
     showLoginModal,
     setShowLoginModal,

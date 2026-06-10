@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { AlertTriangle, Plus, Shield, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button, Input } from '../../../../../../../shared/view/ui';
-import type { CodexPermissionMode, GeminiPermissionMode } from '../../../../../types/types';
+import type { CodexPermissionMode, GeminiPermissionMode, CopilotPermissionMode } from '../../../../../types/types';
 
 const COMMON_CLAUDE_TOOLS = [
   'Bash(git log:*)',
@@ -683,7 +683,89 @@ function GeminiPermissions({ permissionMode, onPermissionModeChange }: Omit<Gemi
   );
 }
 
-type PermissionsContentProps = ClaudePermissionsProps | CursorPermissionsProps | CodexPermissionsProps | GeminiPermissionsProps;
+type CopilotPermissionsProps = {
+  agent: 'copilot';
+  permissionMode: CopilotPermissionMode;
+  onPermissionModeChange: (mode: CopilotPermissionMode) => void;
+};
+
+function CopilotPermissions({ permissionMode, onPermissionModeChange }: Omit<CopilotPermissionsProps, 'agent'>) {
+  const modeOptions: { value: CopilotPermissionMode; label: string; description: string; danger?: boolean }[] = [
+    {
+      value: 'default',
+      label: 'Default',
+      description: 'Copilot asks for confirmation before making changes. Recommended for most users.',
+    },
+    {
+      value: 'acceptEdits',
+      label: 'Accept Edits',
+      description: 'Automatically accept file edits without confirmation. Shell commands still require approval.',
+    },
+    {
+      value: 'bypassPermissions',
+      label: 'Bypass Permissions',
+      description: 'Skip all permission prompts. Use with caution — Copilot can run any command without asking.',
+      danger: true,
+    },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <div className="space-y-4">
+        <div className="flex items-center gap-3">
+          <Shield className="h-5 w-5 text-sky-500" />
+          <h3 className="text-lg font-medium text-foreground">Permission Mode</h3>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Controls how Copilot handles tool and file operations. Applies to both Chat mode (SDK) and Shell mode (CLI).
+        </p>
+
+        {modeOptions.map((opt) => (
+          <div
+            key={opt.value}
+            className={`cursor-pointer rounded-lg border p-4 transition-all ${
+              permissionMode === opt.value
+                ? opt.danger
+                  ? 'border-orange-400 bg-orange-50 dark:border-orange-600 dark:bg-orange-900/20'
+                  : 'border-border bg-accent'
+                : 'border-border bg-card/50 active:border-border active:bg-accent/50'
+            }`}
+            onClick={() => onPermissionModeChange(opt.value)}
+          >
+            <label className="flex cursor-pointer items-start gap-3">
+              <input
+                type="radio"
+                name="copilotPermissionMode"
+                checked={permissionMode === opt.value}
+                onChange={() => onPermissionModeChange(opt.value)}
+                className={`mt-1 h-4 w-4 ${opt.danger ? 'text-orange-600' : 'text-sky-600'}`}
+              />
+              <div>
+                <div className={`flex items-center gap-2 font-medium ${
+                  opt.danger
+                    ? 'text-orange-900 dark:text-orange-100'
+                    : 'text-foreground'
+                }`}>
+                  {opt.label}
+                  {opt.danger && <AlertTriangle className="h-4 w-4" />}
+                </div>
+                <div className={`text-sm ${
+                  opt.danger
+                    ? 'text-orange-700 dark:text-orange-300'
+                    : 'text-muted-foreground'
+                }`}>
+                  {opt.description}
+                </div>
+              </div>
+            </label>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+type PermissionsContentProps = ClaudePermissionsProps | CursorPermissionsProps | CodexPermissionsProps | GeminiPermissionsProps | CopilotPermissionsProps;
 
 export default function PermissionsContent(props: PermissionsContentProps) {
   if (props.agent === 'claude') {
@@ -696,6 +778,10 @@ export default function PermissionsContent(props: PermissionsContentProps) {
 
   if (props.agent === 'gemini') {
     return <GeminiPermissions {...props} />;
+  }
+
+  if (props.agent === 'copilot') {
+    return <CopilotPermissions {...props} />;
   }
 
   return <CodexPermissions {...props} />;
