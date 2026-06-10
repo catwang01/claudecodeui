@@ -2301,11 +2301,13 @@ function handleShellConnection(ws) {
                         }
                     } else if (provider === 'copilot') {
                         // GitHub Copilot CLI
-                        // Note: Copilot SDK integration exists but shell mode requires the copilot CLI to be installed
-                        const command = initialCommand || 'gh copilot';
+                        // Use the standalone 'copilot' command (not 'gh copilot')
+                        const command = initialCommand || 'copilot';
+
+                        // Use --session-id to resume or create a session with our UUID
+                        // This allows CloudCLI to manage session IDs rather than Copilot CLI
                         if (hasSession && sessionId) {
-                            // Copilot doesn't support session resume via CLI - start fresh
-                            shellCommand = command;
+                            shellCommand = `${command} --session-id="${sessionId}"`;
                         } else {
                             shellCommand = command;
                         }

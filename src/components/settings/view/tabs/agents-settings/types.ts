@@ -6,6 +6,7 @@ import type {
   CursorPermissionsState,
   CodexPermissionMode,
   GeminiPermissionMode,
+  CopilotPermissionMode,
   McpServer,
   McpToolsResult,
   McpTestResult,
@@ -23,10 +24,12 @@ export type AgentsSettingsTabProps = {
   cursorAuthStatus: AuthStatus;
   codexAuthStatus: AuthStatus;
   geminiAuthStatus: AuthStatus;
+  copilotAuthStatus: AuthStatus;
   onClaudeLogin: () => void;
   onCursorLogin: () => void;
   onCodexLogin: () => void;
   onGeminiLogin: () => void;
+  onCopilotLogin: () => void;
   claudePermissions: ClaudePermissionsState;
   onClaudePermissionsChange: (value: ClaudePermissionsState) => void;
   cursorPermissions: CursorPermissionsState;
@@ -35,6 +38,8 @@ export type AgentsSettingsTabProps = {
   onCodexPermissionModeChange: (value: CodexPermissionMode) => void;
   geminiPermissionMode: GeminiPermissionMode;
   onGeminiPermissionModeChange: (value: GeminiPermissionMode) => void;
+  copilotPermissionMode: CopilotPermissionMode;
+  onCopilotPermissionModeChange: (value: CopilotPermissionMode) => void;
   mcpServers: McpServer[];
   cursorMcpServers: McpServer[];
   codexMcpServers: McpServer[];
@@ -73,6 +78,8 @@ export type AgentCategoryContentSectionProps = {
   onCodexPermissionModeChange: (value: CodexPermissionMode) => void;
   geminiPermissionMode: GeminiPermissionMode;
   onGeminiPermissionModeChange: (value: GeminiPermissionMode) => void;
+  copilotPermissionMode: CopilotPermissionMode;
+  onCopilotPermissionModeChange: (value: CopilotPermissionMode) => void;
   mcpServers: McpServer[];
   cursorMcpServers: McpServer[];
   codexMcpServers: McpServer[];

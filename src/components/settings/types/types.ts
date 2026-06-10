@@ -1,12 +1,13 @@
 import type { Dispatch, SetStateAction } from 'react';
 
 export type SettingsMainTab = 'agents' | 'appearance' | 'git' | 'api' | 'tasks' | 'notifications' | 'plugins' | 'auto-doc' | 'about' | 'debug' | 'privacy';
-export type AgentProvider = 'claude' | 'cursor' | 'codex' | 'gemini';
+export type AgentProvider = 'claude' | 'cursor' | 'codex' | 'gemini' | 'copilot';
 export type AgentCategory = 'account' | 'permissions' | 'mcp';
 export type ProjectSortOrder = 'name' | 'date';
 export type SaveStatus = 'success' | 'error' | null;
 export type CodexPermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions';
 export type GeminiPermissionMode = 'default' | 'auto_edit' | 'yolo';
+export type CopilotPermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions';
 export type McpImportMode = 'form' | 'json';
 export type McpScope = 'user' | 'local';
 export type McpTransportType = 'stdio' | 'sse' | 'http';
