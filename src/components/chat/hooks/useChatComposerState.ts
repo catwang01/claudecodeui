@@ -24,6 +24,7 @@ import { escapeRegExp } from '../utils/chatFormatting';
 import { useFileMentions } from './useFileMentions';
 import type { MentionableFile } from './useFileMentions';
 import { type SlashCommand, useSlashCommands } from './useSlashCommands';
+import { useQuoteStack } from './useQuoteStack';
 import { logger } from '../../../utils/logger';
 
 type PendingViewSession = {
@@ -151,6 +152,7 @@ export function useChatComposerState({
   const imageInputRef = useRef<HTMLInputElement>(null);
   const [isTextareaExpanded, setIsTextareaExpanded] = useState(false);
   const [thinkingMode, setThinkingMode] = useState('none');
+  const quoteStack = useQuoteStack();
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputHighlightRef = useRef<HTMLDivElement>(null);
@@ -550,6 +552,7 @@ export function useChatComposerState({
       if (selectedThinkingMode && selectedThinkingMode.prefix) {
         messageContent = `${selectedThinkingMode.prefix}: ${currentInput}`;
       }
+      messageContent = quoteStack.composeWithQuotes(messageContent);
 
       let uploadedImages: unknown[] = [];
       if (attachedImages.length > 0) {
@@ -778,6 +781,7 @@ export function useChatComposerState({
       setAttachedFiles([]);
       setIsTextareaExpanded(false);
       setThinkingMode('none');
+      quoteStack.clearQuotes();
 
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto';
@@ -813,6 +817,7 @@ export function useChatComposerState({
       setIsUserScrolledUp,
       slashCommands,
       thinkingMode,
+      quoteStack,
     ],
   );
 
@@ -1108,6 +1113,7 @@ export function useChatComposerState({
     handlePermissionDecision,
     handleGrantToolPermission,
     handleInputFocusChange,
+    quoteStack,
     isInputFocused,
     submitVoiceInput,
   };

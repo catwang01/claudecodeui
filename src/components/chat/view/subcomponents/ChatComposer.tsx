@@ -19,7 +19,9 @@ import ClaudeStatus from './ClaudeStatus';
 import ImageAttachment from './ImageAttachment';
 import PermissionRequestsBanner from './PermissionRequestsBanner';
 import ChatInputControls from './ChatInputControls';
+import QuoteChipList from './QuoteChipList';
 import type { MentionableFile } from '../../hooks/useFileMentions';
+import type { Quote } from '../../hooks/useQuoteStack';
 
 interface SlashCommand {
   name: string;
@@ -57,6 +59,9 @@ interface ChatComposerProps {
   hasMessages: boolean;
   onScrollToBottom: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement> | MouseEvent<HTMLButtonElement> | TouchEvent<HTMLButtonElement>) => void;
+  quotes: Quote[];
+  onRemoveQuote: (id: string) => void;
+  onClearQuotes: () => void;
   attachedImages: File[];
   onRemoveImage: (index: number) => void;
   uploadingImages: Map<string, number>;
@@ -126,6 +131,9 @@ export default function ChatComposer({
   hasMessages,
   onScrollToBottom,
   onSubmit,
+  quotes,
+  onRemoveQuote,
+  onClearQuotes,
   attachedImages,
   onRemoveImage,
   uploadingImages,
@@ -237,6 +245,8 @@ export default function ChatComposer({
       </div>
 
       {!hasQuestionPanel && <form onSubmit={onSubmit as (event: FormEvent<HTMLFormElement>) => void} className="relative mx-auto max-w-4xl">
+        <QuoteChipList quotes={quotes} onRemove={onRemoveQuote} onClear={onClearQuotes} />
+
         {attachedImages.length > 0 && (
           <div className="mb-2 rounded-xl bg-muted/40 p-2">
             <div className="flex flex-wrap gap-2">

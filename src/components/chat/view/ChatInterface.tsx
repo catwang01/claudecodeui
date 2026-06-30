@@ -16,6 +16,7 @@ import { useTTS } from '../../../hooks/useTTS';
 import { useVoiceConversation } from '../../../contexts/VoiceConversationContext';
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
+import QuoteSelectionPopover from './subcomponents/QuoteSelectionPopover';
 import { NewSessionLoadingModal } from './NewSessionLoadingModal';
 
 
@@ -201,6 +202,7 @@ function ChatInterface({
     handleInputFocusChange,
     isInputFocused,
     submitVoiceInput,
+    quoteStack,
   } = useChatComposerState({
     selectedProject,
     selectedSession,
@@ -475,6 +477,22 @@ function ChatInterface({
           onForkAtMessage={handleForkAtMessage}
         />
 
+        <QuoteSelectionPopover
+          containerRef={scrollContainerRef}
+          excludeRefs={[textareaRef]}
+          onQuote={(text) => {
+            if (quoteStack.addQuote(text)) {
+              requestAnimationFrame(() => {
+                const el = textareaRef.current;
+                if (!el) return;
+                el.focus();
+                const end = el.value.length;
+                el.setSelectionRange(end, end);
+              });
+            }
+          }}
+        />
+
         <ChatComposer
           pendingPermissionRequests={pendingPermissionRequests}
           handlePermissionDecision={handlePermissionDecision}
@@ -498,6 +516,9 @@ function ChatInterface({
           hasMessages={chatMessages.length > 0}
           onScrollToBottom={scrollToBottomAndReset}
           onSubmit={handleSubmit}
+          quotes={quoteStack.quotes}
+          onRemoveQuote={quoteStack.removeQuote}
+          onClearQuotes={quoteStack.clearQuotes}
           attachedImages={attachedImages}
           onRemoveImage={(index) =>
             setAttachedImages((previous) =>
