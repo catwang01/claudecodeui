@@ -61,6 +61,14 @@ export interface ChatMessage {
     downloadUrl: string;
     fileSize: number;
   };
+  isImageDisplay?: boolean;
+  imageMetadata?: {
+    filename: string;
+    filepath: string;
+    imageUrl: string;
+    fileSize: number;
+    mimeType: string;
+  };
   isTaskNotification?: boolean;
   tokenUsage?: MessageTokenUsage;
   taskStatus?: string;

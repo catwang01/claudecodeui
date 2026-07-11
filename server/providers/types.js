@@ -19,7 +19,7 @@
 /**
  * @typedef {'text' | 'tool_use' | 'tool_result' | 'thinking' | 'stream_delta' | 'stream_end'
  *   | 'error' | 'complete' | 'status' | 'permission_request' | 'permission_cancelled'
- *   | 'session_created' | 'interactive_prompt' | 'task_notification' | 'file_download'} MessageKind
+ *   | 'session_created' | 'interactive_prompt' | 'task_notification' | 'file_download' | 'image_display'} MessageKind
  */
 
 // ─── NormalizedMessage ───────────────────────────────────────────────────────
@@ -54,6 +54,7 @@
  * - interactive_prompt:   content
  * - task_notification:    status, summary
  * - file_download:        filename, filepath, downloadUrl, fileSize
+ * - image_display:        filename, filepath, imageUrl, fileSize, mimeType
  */
 
 // ─── Fetch History ───────────────────────────────────────────────────────────

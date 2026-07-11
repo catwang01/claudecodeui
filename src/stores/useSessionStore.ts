@@ -33,7 +33,8 @@ export type MessageKind =
   | 'session_created'
   | 'interactive_prompt'
   | 'task_notification'
-  | 'file_download';
+  | 'file_download'
+  | 'image_display';
 
 export interface NormalizedMessage {
   id: string;
@@ -79,6 +80,9 @@ export interface NormalizedMessage {
   filepath?: string;
   downloadUrl?: string;
   fileSize?: number;
+  // image_display fields
+  imageUrl?: string;
+  mimeType?: string;
 }
 
 // ─── Per-session slot ────────────────────────────────────────────────────────

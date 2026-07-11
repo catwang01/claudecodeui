@@ -14,6 +14,7 @@ import { ToolRenderer, shouldHideToolResult } from '../../tools';
 import { Markdown } from './Markdown';
 import MessageCopyControl from './MessageCopyControl';
 import { DownloadLink } from '../../tools/components/DownloadLink';
+import { ImageDisplay } from '../../tools/components/ImageDisplay';
 import Tooltip from '../../../../shared/view/ui/Tooltip';
 
 type DiffLine = {
@@ -195,7 +196,9 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
 
           <div className="w-full">
 
-            {message.isFileDownload && message.downloadMetadata ? (
+            {message.isImageDisplay && message.imageMetadata ? (
+              <ImageDisplay {...message.imageMetadata} />
+            ) : message.isFileDownload && message.downloadMetadata ? (
               <DownloadLink {...message.downloadMetadata} />
             ) : message.isToolUse ? (
               <>

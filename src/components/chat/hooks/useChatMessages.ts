@@ -168,6 +168,24 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         }
         break;
 
+      case 'image_display':
+        if (msg.filename && msg.imageUrl) {
+          converted.push({
+            type: 'assistant',
+            content: '',
+            timestamp: msg.timestamp,
+            isImageDisplay: true,
+            imageMetadata: {
+              filename: msg.filename,
+              filepath: msg.filepath || '',
+              imageUrl: msg.imageUrl,
+              fileSize: msg.fileSize || 0,
+              mimeType: msg.mimeType || 'image/png',
+            },
+          });
+        }
+        break;
+
       case 'stream_delta':
         if (msg.content) {
           converted.push({

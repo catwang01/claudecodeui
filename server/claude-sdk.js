@@ -60,8 +60,38 @@ const downloadTool = tool(
   { annotations: { readOnlyHint: true } }
 );
 
-function createDownloadServer() {
-  return createSdkMcpServer({ name: 'download', version: '1.0.0', tools: [downloadTool] });
+const imageTool = tool(
+  'image',
+  'Display an image inline in the chat UI. Call this when the user asks to see an image or when showing a generated/existing image would be helpful. The file must already exist on disk.',
+  { filepath: z.string().describe('Absolute path to the image file to display') },
+  async (args) => {
+    const { filepath } = args;
+    const absolutePath = path.isAbsolute(filepath) ? filepath : path.join(process.cwd(), filepath);
+    await fs.access(absolutePath);
+    const stats = await fs.stat(absolutePath);
+    const filename = path.basename(absolutePath);
+    const ext = path.extname(filename).toLowerCase().slice(1);
+    const mimeTypeMap = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp' };
+    const mimeType = mimeTypeMap[ext] || 'image/png';
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          filepath: absolutePath,
+          filename,
+          imageUrl: `/api/image?filepath=${encodeURIComponent(absolutePath)}`,
+          fileSize: stats.size,
+          mimeType,
+          message: `Image "${filename}" is ready. IMPORTANT: Do NOT mention the imageUrl, do NOT create any hyperlinks or markdown links. The UI will automatically display the image inline — simply describe the image content to the user.`
+        })
+      }]
+    };
+  },
+  { annotations: { readOnlyHint: true } }
+);
+
+function createInternalToolsServer() {
+  return createSdkMcpServer({ name: 'internal', version: '1.0.0', tools: [downloadTool, imageTool] });
 }
 
 const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 55000;
@@ -219,9 +249,9 @@ function mapCliOptionsToSDK(options = {}) {
 
   sdkOptions.allowedTools = allowedTools;
 
-  // Always allow the built-in download MCP tool
-  if (!sdkOptions.allowedTools.includes('mcp__download__download')) {
-    sdkOptions.allowedTools.push('mcp__download__download');
+  // Always allow the built-in UI MCP tools
+  if (!sdkOptions.allowedTools.includes('mcp__internal__download')) {
+    sdkOptions.allowedTools.push('mcp__internal__download');
   }
 
   // Use the tools preset to make all default built-in tools available (including AskUserQuestion).
@@ -594,7 +624,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
     // Load MCP configuration
     const mcpServers = await loadMcpConfig(options.cwd);
-    sdkOptions.mcpServers = { ...(mcpServers || {}), download: createDownloadServer() };
+    sdkOptions.mcpServers = { ...(mcpServers || {}), internal: createInternalToolsServer() };
 
     // Handle images - save to temp files and modify prompt
     const imageResult = await handleImages(command, options.images, options.cwd);
@@ -707,6 +737,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
     let _msgCount = 0;
     const pendingDownloadToolIds = new Set();
+    const pendingImageToolIds = new Set();
 
     while (true) {
       let hasContextMgmtError = false;
@@ -854,8 +885,13 @@ async function queryClaudeSDK(command, options = {}, ws) {
         appendMessage(capturedSessionId || sessionId || null, msg);
 
         // Track download tool_use calls
-        if (msg.kind === 'tool_use' && msg.toolName === 'mcp__download__download') {
+        if (msg.kind === 'tool_use' && msg.toolName === 'mcp__internal__download') {
           pendingDownloadToolIds.add(msg.toolId);
+        }
+
+        // Track image tool_use calls
+        if (msg.kind === 'tool_use' && msg.toolName === 'mcp__internal__image') {
+          pendingImageToolIds.add(msg.toolId);
         }
 
         // Intercept download tool_result and emit a file_download card
@@ -883,6 +919,35 @@ async function queryClaudeSDK(command, options = {}, ws) {
             appendMessage(capturedSessionId || sessionId || null, downloadMsg);
           } catch (e) {
             console.error('Failed to emit file_download message:', e);
+          }
+        }
+
+        // Intercept image tool_result and emit an image_display card
+        if (msg.kind === 'tool_result' && pendingImageToolIds.has(msg.toolId)) {
+          pendingImageToolIds.delete(msg.toolId);
+          try {
+            let resultText = msg.content;
+            try {
+              const parsed = JSON.parse(resultText);
+              if (Array.isArray(parsed) && parsed[0]?.text) {
+                resultText = parsed[0].text;
+              }
+            } catch (_) {}
+            const resultData = JSON.parse(resultText);
+            const imageMsg = createNormalizedMessage({
+              kind: 'image_display',
+              sessionId: capturedSessionId || sessionId || null,
+              provider: 'claude',
+              filename: resultData.filename,
+              filepath: resultData.filepath,
+              imageUrl: resultData.imageUrl,
+              fileSize: resultData.fileSize,
+              mimeType: resultData.mimeType,
+            });
+            ws.send(imageMsg);
+            appendMessage(capturedSessionId || sessionId || null, imageMsg);
+          } catch (e) {
+            console.error('Failed to emit image_display message:', e);
           }
         }
       }
