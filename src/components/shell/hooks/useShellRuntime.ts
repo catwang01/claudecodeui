@@ -16,6 +16,7 @@ export function useShellRuntime({
   isRestarting,
   onProcessComplete,
   onOutputRef,
+  isAtBottomRef,
 }: UseShellRuntimeOptions): UseShellRuntimeResult {
   const terminalContainerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -120,6 +121,7 @@ export function useShellRuntime({
     clearTerminalScreen,
     setAuthUrl: setCurrentAuthUrl,
     onOutputRef,
+    isAtBottomRef,
   });
 
   useEffect(() => {

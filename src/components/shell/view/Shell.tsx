@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { ArrowDownToLine } from 'lucide-react';
 import '@xterm/xterm/css/xterm.css';
 import type { Project, ProjectSession } from '../../../types/app';
 import {
@@ -76,6 +77,12 @@ export default function Shell({
   const isShellProcessingRef = useRef(false); // ref avoids stale-closure issues in async callbacks
   const onOutputRef = useRef<(() => void) | null>(null);
 
+  // Track whether the xterm viewport is pinned to the bottom.
+  // true  → new output auto-scrolls to bottom (default)
+  // false → user has scrolled up; new output does NOT auto-scroll
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  const isAtBottomRef = useRef(true);
+
   const {
     terminalContainerRef,
     terminalRef,
@@ -100,6 +107,7 @@ export default function Shell({
     isRestarting,
     onProcessComplete,
     onOutputRef,
+    isAtBottomRef,
   });
 
   // Check xterm.js buffer for CLI prompt patterns (❯ N. label)
@@ -234,6 +242,44 @@ export default function Shell({
   useEffect(() => {
     onOutputRef.current = handleOutput;
   }, [handleOutput]);
+
+  // Track whether the xterm viewport is pinned to the bottom.
+  // Uses two complementary sources:
+  //   1. xterm `onScroll` — fires for keyboard / programmatic scrolls
+  //   2. DOM `wheel` event — more reliable for mouse-wheel in WebGL mode
+  // Both read buf.viewportY vs buf.baseY as the ground truth.
+  const checkAtBottom = useCallback(() => {
+    const term = terminalRef.current;
+    if (!term) return;
+    const buf = term.buffer.active;
+    const atBottom = buf.viewportY >= buf.baseY;
+    isAtBottomRef.current = atBottom;
+    setIsAtBottom(atBottom);
+  }, [terminalRef]);
+
+  useEffect(() => {
+    if (!isInitialized) return;
+    const term = terminalRef.current;
+    const container = terminalContainerRef.current;
+    if (!term || !container) return;
+
+    // Source 1: xterm onScroll (programmatic + keyboard scrolls)
+    const scrollDisposable = term.onScroll(() => {
+      checkAtBottom();
+    });
+
+    // Source 2: DOM wheel event (catches mouse-wheel when onScroll lags)
+    const handleWheel = () => {
+      // xterm updates ydisp after the wheel handler, so defer one frame
+      requestAnimationFrame(checkAtBottom);
+    };
+    container.addEventListener('wheel', handleWheel, { passive: true });
+
+    return () => {
+      scrollDisposable.dispose();
+      container.removeEventListener('wheel', handleWheel);
+    };
+  }, [isInitialized, terminalRef, terminalContainerRef, checkAtBottom]);
 
   // Cleanup both timers on unmount
   useEffect(() => {
@@ -439,6 +485,26 @@ export default function Shell({
             commandArgs={commandArgs ?? undefined}
             onConnect={connectToShell}
           />
+        )}
+
+        {/* Scroll-to-bottom FAB — visible when user has scrolled up */}
+        {!isAtBottom && isConnected && !overlayMode && (
+          <button
+            type="button"
+            onClick={() => {
+              const term = terminalRef.current;
+              if (term) {
+                term.scrollToBottom();
+                isAtBottomRef.current = true;
+                setIsAtBottom(true);
+              }
+            }}
+            className={`absolute right-4 z-10 rounded-full border border-gray-600 bg-gray-800/90 p-2 text-gray-300 shadow-lg backdrop-blur-sm transition-all hover:bg-gray-700 hover:text-white ${cliPromptOptions ? 'bottom-16' : 'bottom-4'}`}
+            title="Scroll to bottom"
+            aria-label="Scroll to bottom"
+          >
+            <ArrowDownToLine className="h-4 w-4" />
+          </button>
         )}
 
         {cliPromptOptions && isConnected && (

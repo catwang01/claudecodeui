@@ -27,6 +27,8 @@ type UseShellConnectionOptions = {
   clearTerminalScreen: () => void;
   setAuthUrl: (nextAuthUrl: string) => void;
   onOutputRef?: MutableRefObject<(() => void) | null>;
+  /** When false, incoming output won't auto-scroll the terminal to the bottom. */
+  isAtBottomRef?: MutableRefObject<boolean>;
 };
 
 type UseShellConnectionResult = {
@@ -53,6 +55,7 @@ export function useShellConnection({
   clearTerminalScreen,
   setAuthUrl,
   onOutputRef,
+  isAtBottomRef,
 }: UseShellConnectionOptions): UseShellConnectionResult {
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -115,7 +118,12 @@ export function useShellConnection({
           // Use the write callback so scrollToBottom runs after xterm has
           // actually rendered the new rows — calling it synchronously would
           // scroll before the content is in the viewport.
-          term.write(output, () => term.scrollToBottom());
+          // Only auto-scroll when the user hasn't manually scrolled up.
+          term.write(output, () => {
+            if (!isAtBottomRef || isAtBottomRef.current) {
+              term.scrollToBottom();
+            }
+          });
         }
         onOutputRef?.current?.();
         return;

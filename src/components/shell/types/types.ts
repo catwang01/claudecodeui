@@ -51,6 +51,7 @@ export type UseShellRuntimeOptions = {
   isRestarting: boolean;
   onProcessComplete?: ((exitCode: number) => void) | null;
   onOutputRef?: MutableRefObject<(() => void) | null>;
+  isAtBottomRef?: MutableRefObject<boolean>;
 };
 
 export type ShellSharedRefs = {

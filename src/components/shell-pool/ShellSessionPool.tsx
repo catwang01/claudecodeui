@@ -75,8 +75,18 @@ export default function ShellSessionPool({
       ? [...entries, { session: activeSession, project, lastActiveAt: Date.now() }]
       : entries;
 
+  // No sessions in pool — render a sessionless Shell so the user can start a new one
   if (allEntries.length === 0) {
-    return null;
+    return (
+      <Shell
+        selectedProject={project}
+        selectedSession={null}
+        isActive={isActive}
+        autoConnect={isActive}
+        onSessionProcessing={onSessionProcessing}
+        onSessionNotProcessing={onSessionNotProcessing}
+      />
+    );
   }
 
   return (
