@@ -268,7 +268,8 @@ function ChatInterface({
     if (!selectedProject || !selectedSession) return;
     setIsForkingSession(true);
     try {
-      const result = await api.forkSession(selectedProject.name, selectedSession.id, timestamp);
+      const provider = (selectedSession as any).__provider || 'claude';
+      const result = await api.forkSession(selectedProject.name, selectedSession.id, timestamp, provider);
       if (result.newSessionId) {
         // Refresh the sidebar session list so the fork appears
         window.refreshProjects?.();

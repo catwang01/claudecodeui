@@ -138,7 +138,7 @@ import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './util
 import { initializeDatabase, sessionNamesDb, sessionDb, sessionFileCache, sessionsDb, applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, applyLastAutoDocAt, applyReadState, appConfigDb } from './database/db.js';
 import { startAutoDocTimer } from './auto-doc.js';
 import { stopAllTapSessions, tapViewerProxyForSession } from './tap.js';
-import { sessionSynchronizerService } from './modules/providers/index.js';
+import { sessionSynchronizerService, initializeSessionsWatcher } from './modules/providers/index.js';
 import { configureWebPush } from './services/vapid-keys.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
 import { IS_PLATFORM } from './constants/config.js';
@@ -838,14 +838,15 @@ app.delete('/api/projects/:projectName/sessions/:sessionId', authenticateToken, 
 app.post('/api/projects/:projectName/sessions/:sessionId/fork', authenticateToken, async (req, res) => {
     try {
         const { projectName, sessionId } = req.params;
-        const { forkAfterTimestamp } = req.body || {};
+        const { forkAfterTimestamp, provider } = req.body || {};
         if (forkAfterTimestamp !== undefined) {
             if (typeof forkAfterTimestamp !== 'string' || isNaN(new Date(forkAfterTimestamp).getTime())) {
                 return res.status(400).json({ error: 'Invalid forkAfterTimestamp' });
             }
         }
-        console.log(`[API] Forking session: ${sessionId} in project: ${projectName}${forkAfterTimestamp ? ` at ${forkAfterTimestamp}` : ''}`);
-        const newSessionId = await forkSession(projectName, sessionId, forkAfterTimestamp || null);
+        const forkProvider = typeof provider === 'string' && provider ? provider : 'claude';
+        console.log(`[API] Forking session: ${sessionId} in project: ${projectName} (provider=${forkProvider}${forkAfterTimestamp ? ` at ${forkAfterTimestamp}` : ''})`);
+        const newSessionId = await forkSession(projectName, sessionId, forkAfterTimestamp || null, forkProvider);
         console.log(`[API] Session ${sessionId} forked as ${newSessionId}`);
         res.json({ success: true, newSessionId });
     } catch (error) {
@@ -2055,6 +2056,8 @@ function handleChatConnection(ws, request) {
                     isActive = isCodexSessionActive(sessionId);
                 } else if (provider === 'gemini') {
                     isActive = isGeminiSessionActive(sessionId);
+                } else if (provider === 'copilot') {
+                    isActive = isCopilotSessionActive(sessionId);
                 } else {
                     // Use Claude Agents SDK
                     isActive = isClaudeSDKSessionActive(sessionId);
@@ -2089,7 +2092,8 @@ function handleChatConnection(ws, request) {
                     claude: getActiveClaudeSDKSessions(),
                     cursor: getActiveCursorSessions(),
                     codex: getActiveCodexSessions(),
-                    gemini: getActiveGeminiSessions()
+                    gemini: getActiveGeminiSessions(),
+                    copilot: getActiveCopilotSessions(),
                 };
                 writer.send({
                     type: 'active-sessions',
@@ -2981,6 +2985,17 @@ async function startServer() {
 
             // Start watching the projects folder for changes
             await setupProjectsWatcher();
+
+            // Initialize file-based sessions watcher (watches ~/.copilot/session-state, etc.)
+            initializeSessionsWatcher({
+                getProjects: async () => getProjects(),
+                broadcast: (msg) => {
+                    const str = JSON.stringify(msg);
+                    connectedClients.forEach(client => {
+                        if (client.readyState === WebSocket.OPEN) client.send(str);
+                    });
+                },
+            });
 
             // Sync all provider sessions to DB on startup (non-blocking)
             console.log('[DEBUG] About to call sessionSynchronizerService.synchronizeSessions()');

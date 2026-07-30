@@ -67,7 +67,7 @@ import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import os from 'os';
 import sessionManager from './sessionManager.js';
-import { applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, applyLastAutoDocAt, filterHiddenAutoDocSessions, applyReadState, appConfigDb, sessionDb, sessionFileCache, userDb, userSettingsDb } from './database/db.js';
+import { applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, applyLastAutoDocAt, filterHiddenAutoDocSessions, applyReadState, applyForkParent, appConfigDb, sessionDb, sessionFileCache, userDb, userSettingsDb } from './database/db.js';
 import { projectsDb, sessionsDb } from './modules/database/index.js';
 import { claudeSessionSynchronizer } from './modules/providers/list/claude/claude-session-synchronizer.provider.js';
 
@@ -631,6 +631,7 @@ async function getProjectData(dbProject, codexSessionsIndexRef, autoDocPreFilter
   applyLastAutoDocAt(filteredClaude, 'claude');
   filterHiddenAutoDocSessions(filteredClaude);
   applyReadState(filteredClaude, 'claude');
+  applyForkParent(filteredClaude, 'claude');
   project.sessions = filteredClaude.slice(0, 15);
   project.sessionMeta = {
     hasMore: filteredClaude.length > 15,
@@ -690,6 +691,7 @@ async function getProjectData(dbProject, codexSessionsIndexRef, autoDocPreFilter
   applyCustomSessionNames(project.copilotSessions, 'copilot');
   applyHiddenFromRecents(project.copilotSessions, 'copilot');
   applyReadState(project.copilotSessions, 'copilot');
+  applyForkParent(project.copilotSessions, 'copilot');
 
   if (taskMasterResult.status === 'fulfilled') {
     const r = taskMasterResult.value;
@@ -740,6 +742,7 @@ function refreshProjectSessions(cachedProject, projectPath) {
   applyLastAutoDocAt(filteredClaude, 'claude');
   filterHiddenAutoDocSessions(filteredClaude);
   applyReadState(filteredClaude, 'claude');
+  applyForkParent(filteredClaude, 'claude');
 
   cachedProject.sessions = filteredClaude.slice(0, 15);
   cachedProject.sessionMeta = {
@@ -811,6 +814,7 @@ function surgicallyUpdateSession(cachedProject, sessionId) {
   applyLastAutoDocAt(sessionArr, 'claude');
   filterHiddenAutoDocSessions(sessionArr);
   applyReadState(sessionArr, 'claude');
+  applyForkParent(sessionArr, 'claude');
 
   const idx = cachedProject.sessions.findIndex(s => s.id === sessionId);
   if (sessionArr.length === 0) {
@@ -997,6 +1001,7 @@ async function getProjectsLegacy(progressCallback = null) {
       applyLastAutoDocAt(project.sessions, 'claude');
       filterHiddenAutoDocSessions(project.sessions);
       applyReadState(project.sessions, 'claude');
+      applyForkParent(project.sessions, 'claude');
 
       project.cursorSessions = cursorSessions.status === 'fulfilled' ? cursorSessions.value : [];
       applyCustomSessionNames(project.cursorSessions, 'cursor');
@@ -1341,12 +1346,23 @@ async function getSessionFileMeta(filePath) {
 
     // Forward scan: grab sessionId/cwd from first parseable entry if not yet known
     if (!meta.sessionId) {
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const e = JSON.parse(line);
-          if (e.sessionId) { meta.sessionId = e.sessionId; meta.cwd = e.cwd || null; break; }
-        } catch { /* skip malformed */ }
+      // Copilot fallback: extract session ID from path
+      // Format: ~/.copilot/session-state/{session-id}/events.jsonl
+      if (path.basename(filePath) === 'events.jsonl') {
+        const sessionDir = path.dirname(filePath);
+        if (path.basename(path.dirname(sessionDir)) === 'session-state') {
+          meta.sessionId = path.basename(sessionDir);
+        }
+      }
+      // Claude format: read sessionId/cwd from first entry
+      if (!meta.sessionId) {
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const e = JSON.parse(line);
+            if (e.sessionId) { meta.sessionId = e.sessionId; meta.cwd = e.cwd || null; break; }
+          } catch { /* skip malformed */ }
+        }
       }
     }
 
@@ -1363,6 +1379,7 @@ async function getSessionFileMeta(filePath) {
           meta.lastActivity = e.timestamp;
           needActivity = false;
         }
+        // Claude format: { message: { role: 'user', content: '...' } }
         if (needUser && e.message?.role === 'user' && e.message?.content) {
           let text = e.message.content;
           if (Array.isArray(text) && text.length > 0 && text[0].type === 'text') text = text[0].text;
@@ -1373,6 +1390,16 @@ async function getSessionFileMeta(filePath) {
             if (!isSystem) { meta.lastUserMessage = text.slice(0, 500); needUser = false; }
           }
         }
+        // Copilot format: { type: 'user.message', data: { content: '...' } }
+        if (needUser && e.type === 'user.message' && e.data?.content) {
+          let text = e.data.content;
+          if (Array.isArray(text) && text.length > 0) text = text[0]?.text || text[0] || '';
+          if (typeof text === 'string' && text.length > 0) {
+            meta.lastUserMessage = text.slice(0, 500);
+            needUser = false;
+          }
+        }
+        // Claude format: { message: { role: 'assistant', content: '...' } }
         if (needAssistant && e.message?.role === 'assistant' && e.message?.content && !e.isApiErrorMessage) {
           let assistantText = null;
           if (Array.isArray(e.message.content)) {
@@ -1382,6 +1409,16 @@ async function getSessionFileMeta(filePath) {
           } else if (typeof e.message.content === 'string') {
             assistantText = e.message.content;
           }
+          if (assistantText && !assistantText.includes('{"subtasks":')) {
+            meta.lastAssistantMessage = assistantText.slice(0, 500);
+            needAssistant = false;
+          }
+        }
+        // Copilot format: { type: 'assistant.message', data: { content: '...' } }
+        if (needAssistant && e.type === 'assistant.message' && e.data?.content) {
+          const assistantText = typeof e.data.content === 'string'
+            ? e.data.content
+            : JSON.stringify(e.data.content);
           if (assistantText && !assistantText.includes('{"subtasks":')) {
             meta.lastAssistantMessage = assistantText.slice(0, 500);
             needAssistant = false;
@@ -1606,7 +1643,7 @@ async function renameProject(projectName, newDisplayName) {
 }
 
 // Delete a session from a project
-async function forkSession(projectName, sessionId, forkAfterTimestamp = null) {
+async function forkSession(projectName, sessionId, forkAfterTimestamp = null, provider = 'claude') {
   const { randomUUID } = await import('crypto');
   const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
 
@@ -1670,6 +1707,31 @@ async function forkSession(projectName, sessionId, forkAfterTimestamp = null) {
 
   const newSessionFile = path.join(projectDir, `${newSessionId}.jsonl`);
   await fs.writeFile(newSessionFile, newLines.join('\n') + '\n', 'utf8');
+
+  // Copilot's REST history reader looks up jsonl_path via sessionsDb; without a
+  // row the forked session shows up in the sidebar but its messages don't load.
+  // (Claude discovers sessions purely from disk, so it doesn't need this row.)
+  if (provider === 'copilot') {
+    try {
+      // Reconstruct the cwd from the encoded project name. copilot-sdk.js encodes
+      // the cwd via s/[^a-zA-Z0-9]/-/g, which we can't perfectly invert. The
+      // project_path column on other rows in this project already carries the
+      // real path, so reuse it.
+      const cwdRow = sessionsDb.getSessionById(sessionId);
+      const cwd = cwdRow?.project_path || null;
+      sessionsDb.createSession(newSessionId, 'copilot', cwd || '', null, null, null, newSessionFile);
+    } catch (err) {
+      console.warn(`[Fork] Failed to register forked copilot session ${newSessionId}:`, err.message);
+    }
+  }
+
+  // Record the fork parent relationship so the sidebar can render a fork tree.
+  try {
+    sessionDb.markForkParent(newSessionId, sessionId, provider);
+  } catch (err) {
+    console.warn(`[Fork] Failed to record fork parent for ${newSessionId}:`, err.message);
+  }
+
   return newSessionId;
 }
 
@@ -1685,6 +1747,12 @@ async function deleteSession(projectName, sessionId) {
       throw error;
     }
     // File already gone — still proceed to clean up DB records
+  }
+  // Purge fork-tree links referencing this session so the tree stays consistent.
+  try {
+    sessionDb.removeForkLinks(sessionId, 'claude');
+  } catch (err) {
+    console.warn(`[Fork] Failed to remove fork links for ${sessionId}:`, err.message);
   }
   return true;
 }
