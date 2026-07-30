@@ -15,9 +15,55 @@
 
 import { CopilotClient, approveAll } from '@github/copilot-sdk';
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 import { createNormalizedMessage } from './providers/types.js';
 import { notifyRunFailed, notifyRunStopped } from './services/notification-orchestrator.js';
 import { COPILOT_MODELS } from '../shared/modelConstants.js';
+import { sessionsDb } from './database/db.js';
+console.log('[copilot-sdk] Module loaded, sessionsDb type:', typeof sessionsDb, 'createSession:', typeof sessionsDb?.createSession);
+
+// ── JSONL persistence ─────────────────────────────────────────────────────────
+function getSessionJsonlPath(sessionId, cwd) {
+  const projectPath = cwd || process.cwd();
+  const encodedPath = projectPath.replace(/[^a-zA-Z0-9]/g, '-');
+  const projectDir = path.join(os.homedir(), '.claude', 'projects', encodedPath);
+  fs.mkdirSync(projectDir, { recursive: true });
+  return path.join(projectDir, `${sessionId}.jsonl`);
+}
+
+function appendJsonl(filePath, obj) {
+  try {
+    fs.appendFileSync(filePath, JSON.stringify(obj) + '\n', 'utf8');
+  } catch (_) {}
+}
+
+function writeUserMessage(jsonlPath, sessionId, content) {
+  appendJsonl(jsonlPath, {
+    type: 'user',
+    message: { role: 'user', content: [{ type: 'text', text: content }] },
+    sessionId,
+    uuid: crypto.randomUUID(),
+    timestamp: new Date().toISOString(),
+  });
+}
+
+function writeAssistantMessage(jsonlPath, sessionId, content, model) {
+  appendJsonl(jsonlPath, {
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      content: [{ type: 'text', text: content }],
+      model: model || 'copilot',
+      stop_reason: 'end_turn',
+      usage: { input_tokens: 0, output_tokens: 0 },
+    },
+    sessionId,
+    uuid: crypto.randomUUID(),
+    timestamp: new Date().toISOString(),
+  });
+}
 
 // ── Singleton client ──────────────────────────────────────────────────────────
 // One CopilotClient per process; each conversation gets its own session.
@@ -78,18 +124,32 @@ function newRequestId() {
  * @param {object} ws - WebSocket writer with .send(string)
  */
 export async function queryCopilotSDK(command, options = {}, ws) {
-  const { sessionId, cwd, sessionSummary } = options;
+  const { sessionId, cwd, sessionSummary, toolsSettings } = options;
   const model = options.model || COPILOT_MODELS.DEFAULT;
-  const permissionMode = options.permissionMode || 'default';
+  let permissionMode = options.permissionMode || 'default';
+
+  // Mirror Claude behavior: if the user turned on "Skip permissions" (Dangerous Mode)
+  // in the settings panel, promote the effective mode to bypassPermissions unless
+  // the user explicitly asked for plan mode this turn.
+  if (toolsSettings?.skipPermissions && permissionMode !== 'plan') {
+    permissionMode = 'bypassPermissions';
+  }
 
   let capturedSessionId = sessionId || null;
+  let jsonlPath = null;
   const abortController = new AbortController();
 
   const send = (msg) => {
     try {
-      ws.send(typeof msg === 'string' ? msg : JSON.stringify(msg));
-    } catch (_) {
-      // WebSocket may have closed
+      const msgObj = typeof msg === 'string' ? JSON.parse(msg) : msg;
+      console.log('[copilot-sdk] send() kind:', msgObj?.kind, 'sessionId:', msgObj?.sessionId);
+      if (ws.isWebSocketWriter) {
+        ws.send(msg);
+      } else {
+        ws.send(typeof msg === 'string' ? msg : JSON.stringify(msg));
+      }
+    } catch (err) {
+      console.log('[copilot-sdk] send() error:', err.message);
     }
   };
 
@@ -103,12 +163,14 @@ export async function queryCopilotSDK(command, options = {}, ws) {
     // wired up in a follow-up once the basic flow works.)
     const autoApprove = permissionMode === 'bypassPermissions' || permissionMode === 'acceptEdits';
 
+    // Copilot SDK expects a PermissionResponse object (e.g. { kind: "approve-once" }),
+    // NOT a boolean. Returning `true` causes "unexpected user permission response".
     const onPermissionRequest = autoApprove
       ? approveAll
       : async (_toolName, _input) => {
-          // TODO: wire up interactive approval via ws permission_request events
-          // For now approve all — same default behavior as Claude's plan mode
-          return true;
+          // TODO: wire up interactive approval via ws permission_request events.
+          // For now approve everything by default (mirror Claude's plan mode).
+          return { kind: 'approve-once' };
         };
 
     // ── Create or resume session ──────────────────────────────────────────────
@@ -118,14 +180,14 @@ export async function queryCopilotSDK(command, options = {}, ws) {
     if (existingCopilotId) {
       console.log(`[copilot-sdk] Resuming session ${existingCopilotId.slice(0, 8)}`);
       try {
-        session = await client.resumeSession(existingCopilotId, { onPermissionRequest });
+        session = await client.resumeSession(existingCopilotId, { onPermissionRequest, streaming: true });
       } catch (resumeErr) {
         console.warn('[copilot-sdk] Resume failed, creating new session:', resumeErr.message);
-        session = await client.createSession({ model, onPermissionRequest, workingDirectory: cwd });
+        session = await client.createSession({ model, onPermissionRequest, workingDirectory: cwd, streaming: true });
       }
     } else {
       console.log('[copilot-sdk] Creating new session, model:', model);
-      session = await client.createSession({ model, onPermissionRequest, workingDirectory: cwd });
+      session = await client.createSession({ model, onPermissionRequest, workingDirectory: cwd, streaming: true });
     }
 
     // ── Map session IDs ───────────────────────────────────────────────────────
@@ -134,6 +196,19 @@ export async function queryCopilotSDK(command, options = {}, ws) {
       capturedSessionId = copilotSessionId;
     }
     sessionIdMap.set(capturedSessionId, copilotSessionId);
+
+    // ── Init JSONL persistence ────────────────────────────────────────────────
+    jsonlPath = getSessionJsonlPath(capturedSessionId, cwd);
+    writeUserMessage(jsonlPath, capturedSessionId, command);
+
+    // Register session + jsonl_path in DB so REST API can serve history
+    try {
+      console.log('[copilot-sdk] Registering session in DB:', capturedSessionId?.slice(0, 8), jsonlPath);
+      sessionsDb.createSession(capturedSessionId, 'copilot', cwd || process.cwd(), null, null, null, jsonlPath);
+      console.log('[copilot-sdk] Session registered in DB');
+    } catch (dbErr) {
+      console.warn('[copilot-sdk] Failed to register session in DB:', dbErr.message);
+    }
 
     activeSessions.set(capturedSessionId, {
       copilotSession: session,
@@ -145,6 +220,7 @@ export async function queryCopilotSDK(command, options = {}, ws) {
     if (!sessionId) {
       send(createNormalizedMessage({
         kind: 'session_created',
+        newSessionId: capturedSessionId,
         sessionId: capturedSessionId,
         provider: 'copilot',
       }));
@@ -153,28 +229,45 @@ export async function queryCopilotSDK(command, options = {}, ws) {
     // ── Stream events ─────────────────────────────────────────────────────────
     let accumulatedText = '';
 
-    await new Promise((resolve, reject) => {
-      // Streaming deltas — send immediately for responsive UI
-      session.on('assistant.message_delta', (event) => {
-        const delta = event?.data?.deltaContent || '';
-        if (!delta) return;
-        accumulatedText += delta;
-        send(createNormalizedMessage({
-          kind: 'stream_delta',
-          content: delta,
-          sessionId: capturedSessionId,
-          provider: 'copilot',
-        }));
-      });
+    // Register streaming event listeners BEFORE send().
+    session.on('assistant.message_delta', (event) => {
+      const delta = event?.data?.deltaContent || '';
+      if (!delta) return;
+      accumulatedText += delta;
+      send(createNormalizedMessage({
+        kind: 'stream_delta',
+        content: delta,
+        sessionId: capturedSessionId,
+        provider: 'copilot',
+      }));
+    });
 
-      // Complete assistant message
-      session.on('assistant.message', (event) => {
-        const content = event?.data?.content || accumulatedText;
-        if (content) {
+    session.on('assistant.message', (event) => {
+      const finalContent = event?.data?.content || '';
+      const streamed = accumulatedText;
+      console.log(
+        '[copilot-sdk] assistant.message: final=%d streamed=%d toolReqs=%d',
+        finalContent.length,
+        streamed.length,
+        event?.data?.toolRequests?.length || 0,
+      );
+
+      // Persist the assistant's text for this turn to our JSONL so history
+      // survives reloads. Skip empty content (tool-only turns).
+      if (finalContent && jsonlPath) {
+        writeAssistantMessage(jsonlPath, capturedSessionId, finalContent, model);
+      }
+
+      if (streamed) {
+        // The frontend already displays the streamed deltas as an in-flight
+        // message; finalize it into a persistent text bubble. If the final
+        // consolidated content is longer than what streamed (rare — trailing
+        // punctuation, etc.), emit the gap as one last delta before ending.
+        if (finalContent && finalContent.length > streamed.length && finalContent.startsWith(streamed)) {
+          const gap = finalContent.slice(streamed.length);
           send(createNormalizedMessage({
-            kind: 'text',
-            role: 'assistant',
-            content,
+            kind: 'stream_delta',
+            content: gap,
             sessionId: capturedSessionId,
             provider: 'copilot',
           }));
@@ -184,52 +277,80 @@ export async function queryCopilotSDK(command, options = {}, ws) {
           sessionId: capturedSessionId,
           provider: 'copilot',
         }));
-        accumulatedText = '';
-      });
-
-      // Tool invocation start
-      session.on('tool.invocation_started', (event) => {
-        const t = event?.data;
-        if (!t) return;
+      } else if (finalContent) {
+        // No deltas arrived for this turn (non-streaming path). Send the text
+        // outright so the UI still shows it.
         send(createNormalizedMessage({
-          kind: 'tool_use',
-          toolName: t.name || t.toolName || 'unknown',
-          toolInput: t.input || t.arguments || {},
-          toolId: t.id || t.toolCallId || newRequestId(),
+          kind: 'text',
+          role: 'assistant',
+          content: finalContent,
           sessionId: capturedSessionId,
           provider: 'copilot',
         }));
-      });
+      }
+      // If both streamed and finalContent are empty (pure tool-call turn), the
+      // frontend has nothing to finalize — leave the streaming buffer alone.
 
-      // Tool invocation result
-      session.on('tool.invocation_finished', (event) => {
-        const t = event?.data;
-        if (!t) return;
-        const content = typeof t.output === 'string'
-          ? t.output
-          : JSON.stringify(t.output ?? '');
-        send(createNormalizedMessage({
-          kind: 'tool_result',
-          toolId: t.id || t.toolCallId || '',
-          content,
-          isError: Boolean(t.isError),
-          sessionId: capturedSessionId,
-          provider: 'copilot',
-        }));
-      });
+      accumulatedText = '';
+    });
 
-      // Session idle = agent turn complete
-      session.on('session.idle', () => resolve(undefined));
+    // The SDK emits `tool.execution_start` / `tool.execution_complete` — the
+    // earlier draft listened for `tool.invocation_started/finished` which never
+    // fire, so tool activity silently disappeared during Copilot responses.
+    session.on('tool.execution_start', (event) => {
+      const t = event?.data;
+      if (!t) return;
+      send(createNormalizedMessage({
+        kind: 'tool_use',
+        toolName: t.toolName || t.mcpToolName || 'unknown',
+        toolInput: t.arguments || {},
+        toolId: t.toolCallId || newRequestId(),
+        sessionId: capturedSessionId,
+        provider: 'copilot',
+      }));
+    });
 
-      // Abort handler
+    session.on('tool.execution_complete', (event) => {
+      const t = event?.data;
+      if (!t) return;
+      const rawContent = t.result?.detailedContent
+        ?? t.result?.content
+        ?? t.error?.message
+        ?? '';
+      const contentStr = typeof rawContent === 'string' ? rawContent : JSON.stringify(rawContent);
+      send(createNormalizedMessage({
+        kind: 'tool_result',
+        toolId: t.toolCallId || '',
+        content: contentStr,
+        isError: t.success === false || Boolean(t.error),
+        sessionId: capturedSessionId,
+        provider: 'copilot',
+      }));
+    });
+
+    // Send the prompt, then wait for session.idle.
+    // We register the idle listener AFTER awaiting send() so that the initial
+    // idle event emitted right after createSession/resumeSession is already past
+    // and we only catch the idle that signals the end of this turn.
+    console.log('[copilot-sdk] Calling session.send()...');
+    await session.send({ prompt: command });
+    console.log('[copilot-sdk] session.send() resolved, now waiting for session.idle');
+
+    await new Promise((resolve) => {
       const onAbort = () => {
         session.disconnect().catch(() => {});
         resolve(undefined);
       };
       abortController.signal.addEventListener('abort', onAbort, { once: true });
-
-      // Fire the prompt
-      session.send({ prompt: command }).catch(reject);
+      // Log all events to understand what's happening
+      const unsubAll = session.on((event) => {
+        console.log('[copilot-sdk] event:', event.type, JSON.stringify(event.data)?.slice(0, 100));
+      });
+      session.on('session.idle', () => {
+        console.log('[copilot-sdk] session.idle received — resolving');
+        unsubAll();
+        resolve(undefined);
+      });
     });
 
     // ── Complete ──────────────────────────────────────────────────────────────
