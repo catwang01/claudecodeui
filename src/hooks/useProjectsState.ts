@@ -70,6 +70,7 @@ const getProjectSessions = (project: Project): ProjectSession[] => {
     ...(project.codexSessions ?? []),
     ...(project.cursorSessions ?? []),
     ...(project.geminiSessions ?? []),
+    ...(project.copilotSessions ?? []),
   ];
 };
 
@@ -443,6 +444,21 @@ export function useProjectsState({
         }
         return;
       }
+
+      const copilotSession = project.copilotSessions?.find((session) => session.id === sessionId);
+      if (copilotSession) {
+        const shouldUpdateProject = selectedProject?.name !== project.name;
+        const shouldUpdateSession =
+          selectedSession?.id !== sessionId || selectedSession.__provider !== 'copilot';
+
+        if (shouldUpdateProject) {
+          setSelectedProject(project);
+        }
+        if (shouldUpdateSession) {
+          setSelectedSession({ ...copilotSession, __provider: 'copilot' });
+        }
+        return;
+      }
     }
   }, [sessionId, projects, selectedProject?.name, selectedSession?.id, selectedSession?.__provider]);
 
@@ -520,6 +536,10 @@ export function useProjectsState({
         prevProjects.map((project) => ({
           ...project,
           sessions: project.sessions?.filter((session) => session.id !== sessionIdToDelete) ?? [],
+          codexSessions: project.codexSessions?.filter((session) => session.id !== sessionIdToDelete) ?? [],
+          cursorSessions: project.cursorSessions?.filter((session) => session.id !== sessionIdToDelete) ?? [],
+          geminiSessions: project.geminiSessions?.filter((session) => session.id !== sessionIdToDelete) ?? [],
+          copilotSessions: project.copilotSessions?.filter((session) => session.id !== sessionIdToDelete) ?? [],
           sessionMeta: {
             ...project.sessionMeta,
             total: Math.max(0, (project.sessionMeta?.total as number | undefined ?? 0) - 1),
