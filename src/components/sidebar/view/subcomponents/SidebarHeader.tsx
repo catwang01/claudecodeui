@@ -1,9 +1,11 @@
-import { Clock, Folder, FolderPlus, MessageSquare, Plus, RefreshCw, Search, X, PanelLeftClose } from 'lucide-react';
+import { Clock, Folder, FolderPlus, GitFork, MessageSquare, Plus, RefreshCw, Search, X, PanelLeftClose } from 'lucide-react';
+import { useSyncExternalStore } from 'react';
 import type { TFunction } from 'i18next';
 import { Button, Input } from '../../../../shared/view/ui';
 import { IS_PLATFORM } from '../../../../constants/config';
 import { cn } from '../../../../lib/utils';
 import GitHubStarBadge from './GitHubStarBadge';
+import { forkTreeStore } from '../../utils/forkTreeStore';
 
 type SearchMode = 'projects' | 'conversations' | 'recent';
 
@@ -42,6 +44,16 @@ export default function SidebarHeader({
   cleanMode = false,
   t,
 }: SidebarHeaderProps) {
+  // Fork-tree visibility toggle — shared across Recents/Projects/Conversations.
+  const forkTreeMode = useSyncExternalStore(
+    forkTreeStore.subscribe,
+    forkTreeStore.getMode,
+    forkTreeStore.getMode,
+  );
+  const forkTreeTitle = forkTreeMode
+    ? t('recents.forkTreeOn', 'Show fork tree: on (forked sessions nested)')
+    : t('recents.forkTreeOff', 'Show fork tree: off (flat list)');
+
   const LogoBlock = () => (
     <div className="flex min-w-0 items-center gap-2.5">
       <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-primary/90 shadow-sm">
@@ -74,6 +86,21 @@ export default function SidebarHeader({
           )}
 
           <div className="flex flex-shrink-0 items-center gap-0.5">
+            <Button
+              variant="ghost"
+              size="sm"
+              className={cn(
+                'h-7 w-7 rounded-lg p-0 hover:bg-accent/80',
+                forkTreeMode
+                  ? 'text-sky-600 hover:text-sky-600 dark:text-sky-400 dark:hover:text-sky-400'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+              onClick={() => forkTreeStore.toggleMode()}
+              aria-pressed={forkTreeMode}
+              title={forkTreeTitle}
+            >
+              <GitFork className="h-3.5 w-3.5" />
+            </Button>
             <Button
               variant="ghost"
               size="sm"
@@ -201,6 +228,19 @@ export default function SidebarHeader({
           )}
 
           <div className="flex flex-shrink-0 gap-1.5">
+            <button
+              className={cn(
+                'flex h-8 w-8 items-center justify-center rounded-lg bg-muted/50 transition-all active:scale-95',
+                forkTreeMode
+                  ? 'text-sky-600 dark:text-sky-400'
+                  : 'text-muted-foreground',
+              )}
+              onClick={() => forkTreeStore.toggleMode()}
+              aria-pressed={forkTreeMode}
+              title={forkTreeTitle}
+            >
+              <GitFork className="h-4 w-4" />
+            </button>
             <button
               className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted/50 transition-all active:scale-95"
               onClick={onRefresh}

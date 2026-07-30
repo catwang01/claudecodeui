@@ -1,10 +1,12 @@
 import { ChevronDown, Plus } from 'lucide-react';
-import { memo } from 'react';
+import { memo, useCallback, useMemo, useSyncExternalStore } from 'react';
 import type { TFunction } from 'i18next';
 import { Button } from '../../../../shared/view/ui';
 import type { Project, ProjectSession, SessionProvider } from '../../../../types/app';
 import type { SessionWithProvider } from '../../types/types';
 import SidebarSessionItem from './SidebarSessionItem';
+import { forkTreeStore } from '../../utils/forkTreeStore';
+import { buildForkTree } from '../../utils/forkTree';
 
 type SidebarProjectSessionsProps = {
   project: Project;
@@ -76,6 +78,26 @@ export default memo(function SidebarProjectSessions({
   readSessionIds,
   t,
 }: SidebarProjectSessionsProps) {
+  const forkTreeMode = useSyncExternalStore(
+    forkTreeStore.subscribe,
+    forkTreeStore.getMode,
+    forkTreeStore.getMode,
+  );
+  const collapsedIds = useSyncExternalStore(
+    forkTreeStore.subscribe,
+    forkTreeStore.getCollapsed,
+    forkTreeStore.getCollapsed,
+  );
+  const toggleCollapse = useCallback(
+    (id: string) => { forkTreeStore.toggleCollapse(id); },
+    [],
+  );
+
+  const forkTree = useMemo(
+    () => buildForkTree(sessions, { collapsedIds, enabled: forkTreeMode }),
+    [sessions, collapsedIds, forkTreeMode],
+  );
+
   if (!isExpanded) {
     return null;
   }
@@ -115,9 +137,10 @@ export default memo(function SidebarProjectSessions({
           <p className="text-xs text-muted-foreground">{t('sessions.noSessions')}</p>
         </div>
       ) : (
-        sessions.map((session) => (
+        forkTree.map(({ session, depth, hasChildren, isCollapsed }) => (
           <SidebarSessionItem
             key={session.id}
+            variant="default"
             project={project}
             session={session}
             selectedSession={selectedSession}
@@ -131,6 +154,10 @@ export default memo(function SidebarProjectSessions({
             onProjectSelect={onProjectSelect}
             onSessionSelect={onSessionSelect}
             onDeleteSession={onDeleteSession}
+            depth={depth}
+            hasChildren={hasChildren}
+            isCollapsed={isCollapsed}
+            onToggleCollapse={() => toggleCollapse(session.id)}
             isProcessing={processingSessions?.has(session.id) ?? false}
             isRead={readSessionIds?.has(session.id) ?? false}
             t={t}

@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
+import { useMemo, useState, useEffect, useRef, useCallback, useSyncExternalStore, type ReactNode } from 'react';
 import { Clock, Folder, MessageSquare, Search } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { ScrollArea } from '../../../../shared/view/ui';
@@ -10,7 +10,10 @@ import SidebarHeader from './SidebarHeader';
 import SidebarProjectList, { type SidebarProjectListProps } from './SidebarProjectList';
 import SidebarSessionItem from './SidebarSessionItem';
 import { getProjectColor } from '../../utils/utils';
+import { cn } from '../../../../lib/utils';
 import { authenticatedFetch } from '../../../../utils/api';
+import { forkTreeStore } from '../../utils/forkTreeStore';
+import { buildForkTree } from '../../utils/forkTree';
 
 type SearchMode = 'projects' | 'conversations' | 'recent';
 
@@ -112,6 +115,19 @@ export default function SidebarContent({
 
   const [hiddenSet, setHiddenSet] = useState<Set<string>>(new Set());
   const [hideAutoDoc, setHideAutoDoc] = useState(true);
+  // Fork-tree state — the toggle now lives in the SidebarHeader (cross-tab),
+  // but Recents still reads mode + collapsed set to render its tree.
+  const forkTreeMode = useSyncExternalStore(
+    forkTreeStore.subscribe,
+    forkTreeStore.getMode,
+    forkTreeStore.getMode,
+  );
+  const collapsedForkIds = useSyncExternalStore(
+    forkTreeStore.subscribe,
+    forkTreeStore.getCollapsed,
+    forkTreeStore.getCollapsed,
+  );
+  const toggleCollapseFork = useCallback((sessionId: string) => { forkTreeStore.toggleCollapse(sessionId); }, []);
 
   useEffect(() => {
     authenticatedFetch('/api/settings/auto-doc')
@@ -213,6 +229,27 @@ export default function SidebarContent({
     return recentSessions.filter(({ project }) => project.name === selectedProjectFilter);
   }, [recentSessions, selectedProjectFilter]);
 
+  // Reorder the flat recents into a fork tree. Sort weight = newest leaf time in
+  // each subtree, so a branch that just gained a fresh fork bubbles to the top.
+  const recentTree = useMemo(() => {
+    type Entry = (typeof filteredRecentSessions)[number];
+    // buildForkTree needs SessionLike shape at the top level; wrap and unwrap.
+    const wrapped = filteredRecentSessions.map((entry, idx) => ({
+      id: entry.session.id,
+      forkParentId: entry.session.forkParentId as string | undefined,
+      lastActivity: entry.session.lastActivity as string | undefined,
+      createdAt: entry.session.createdAt as string | undefined,
+      __idx: idx,
+    }));
+    const nodes = buildForkTree(wrapped, { collapsedIds: collapsedForkIds, enabled: forkTreeMode });
+    return nodes.map((n) => ({
+      ...filteredRecentSessions[n.session.__idx],
+      depth: n.depth,
+      hasChildren: n.hasChildren,
+      isCollapsed: n.isCollapsed,
+    })) as Array<Entry & { depth: number; hasChildren: boolean; isCollapsed: boolean }>;
+  }, [filteredRecentSessions, forkTreeMode, collapsedForkIds]);
+
   const loadMore = useCallback(() => {
     setVisibleCount(prev => prev + RECENT_PAGE_SIZE);
   }, []);
@@ -289,7 +326,7 @@ export default function SidebarContent({
                   {selectedProjectFilter ? 'No recent sessions for this project' : 'No recent sessions'}
                 </p>
               </div>
-            ) : filteredRecentSessions.slice(0, visibleCount).map(({ session, project }) => {
+            ) : recentTree.slice(0, visibleCount).map(({ session, project, depth, hasChildren, isCollapsed }) => {
               const color = getProjectColor(project.name);
               return (
               <SidebarSessionItem
@@ -297,6 +334,10 @@ export default function SidebarContent({
                 variant="recents"
                 project={project}
                 session={session}
+                depth={depth}
+                hasChildren={hasChildren}
+                isCollapsed={isCollapsed}
+                onToggleCollapse={() => toggleCollapseFork(session.id)}
                 currentTime={projectListProps.currentTime}
                 isProcessing={projectListProps.processingSessions?.has(session.id) ?? false}
                 isRead={session.isRead || (projectListProps.readSessionIds?.has(session.id) ?? false)}

@@ -1,5 +1,5 @@
 import { memo, useState } from 'react';
-import { Check, Clock, Edit2, EyeOff, Folder, Sparkles, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Clock, Edit2, EyeOff, Folder, GitFork, Sparkles, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { Badge, Button } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
@@ -30,6 +30,11 @@ type DefaultProps = {
     sessionTitle: string,
     provider: SessionProvider,
   ) => void;
+  // Fork-tree affordances (also available in the projects-tab session list).
+  depth?: number;
+  hasChildren?: boolean;
+  isCollapsed?: boolean;
+  onToggleCollapse?: () => void;
   isRead?: boolean;
   isProcessing?: boolean;
   t: TFunction;
@@ -39,6 +44,10 @@ type RecentsProps = {
   variant: 'recents';
   project: Project;
   session: SessionWithProvider;
+  depth?: number;
+  hasChildren?: boolean;
+  isCollapsed?: boolean;
+  onToggleCollapse?: () => void;
   currentTime: Date;
   projectColorDot: string;
   projectDisplayName: string;
@@ -69,11 +78,19 @@ function sessionItemPropsAreEqual(prev: SidebarSessionItemProps, next: SidebarSe
   if (prev.isProcessing !== next.isProcessing) return false;
   if (prev.isRead !== next.isRead) return false;
   if (prev.variant !== next.variant) return false;
+  if (prev.variant === 'recents' && next.variant === 'recents') {
+    if ((prev as RecentsProps).depth !== (next as RecentsProps).depth) return false;
+    if ((prev as RecentsProps).hasChildren !== (next as RecentsProps).hasChildren) return false;
+    if ((prev as RecentsProps).isCollapsed !== (next as RecentsProps).isCollapsed) return false;
+  }
   if (prev.variant !== 'recents' && next.variant !== 'recents') {
-    // default variant: also check selection / editing state
+    // default variant: also check selection / editing state and fork-tree affordances
     if ((prev as DefaultProps).selectedSession?.id !== (next as DefaultProps).selectedSession?.id) return false;
     if ((prev as DefaultProps).editingSession !== (next as DefaultProps).editingSession) return false;
     if ((prev as DefaultProps).editingSessionName !== (next as DefaultProps).editingSessionName) return false;
+    if ((prev as DefaultProps).depth !== (next as DefaultProps).depth) return false;
+    if ((prev as DefaultProps).hasChildren !== (next as DefaultProps).hasChildren) return false;
+    if ((prev as DefaultProps).isCollapsed !== (next as DefaultProps).isCollapsed) return false;
   }
   return true;
 }
@@ -88,7 +105,8 @@ export default memo(function SidebarSessionItem(props: SidebarSessionItemProps) 
   const [renameValue, setRenameValue] = useState('');
 
   if (props.variant === 'recents') {
-    const { projectColorDot, projectDisplayName, isRead = false, onSessionSelect, onHideSession, onDeleteSession, onProjectNavigate, onRenameSession } = props;
+    const { projectColorDot, projectDisplayName, depth = 0, hasChildren = false, isCollapsed = false, onToggleCollapse, isRead = false, onSessionSelect, onHideSession, onDeleteSession, onProjectNavigate, onRenameSession } = props;
+    const isFork = depth > 0;
 
     const startRenaming = (e: { stopPropagation: () => void }) => {
       e.stopPropagation();
@@ -109,11 +127,29 @@ export default memo(function SidebarSessionItem(props: SidebarSessionItemProps) 
     };
 
     return (
-      <div className="group relative">
+      <div className="group relative" style={isFork ? { marginLeft: depth * 14 } : undefined}>
+        {isFork && (
+          <div
+            className="pointer-events-none absolute -left-[9px] top-0 bottom-1/2 w-[9px] rounded-bl-md border-b border-l border-border/60"
+            aria-hidden="true"
+          />
+        )}
         <div
           className="absolute left-2 top-1 bottom-1 w-[3px] rounded-full"
           style={{ background: projectColorDot }}
         />
+        {hasChildren && (
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            className="absolute left-[10px] top-[9px] z-10 flex h-4 w-4 items-center justify-center rounded text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+            title={isCollapsed ? 'Expand forks' : 'Collapse forks'}
+            aria-label={isCollapsed ? 'Expand forks' : 'Collapse forks'}
+            aria-expanded={!isCollapsed}
+          >
+            {isCollapsed ? <ChevronRight className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+          </button>
+        )}
         {sessionView.isProcessing && (
           <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2">
             <div className="h-2 w-2 animate-spin rounded-full border border-yellow-400 border-t-transparent" />
@@ -125,7 +161,10 @@ export default memo(function SidebarSessionItem(props: SidebarSessionItemProps) 
           </div>
         )}
         <div
-          className="w-full rounded-md pr-2 py-2 pl-5 text-left transition-colors hover:bg-accent/50 cursor-pointer"
+          className={cn(
+            'w-full rounded-md pr-2 py-2 text-left transition-colors hover:bg-accent/50 cursor-pointer',
+            hasChildren ? 'pl-9' : 'pl-5',
+          )}
           onClick={() => { if (!isRenaming) onSessionSelect(session, project.name); }}
           role="button"
           tabIndex={0}
@@ -154,6 +193,9 @@ export default memo(function SidebarSessionItem(props: SidebarSessionItemProps) 
               />
             ) : (
               <span className="min-w-0 truncate text-xs font-medium text-foreground flex-1 flex items-center gap-1">
+                {isFork && (
+                  <GitFork className="h-2.5 w-2.5 flex-shrink-0 text-sky-500" aria-label="Forked session" />
+                )}
                 {session.isAutoDoc && (
                   <Sparkles className="h-2.5 w-2.5 flex-shrink-0 text-amber-500" aria-label="Auto Doc" />
                 )}
@@ -267,8 +309,13 @@ export default memo(function SidebarSessionItem(props: SidebarSessionItemProps) 
     onSessionSelect,
     onDeleteSession,
     isRead = false,
+    depth = 0,
+    hasChildren = false,
+    isCollapsed = false,
+    onToggleCollapse,
   } = props;
   const isSelected = selectedSession?.id === session.id;
+  const isFork = depth > 0;
 
   const selectMobileSession = () => {
     onProjectSelect(project);
@@ -284,7 +331,28 @@ export default memo(function SidebarSessionItem(props: SidebarSessionItemProps) 
   };
 
   return (
-    <div className="group relative">
+    <div
+      className="group relative"
+      style={isFork ? { marginLeft: depth * 14 } : undefined}
+    >
+      {isFork && (
+        <div
+          className="pointer-events-none absolute -left-[9px] top-0 bottom-1/2 w-[9px] rounded-bl-md border-b border-l border-border/60 hidden md:block"
+          aria-hidden="true"
+        />
+      )}
+      {hasChildren && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onToggleCollapse?.(); }}
+          className="absolute left-0 top-[9px] z-10 hidden h-4 w-4 items-center justify-center rounded text-muted-foreground/70 hover:bg-accent hover:text-foreground md:flex"
+          title={isCollapsed ? 'Expand forks' : 'Collapse forks'}
+          aria-label={isCollapsed ? 'Expand forks' : 'Collapse forks'}
+          aria-expanded={!isCollapsed}
+        >
+          {isCollapsed ? <ChevronRight className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+        </button>
+      )}
       {sessionView.isProcessing && (
         <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2 transform">
           <div className="h-2 w-2 animate-spin rounded-full border border-yellow-400 border-t-transparent" />

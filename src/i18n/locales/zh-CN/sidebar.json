@@ -110,6 +110,11 @@
   "version": {
     "updateAvailable": "有可用更新"
   },
+  "recents": {
+    "forkTree": "显示 Fork 树",
+    "forkTreeOn": "显示 Fork 树：开（fork 会话嵌套显示）",
+    "forkTreeOff": "显示 Fork 树：关（平铺列表）"
+  },
   "search": {
     "modeProjects": "项目",
     "modeRecent": "最近",

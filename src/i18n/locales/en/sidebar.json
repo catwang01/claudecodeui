@@ -110,6 +110,11 @@
   "version": {
     "updateAvailable": "Update available"
   },
+  "recents": {
+    "forkTree": "Show fork tree",
+    "forkTreeOn": "Show fork tree: on (forked sessions nested)",
+    "forkTreeOff": "Show fork tree: off (flat list)"
+  },
   "search": {
     "modeProjects": "Projects",
     "modeRecent": "Recent",
