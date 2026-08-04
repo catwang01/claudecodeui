@@ -10,6 +10,7 @@ export type AuthActionResult = { success: true } | { success: false; error: stri
 
 export type AuthSessionPayload = {
   token?: string;
+  refreshToken?: string;
   user?: AuthUser;
   error?: string;
   message?: string;

@@ -2,7 +2,7 @@ import express from 'express';
 import bcrypt from 'bcrypt';
 import { db } from '../database/db.js';
 import { usersDb } from '../modules/database/index.js';
-import { generateToken, authenticateToken } from '../middleware/auth.js';
+import { generateToken, generateRefreshToken, verifyRefreshToken, authenticateToken } from '../middleware/auth.js';
 
 const router = express.Router();
 
@@ -53,6 +53,7 @@ router.post('/register', async (req, res) => {
 
       // Generate token
       const token = generateToken(user);
+      const refreshToken = generateRefreshToken(user);
 
       db.prepare('COMMIT').run();
 
@@ -62,7 +63,8 @@ router.post('/register', async (req, res) => {
       res.json({
         success: true,
         user: { id: user.id, username: user.username },
-        token
+        token,
+        refreshToken
       });
     } catch (error) {
       db.prepare('ROLLBACK').run();
@@ -103,6 +105,7 @@ router.post('/login', async (req, res) => {
 
     // Generate token
     const token = generateToken(user);
+    const refreshToken = generateRefreshToken(user);
 
     // Update last login
     usersDb.updateLastLogin(user.id);
@@ -110,7 +113,8 @@ router.post('/login', async (req, res) => {
     res.json({
       success: true,
       user: { id: user.id, username: user.username },
-      token
+      token,
+      refreshToken
     });
 
   } catch (error) {
@@ -131,6 +135,34 @@ router.post('/logout', authenticateToken, (req, res) => {
   // In a simple JWT system, logout is mainly client-side
   // This endpoint exists for consistency and potential future logging
   res.json({ success: true, message: 'Logged out successfully' });
+});
+
+// Refresh access token using a valid refresh token (no access token required —
+// this is the recovery path when the access token has expired).
+router.post('/refresh', (req, res) => {
+  try {
+    const { refreshToken } = req.body;
+    if (!refreshToken) {
+      return res.status(400).json({ error: 'Refresh token is required' });
+    }
+
+    let user;
+    try {
+      user = verifyRefreshToken(refreshToken);
+    } catch (error) {
+      return res.status(401).json({ error: 'Invalid or expired refresh token' });
+    }
+
+    // Rotate both tokens so a long-lived session keeps sliding forward.
+    res.json({
+      success: true,
+      token: generateToken(user),
+      refreshToken: generateRefreshToken(user)
+    });
+  } catch (error) {
+    console.error('Token refresh error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 export default router;

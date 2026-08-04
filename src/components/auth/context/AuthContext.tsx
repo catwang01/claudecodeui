@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { IS_PLATFORM } from '../../../constants/config';
 import { api } from '../../../utils/api';
-import { AUTH_ERROR_MESSAGES, AUTH_TOKEN_STORAGE_KEY } from '../constants';
+import { AUTH_ERROR_MESSAGES, AUTH_REFRESH_TOKEN_STORAGE_KEY, AUTH_TOKEN_STORAGE_KEY } from '../constants';
 import type {
   AuthContextValue,
   AuthProviderProps,
@@ -22,8 +22,13 @@ const persistToken = (token: string) => {
   localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
 };
 
+const persistRefreshToken = (token: string) => {
+  localStorage.setItem(AUTH_REFRESH_TOKEN_STORAGE_KEY, token);
+};
+
 const clearStoredToken = () => {
   localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+  localStorage.removeItem(AUTH_REFRESH_TOKEN_STORAGE_KEY);
 };
 
 export function useAuth(): AuthContextValue {
@@ -43,10 +48,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const setSession = useCallback((nextUser: AuthUser, nextToken: string) => {
+  const setSession = useCallback((nextUser: AuthUser, nextToken: string, nextRefreshToken?: string) => {
     setUser(nextUser);
     setToken(nextToken);
     persistToken(nextToken);
+    if (nextRefreshToken) {
+      persistRefreshToken(nextRefreshToken);
+    }
   }, []);
 
   const clearSession = useCallback(() => {
@@ -129,6 +137,25 @@ export function AuthProvider({ children }: AuthProviderProps) {
     void checkAuthStatus();
   }, [checkAuthStatus, checkOnboardingStatus]);
 
+  // api.js drives these events from its 401-refresh interceptor so React state
+  // stays in sync with localStorage (WS/EventSource reconnect off `token`).
+  useEffect(() => {
+    const handleLogout = () => clearSession();
+    const handleTokenRefreshed = (event: Event) => {
+      const nextToken = (event as CustomEvent<{ token?: string }>).detail?.token;
+      if (nextToken) {
+        setToken(nextToken);
+      }
+    };
+
+    window.addEventListener('auth:logout', handleLogout);
+    window.addEventListener('auth:token-refreshed', handleTokenRefreshed);
+    return () => {
+      window.removeEventListener('auth:logout', handleLogout);
+      window.removeEventListener('auth:token-refreshed', handleTokenRefreshed);
+    };
+  }, [clearSession]);
+
   const login = useCallback<AuthContextValue['login']>(
     async (username, password) => {
       try {
@@ -142,7 +169,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
           return { success: false, error: message };
         }
 
-        setSession(payload.user, payload.token);
+        setSession(payload.user, payload.token, payload.refreshToken);
         setNeedsSetup(false);
         await checkOnboardingStatus();
         return { success: true };
@@ -168,7 +195,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
           return { success: false, error: message };
         }
 
-        setSession(payload.user, payload.token);
+        setSession(payload.user, payload.token, payload.refreshToken);
         setNeedsSetup(false);
         await checkOnboardingStatus();
         return { success: true };

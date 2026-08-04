@@ -1,33 +1,82 @@
 import { IS_PLATFORM } from "../constants/config";
 
-// Utility function for authenticated API calls
-export const authenticatedFetch = (url, options = {}) => {
-  const token = localStorage.getItem('auth-token');
+const AUTH_TOKEN_KEY = 'auth-token';
+const AUTH_REFRESH_TOKEN_KEY = 'auth-refresh-token';
 
-  const defaultHeaders = {};
+// Single-flight refresh: concurrent 401s share one in-flight refresh request so
+// we don't fire N parallel /api/auth/refresh calls (which would rotate the
+// refresh token N times and invalidate each other's result).
+let refreshPromise = null;
 
-  // Only set Content-Type for non-FormData requests
+const refreshAccessToken = () => {
+  if (refreshPromise) return refreshPromise;
+
+  const refreshToken = localStorage.getItem(AUTH_REFRESH_TOKEN_KEY);
+  if (!refreshToken) return Promise.resolve(null);
+
+  refreshPromise = fetch('/api/auth/refresh', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refreshToken }),
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        localStorage.removeItem(AUTH_TOKEN_KEY);
+        localStorage.removeItem(AUTH_REFRESH_TOKEN_KEY);
+        return null;
+      }
+      const data = await response.json();
+      if (!data?.token) return null;
+      localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+      if (data.refreshToken) {
+        localStorage.setItem(AUTH_REFRESH_TOKEN_KEY, data.refreshToken);
+      }
+      // Let AuthContext update React state so WS/EventSource reconnect with the new token.
+      window.dispatchEvent(new CustomEvent('auth:token-refreshed', { detail: { token: data.token } }));
+      return data.token;
+    })
+    .catch(() => null)
+    .finally(() => {
+      refreshPromise = null;
+    });
+
+  return refreshPromise;
+};
+
+const buildHeaders = (options, token) => {
+  const headers = {};
   if (!(options.body instanceof FormData)) {
-    defaultHeaders['Content-Type'] = 'application/json';
+    headers['Content-Type'] = 'application/json';
   }
-
   if (!IS_PLATFORM && token) {
-    defaultHeaders['Authorization'] = `Bearer ${token}`;
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return { ...headers, ...options.headers };
+};
+
+// Utility function for authenticated API calls
+export const authenticatedFetch = async (url, options = {}) => {
+  const token = localStorage.getItem(AUTH_TOKEN_KEY);
+
+  const response = await fetch(url, {
+    ...options,
+    headers: buildHeaders(options, token),
+  });
+
+  // Access token expired — try a silent refresh and replay the request once.
+  if (response.status === 401 && !IS_PLATFORM) {
+    const newToken = await refreshAccessToken();
+    if (newToken) {
+      return fetch(url, {
+        ...options,
+        headers: buildHeaders(options, newToken),
+      });
+    }
+    // Refresh failed: drive the app back to the login screen.
+    window.dispatchEvent(new Event('auth:logout'));
   }
 
-  return fetch(url, {
-    ...options,
-    headers: {
-      ...defaultHeaders,
-      ...options.headers,
-    },
-  }).then((response) => {
-    const refreshedToken = response.headers.get('X-Refreshed-Token');
-    if (refreshedToken) {
-      localStorage.setItem('auth-token', refreshedToken);
-    }
-    return response;
-  });
+  return response;
 };
 
 // API endpoints

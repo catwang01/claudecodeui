@@ -58,34 +58,56 @@ const authenticateToken = async (req, res, next) => {
       return res.status(401).json({ error: 'Invalid token. User not found.' });
     }
 
-    // Auto-refresh: if token is past halfway through its lifetime, issue a new one
-    if (decoded.exp && decoded.iat) {
-      const now = Math.floor(Date.now() / 1000);
-      const halfLife = (decoded.exp - decoded.iat) / 2;
-      if (now > decoded.iat + halfLife) {
-        const newToken = generateToken(user);
-        res.setHeader('X-Refreshed-Token', newToken);
-      }
-    }
-
     req.user = user;
     next();
   } catch (error) {
+    // Expired access tokens are recoverable via the refresh endpoint, so signal
+    // 401 (the client can silently refresh). All other failures stay 403.
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({ error: 'Token expired', code: 'token_expired' });
+    }
     console.error('Token verification error:', error);
     return res.status(403).json({ error: 'Invalid token' });
   }
 };
 
-// Generate JWT token
+// Generate short-lived access token
 const generateToken = (user) => {
   return jwt.sign(
     {
       userId: user.id,
-      username: user.username
+      username: user.username,
+      type: 'access'
     },
     JWT_SECRET,
-    { expiresIn: '7d' }
+    { expiresIn: '1h' }
   );
+};
+
+// Generate long-lived refresh token (used to mint fresh access tokens)
+const generateRefreshToken = (user) => {
+  return jwt.sign(
+    {
+      userId: user.id,
+      username: user.username,
+      type: 'refresh'
+    },
+    JWT_SECRET,
+    { expiresIn: '30d' }
+  );
+};
+
+// Verify a refresh token and return the associated user, or throw
+const verifyRefreshToken = (token) => {
+  const decoded = jwt.verify(token, JWT_SECRET);
+  if (decoded.type !== 'refresh') {
+    throw new Error('Not a refresh token');
+  }
+  const user = usersDb.getUserById(decoded.userId);
+  if (!user) {
+    throw new Error('User not found');
+  }
+  return user;
 };
 
 // WebSocket authentication function
@@ -127,6 +149,8 @@ export {
   validateApiKey,
   authenticateToken,
   generateToken,
+  generateRefreshToken,
+  verifyRefreshToken,
   authenticateWebSocket,
   JWT_SECRET
 };
