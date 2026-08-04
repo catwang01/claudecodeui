@@ -242,3 +242,61 @@ describe('queryClaudeSDK — stream idle timeout retry', () => {
     expect(sent.find(m => m.kind === 'complete')).toBeUndefined();
   });
 });
+
+describe('queryClaudeSDK — executable path mapping', () => {
+  let queryClaudeSDK;
+  let mockQuery;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.resetModules();
+    const sdkMod = await import('@anthropic-ai/claude-agent-sdk');
+    mockQuery = sdkMod.query;
+    const mod = await import('./claude-sdk.js');
+    queryClaudeSDK = mod.queryClaudeSDK;
+  });
+
+  it('does not force pathToClaudeCodeExecutable when CLAUDE_CLI_PATH is unset', async () => {
+    const previousCliPath = process.env.CLAUDE_CLI_PATH;
+    delete process.env.CLAUDE_CLI_PATH;
+
+    try {
+      mockQuery.mockImplementation(() => makeAsyncIterable([makeResultMessage()]));
+
+      const { ws } = makeWs();
+      await queryClaudeSDK('hello', { sessionId: FAKE_SESSION, cwd: '/tmp' }, ws);
+
+      const firstCall = mockQuery.mock.calls[0]?.[0];
+      expect(firstCall).toBeDefined();
+      expect(firstCall.options.pathToClaudeCodeExecutable).toBeUndefined();
+    } finally {
+      if (previousCliPath === undefined) {
+        delete process.env.CLAUDE_CLI_PATH;
+      } else {
+        process.env.CLAUDE_CLI_PATH = previousCliPath;
+      }
+    }
+  });
+
+  it('uses CLAUDE_CLI_PATH when explicitly configured', async () => {
+    const previousCliPath = process.env.CLAUDE_CLI_PATH;
+    process.env.CLAUDE_CLI_PATH = '/custom/bin/claude';
+
+    try {
+      mockQuery.mockImplementation(() => makeAsyncIterable([makeResultMessage()]));
+
+      const { ws } = makeWs();
+      await queryClaudeSDK('hello', { sessionId: FAKE_SESSION, cwd: '/tmp' }, ws);
+
+      const firstCall = mockQuery.mock.calls[0]?.[0];
+      expect(firstCall).toBeDefined();
+      expect(firstCall.options.pathToClaudeCodeExecutable).toBe('/custom/bin/claude');
+    } finally {
+      if (previousCliPath === undefined) {
+        delete process.env.CLAUDE_CLI_PATH;
+      } else {
+        process.env.CLAUDE_CLI_PATH = previousCliPath;
+      }
+    }
+  });
+});
