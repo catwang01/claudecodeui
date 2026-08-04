@@ -53,10 +53,9 @@ export async function resolveAnthropicBaseUrl() {
 
 function isPortFree(port) {
   return new Promise((resolve) => {
-    const srv = net.createServer();
-    srv.once('error', () => resolve(false));
-    srv.once('listening', () => srv.close(() => resolve(true)));
-    srv.listen(port, '127.0.0.1');
+    const sock = net.connect({ port, host: '127.0.0.1' });
+    sock.once('connect', () => { sock.destroy(); resolve(false); });
+    sock.once('error', () => resolve(true));
   });
 }
 
