@@ -468,6 +468,36 @@ const sessionDb = {
     return new Map(rows.map(r => [r.session_id, r.last_activity_at]));
   },
 
+  // Record fork parent relationship for sidebar fork-tree rendering
+  markForkParent: (forkSessionId, parentSessionId, provider = 'claude') => {
+    db.prepare(`
+      INSERT INTO session_fork_parents (fork_session_id, parent_session_id, provider, created_at)
+      VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(fork_session_id, provider) DO UPDATE SET
+        parent_session_id = excluded.parent_session_id
+    `).run(forkSessionId, parentSessionId, provider);
+  },
+
+  // Batch lookup — returns Map<forkSessionId, parentSessionId>
+  getForkParentMap: (sessionIds, provider = 'claude') => {
+    if (!sessionIds.length) return new Map();
+    const placeholders = sessionIds.map(() => '?').join(',');
+    const rows = db.prepare(
+      `SELECT fork_session_id, parent_session_id
+       FROM session_fork_parents
+       WHERE fork_session_id IN (${placeholders}) AND provider = ?`
+    ).all(...sessionIds, provider);
+    return new Map(rows.map(r => [r.fork_session_id, r.parent_session_id]));
+  },
+
+  // Remove fork relationships when a session is deleted
+  removeForkLinks: (sessionId, provider = 'claude') => {
+    db.prepare(
+      `DELETE FROM session_fork_parents
+       WHERE provider = ? AND (fork_session_id = ? OR parent_session_id = ?)`
+    ).run(provider, sessionId, sessionId);
+  },
+
   // Records a forked session created by auto-doc
   markAsAutoDocSession: (forkedSessionId, sourceSessionId, provider) => {
     db.prepare(`
@@ -587,6 +617,22 @@ function applyLastAutoDocAt(sessions, provider) {
     }
   } catch (error) {
     console.warn(`[DB] Failed to apply lastAutoDocAt for ${provider}:`, error.message);
+  }
+}
+
+// Apply fork parent relationship on sessions for sidebar tree rendering.
+function applyForkParent(sessions, provider) {
+  if (!sessions?.length) return;
+  try {
+    const ids = sessions.map(s => s.id);
+    const parentMap = sessionDb.getForkParentMap(ids, provider);
+    if (!parentMap.size) return;
+    for (const session of sessions) {
+      const parentId = parentMap.get(session.id);
+      if (parentId) session.forkParentId = parentId;
+    }
+  } catch (error) {
+    console.warn(`[DB] Failed to apply fork parent for ${provider}:`, error.message);
   }
 }
 
@@ -795,6 +841,7 @@ export {
   applyHiddenFromRecents,
   applyAutoDocFlag,
   applyLastAutoDocAt,
+  applyForkParent,
   filterHiddenAutoDocSessions,
   applyReadState,
   appConfigDb,

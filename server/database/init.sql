@@ -136,6 +136,20 @@ CREATE TABLE IF NOT EXISTS auto_doc_sessions (
 CREATE INDEX IF NOT EXISTS idx_auto_doc_sessions_source ON auto_doc_sessions(source_session_id);
 CREATE INDEX IF NOT EXISTS idx_auto_doc_sessions_forked ON auto_doc_sessions(forked_session_id);
 
+-- Fork parent relationships for sidebar tree rendering
+CREATE TABLE IF NOT EXISTS session_fork_parents (
+  fork_session_id   TEXT NOT NULL,
+  parent_session_id TEXT NOT NULL,
+  provider          TEXT NOT NULL DEFAULT 'claude',
+  created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(fork_session_id, provider)
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_fork_parents_fork
+  ON session_fork_parents(fork_session_id, provider);
+CREATE INDEX IF NOT EXISTS idx_session_fork_parents_parent
+  ON session_fork_parents(parent_session_id, provider);
+
 -- Session file metadata cache for incremental .jsonl scanning
 CREATE TABLE IF NOT EXISTS session_file_cache (
   file_path TEXT PRIMARY KEY,
