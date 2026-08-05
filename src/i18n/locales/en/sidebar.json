@@ -41,6 +41,7 @@
     "refresh": "Refresh projects and sessions (Ctrl+R)",
     "renameProject": "Rename project (F2)",
     "deleteProject": "Delete empty project (Delete)",
+    "openInEditor": "Open workspace in an editor",
     "addToFavorites": "Add to favorites",
     "removeFromFavorites": "Remove from favorites",
     "editSessionName": "Manually edit session name",
@@ -66,6 +67,7 @@
     "delete": "Delete",
     "deleting": "Deleting...",
     "rename": "Rename",
+    "openInEditor": "Open in editor",
     "joinCommunity": "Join Community",
     "reportIssue": "Report Issue",
     "starOnGithub": "Star on GitHub"

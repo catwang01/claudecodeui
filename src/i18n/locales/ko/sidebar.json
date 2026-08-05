@@ -41,6 +41,7 @@
     "refresh": "프로젝트 및 세션 새로고침 (Ctrl+R)",
     "renameProject": "프로젝트 이름 변경 (F2)",
     "deleteProject": "빈 프로젝트 삭제 (Delete)",
+    "openInEditor": "편집기에서 작업 영역 열기",
     "addToFavorites": "즐겨찾기에 추가",
     "removeFromFavorites": "즐겨찾기에서 제거",
     "editSessionName": "세션 이름 직접 편집",
@@ -65,6 +66,7 @@
     "delete": "삭제",
     "deleting": "삭제 중...",
     "rename": "이름 변경",
+    "openInEditor": "편집기에서 열기",
     "joinCommunity": "커뮤니티 참여",
     "reportIssue": "문제 신고",
     "starOnGithub": "GitHub에서 스타"

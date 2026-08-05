@@ -41,6 +41,7 @@
     "refresh": "Обновить проекты и сеансы (Ctrl+R)",
     "renameProject": "Переименовать проект (F2)",
     "deleteProject": "Удалить пустой проект (Delete)",
+    "openInEditor": "Открыть рабочую область в редакторе",
     "addToFavorites": "Добавить в избранное",
     "removeFromFavorites": "Удалить из избранного",
     "editSessionName": "Вручную редактировать имя сеанса",
@@ -66,6 +67,7 @@
     "delete": "Удалить",
     "deleting": "Удаление...",
     "rename": "Переименовать",
+    "openInEditor": "Открыть в редакторе",
     "joinCommunity": "Присоединиться к сообществу",
     "reportIssue": "Сообщить о проблеме",
     "starOnGithub": "Звезда на GitHub"

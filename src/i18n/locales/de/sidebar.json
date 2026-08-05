@@ -41,6 +41,7 @@
     "refresh": "Projekte und Sitzungen aktualisieren (Strg+R)",
     "renameProject": "Projekt umbenennen (F2)",
     "deleteProject": "Leeres Projekt löschen (Entf)",
+    "openInEditor": "Workspace in einem Editor öffnen",
     "addToFavorites": "Zu Favoriten hinzufügen",
     "removeFromFavorites": "Aus Favoriten entfernen",
     "editSessionName": "Sitzungsname manuell bearbeiten",
@@ -66,6 +67,7 @@
     "delete": "Löschen",
     "deleting": "Wird gelöscht...",
     "rename": "Umbenennen",
+    "openInEditor": "Im Editor öffnen",
     "joinCommunity": "Community beitreten",
     "reportIssue": "Problem melden",
     "starOnGithub": "Stern auf GitHub"

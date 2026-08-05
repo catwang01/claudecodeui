@@ -41,6 +41,7 @@
     "refresh": "プロジェクトとセッションを更新 (Ctrl+R)",
     "renameProject": "プロジェクト名を変更 (F2)",
     "deleteProject": "空のプロジェクトを削除 (Delete)",
+    "openInEditor": "ワークスペースをエディターで開く",
     "addToFavorites": "お気に入りに追加",
     "removeFromFavorites": "お気に入りから削除",
     "editSessionName": "セッション名を手動で編集",
@@ -65,6 +66,7 @@
     "delete": "削除",
     "deleting": "削除中...",
     "rename": "名前の変更",
+    "openInEditor": "エディターで開く",
     "joinCommunity": "コミュニティに参加",
     "reportIssue": "問題を報告",
     "starOnGithub": "GitHubでスター"
