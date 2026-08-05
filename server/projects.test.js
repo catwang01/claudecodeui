@@ -63,6 +63,64 @@ afterEach(async () => {
 // ─── getSessionFileMeta ───────────────────────────────────────────────────────
 
 describe('getSessionFileMeta', () => {
+  it.runIf(process.platform === 'win32')('treats Windows path casing as the same cache entry', () => {
+    const fp = path.join(projectDir, 'case-alias.jsonl');
+    const alternateCase = fp.replace(/^([a-z]):/i, (_, drive) =>
+      `${drive === drive.toLowerCase() ? drive.toUpperCase() : drive.toLowerCase()}:`
+    );
+    const base = {
+      file_size: 100,
+      session_id: 'test-session-case-alias',
+      cwd: projectDir,
+      last_activity: '2024-01-01T00:00:00.000Z',
+      last_user_message: 'Hello',
+      last_assistant_message: null,
+    };
+
+    sessionFileCache.upsert({ ...base, file_path: fp, message_count: 1 });
+    sessionFileCache.upsert({
+      ...base,
+      file_path: alternateCase,
+      file_size: 200,
+      message_count: 11,
+    });
+
+    expect(sessionFileCache.get(fp).message_count).toBe(11);
+    expect(sessionFileCache.get(alternateCase).message_count).toBe(11);
+    expect(sessionFileCache.getBatch([fp]).get(fp).message_count).toBe(11);
+  });
+
+  it('finds the newest cached transcript by session ID', () => {
+    const sessionId = 'test-session-transcript-fallback';
+    const stalePath = path.join(projectDir, 'stale.jsonl');
+    const currentPath = path.join(projectDir, 'current.jsonl');
+    const base = {
+      session_id: sessionId,
+      cwd: projectDir,
+      last_user_message: 'Hello',
+      last_assistant_message: null,
+    };
+
+    sessionFileCache.upsert({
+      ...base,
+      file_path: stalePath,
+      file_size: 100,
+      message_count: 1,
+      last_activity: '2024-01-01T00:00:00.000Z',
+    });
+    sessionFileCache.upsert({
+      ...base,
+      file_path: currentPath,
+      file_size: 200,
+      message_count: 11,
+      last_activity: '2024-01-02T00:00:00.000Z',
+    });
+
+    expect(sessionFileCache.getBatchBySessionIds([sessionId]).get(sessionId).message_count).toBe(11);
+    sessionFileCache.delete(stalePath);
+    sessionFileCache.delete(currentPath);
+  });
+
   it('cold cache: reads file and returns correct metadata', async () => {
     const sid = 'test-session-cold';
     const ts = '2024-01-01T10:00:00.000Z';

@@ -15,6 +15,18 @@ interface CopilotSession {
   updated_at: string;
 }
 
+function getPreferredJsonlPath(sessionId: string, nativeEventsPath: string): string {
+  const existing = sessionsDb.getSessionById(sessionId);
+  if (
+    existing?.provider === 'copilot'
+    && existing.jsonl_path
+    && path.basename(existing.jsonl_path) !== 'events.jsonl'
+  ) {
+    return existing.jsonl_path;
+  }
+  return nativeEventsPath;
+}
+
 export const copilotSessionSynchronizer: ISessionSynchronizer = {
   provider: 'copilot',
 
@@ -74,7 +86,7 @@ export const copilotSessionSynchronizer: ISessionSynchronizer = {
           undefined, // name
           session.created_at,
           session.updated_at,
-          eventsJsonlPath // ← 填充 jsonlPath
+          getPreferredJsonlPath(session.id, eventsJsonlPath)
         );
 
         count++;
@@ -139,7 +151,7 @@ export const copilotSessionSynchronizer: ISessionSynchronizer = {
         undefined, // name
         session.created_at,
         session.updated_at,
-        filePath  // ← 使用传入的 filePath (events.jsonl 路径)
+        getPreferredJsonlPath(session.id, filePath)
       );
 
       console.log('[copilot-sync] Synchronized session:', sessionId);

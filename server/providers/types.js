@@ -43,8 +43,8 @@
  * - tool_use:             toolName, toolInput, toolId
  * - tool_result:          toolId, content, isError
  * - thinking:             content
- * - stream_delta:         content
- * - stream_end:           (no extra fields)
+ * - stream_delta:         content, messageId?
+ * - stream_end:           content?, messageId?
  * - error:                content
  * - complete:             (no extra fields)
  * - status:               text, tokens?, canInterrupt?

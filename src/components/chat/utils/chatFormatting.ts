@@ -17,29 +17,10 @@ export function normalizeInlineCodeFences(text: string) {
   }
 }
 
-export function unescapeWithMathProtection(text: string) {
-  if (!text || typeof text !== 'string') return text;
-
-  const mathBlocks: string[] = [];
-  const placeholderPrefix = '__MATH_BLOCK_';
-  const placeholderSuffix = '__';
-
-  let processedText = text.replace(/\$\$([\s\S]*?)\$\$|\$([^\$\n]+?)\$/g, (match) => {
-    const index = mathBlocks.length;
-    mathBlocks.push(match);
-    return `${placeholderPrefix}${index}${placeholderSuffix}`;
-  });
-
-  processedText = processedText.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\r/g, '\r');
-
-  processedText = processedText.replace(
-    new RegExp(`${placeholderPrefix}(\\d+)${placeholderSuffix}`, 'g'),
-    (match, index) => {
-      return mathBlocks[parseInt(index, 10)];
-    },
-  );
-
-  return processedText;
+export function preserveLiteralBackslashes(text: string) {
+  // WebSocket and JSON parsing have already decoded transport escapes.
+  // Decoding again here corrupts Windows paths such as \tests into a tab.
+  return text;
 }
 
 export function escapeRegExp(value: string) {

@@ -5,7 +5,7 @@
 
 import type { NormalizedMessage } from '../../../stores/useSessionStore';
 import type { ChatMessage, SubagentChildTool, ToolResult } from '../types/types';
-import { decodeHtmlEntities, unescapeWithMathProtection, formatUsageLimitText } from '../utils/chatFormatting';
+import { decodeHtmlEntities, preserveLiteralBackslashes, formatUsageLimitText } from '../utils/chatFormatting';
 
 /**
  * Convert NormalizedMessage[] from the session store into ChatMessage[]
@@ -46,14 +46,14 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           } else {
             converted.push({
               type: 'user',
-              content: unescapeWithMathProtection(decodeHtmlEntities(content)),
+              content: preserveLiteralBackslashes(decodeHtmlEntities(content)),
               timestamp: msg.timestamp,
               isSubAgentInput: Boolean(msg.parentToolUseId || msg.isMeta),
             });
           }
         } else {
           let text = decodeHtmlEntities(content);
-          text = unescapeWithMathProtection(text);
+          text = preserveLiteralBackslashes(text);
           text = formatUsageLimitText(text);
           converted.push({
             type: 'assistant',
@@ -117,7 +117,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         if (msg.content?.trim()) {
           converted.push({
             type: 'assistant',
-            content: unescapeWithMathProtection(msg.content),
+            content: preserveLiteralBackslashes(msg.content),
             timestamp: msg.timestamp,
             isThinking: true,
           });
@@ -187,7 +187,14 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         break;
 
       case 'stream_delta':
-        if (msg.content) {
+        // Only the well-known streaming placeholder (`__streaming_<sid>`) —
+        // maintained by useSessionStore.updateStreaming — should render as an
+        // in-flight assistant bubble. Any other stream_delta entries are
+        // stray per-fragment records (e.g. from an earlier code path that
+        // accidentally appended raw deltas for background sessions) and must
+        // NOT be rendered, otherwise the chat shows one bubble per token —
+        // "的", "上一", ".md", etc.
+        if (msg.content && msg.id?.startsWith('__streaming_')) {
           converted.push({
             type: 'assistant',
             content: msg.content,

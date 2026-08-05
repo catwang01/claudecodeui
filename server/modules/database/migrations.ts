@@ -121,5 +121,18 @@ export function runMigrations(): void {
   const autoMigrate = db.transaction(() => migrateLegacyAutoSummary(db));
   autoMigrate();
 
+  // Clear stale Copilot session_file_cache entries where session_id was not extracted
+  // (old bug: getSessionFileMeta did not handle Copilot events.jsonl format, leaving
+  //  session_id = NULL which caused buildSessionsFromCache to always show "New Session").
+  // Deleting these rows forces a re-scan with the fixed parser on next access.
+  const staleCount = db.prepare(
+    `DELETE FROM session_file_cache
+     WHERE file_path LIKE '%session-state%events.jsonl'
+       AND session_id IS NULL`
+  ).run().changes;
+  if (staleCount > 0) {
+    console.log(`Migration: Cleared ${staleCount} stale Copilot session_file_cache entries (will re-scan on next access).`);
+  }
+
   console.log('Database migrations completed');
 }

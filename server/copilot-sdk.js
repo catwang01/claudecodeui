@@ -26,7 +26,10 @@ console.log('[copilot-sdk] Module loaded, sessionsDb type:', typeof sessionsDb, 
 
 // ── JSONL persistence ─────────────────────────────────────────────────────────
 function getSessionJsonlPath(sessionId, cwd) {
-  const projectPath = cwd || process.cwd();
+  let projectPath = path.resolve(cwd || process.cwd());
+  if (process.platform === 'win32') {
+    projectPath = projectPath.toLowerCase();
+  }
   const encodedPath = projectPath.replace(/[^a-zA-Z0-9]/g, '-');
   const projectDir = path.join(os.homedir(), '.claude', 'projects', encodedPath);
   fs.mkdirSync(projectDir, { recursive: true });
@@ -227,16 +230,21 @@ export async function queryCopilotSDK(command, options = {}, ws) {
     }
 
     // ── Stream events ─────────────────────────────────────────────────────────
-    let accumulatedText = '';
+    const accumulatedTextByMessage = new Map();
 
     // Register streaming event listeners BEFORE send().
     session.on('assistant.message_delta', (event) => {
       const delta = event?.data?.deltaContent || '';
       if (!delta) return;
-      accumulatedText += delta;
+      const messageId = event?.data?.messageId || 'default';
+      accumulatedTextByMessage.set(
+        messageId,
+        (accumulatedTextByMessage.get(messageId) || '') + delta,
+      );
       send(createNormalizedMessage({
         kind: 'stream_delta',
         content: delta,
+        messageId,
         sessionId: capturedSessionId,
         provider: 'copilot',
       }));
@@ -244,9 +252,11 @@ export async function queryCopilotSDK(command, options = {}, ws) {
 
     session.on('assistant.message', (event) => {
       const finalContent = event?.data?.content || '';
-      const streamed = accumulatedText;
+      const messageId = event?.data?.messageId || 'default';
+      const streamed = accumulatedTextByMessage.get(messageId) || '';
       console.log(
-        '[copilot-sdk] assistant.message: final=%d streamed=%d toolReqs=%d',
+        '[copilot-sdk] assistant.message: id=%s final=%d streamed=%d toolReqs=%d',
+        messageId,
         finalContent.length,
         streamed.length,
         event?.data?.toolRequests?.length || 0,
@@ -259,21 +269,13 @@ export async function queryCopilotSDK(command, options = {}, ws) {
       }
 
       if (streamed) {
-        // The frontend already displays the streamed deltas as an in-flight
-        // message; finalize it into a persistent text bubble. If the final
-        // consolidated content is longer than what streamed (rare — trailing
-        // punctuation, etc.), emit the gap as one last delta before ending.
-        if (finalContent && finalContent.length > streamed.length && finalContent.startsWith(streamed)) {
-          const gap = finalContent.slice(streamed.length);
-          send(createNormalizedMessage({
-            kind: 'stream_delta',
-            content: gap,
-            sessionId: capturedSessionId,
-            provider: 'copilot',
-          }));
-        }
+        // The final SDK message is authoritative. Sending it with stream_end
+        // lets the frontend correct any delayed, duplicate, or missed delta
+        // immediately instead of requiring a page refresh.
         send(createNormalizedMessage({
           kind: 'stream_end',
+          content: finalContent || streamed,
+          messageId,
           sessionId: capturedSessionId,
           provider: 'copilot',
         }));
@@ -284,6 +286,7 @@ export async function queryCopilotSDK(command, options = {}, ws) {
           kind: 'text',
           role: 'assistant',
           content: finalContent,
+          messageId,
           sessionId: capturedSessionId,
           provider: 'copilot',
         }));
@@ -291,7 +294,7 @@ export async function queryCopilotSDK(command, options = {}, ws) {
       // If both streamed and finalContent are empty (pure tool-call turn), the
       // frontend has nothing to finalize — leave the streaming buffer alone.
 
-      accumulatedText = '';
+      accumulatedTextByMessage.delete(messageId);
     });
 
     // The SDK emits `tool.execution_start` / `tool.execution_complete` — the

@@ -1243,11 +1243,19 @@ function isSubAgentEntry(entry) {
 function buildSessionsFromCache(rows) {
   const filePaths = rows.map(r => r.jsonl_path).filter(Boolean);
   const cacheMap = sessionFileCache.getBatch(filePaths);
+  const cacheBySessionId = sessionFileCache.getBatchBySessionIds(rows.map(r => r.session_id));
 
   const sessions = [];
   for (const row of rows) {
     if (!row.jsonl_path) continue;
-    const cached = cacheMap.get(row.jsonl_path);
+    const pathCached = cacheMap.get(row.jsonl_path);
+    const sessionCached = cacheBySessionId.get(row.session_id);
+    const cached = !pathCached || (
+      sessionCached
+      && new Date(sessionCached.updated_at || 0) > new Date(pathCached.updated_at || 0)
+    )
+      ? sessionCached
+      : pathCached;
 
     if (!cached?.session_id) {
       // Cache miss: session is in DB but session_file_cache hasn't been populated yet.

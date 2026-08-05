@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
-import { useAwaitingPermissions } from '../../../contexts/AwaitingPermissionContext';
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
+import { useAwaitingPermissions } from '../../../contexts/AwaitingPermissionContext';
+import { useWebSocket } from '../../../contexts/WebSocketContext';
 import type { PendingPermissionRequest } from '../types/types';
 import type { Project, ProjectSession, SessionProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
@@ -38,6 +39,7 @@ type LatestChatMessage = {
   reason?: string;
   provider?: string;
   content?: string;
+  messageId?: string;
   text?: string;
   tokens?: number;
   canInterrupt?: boolean;
@@ -61,7 +63,7 @@ interface UseChatRealtimeHandlersArgs {
   setTokenBudget: (budget: Record<string, unknown> | null) => void;
   setPendingPermissionRequests: Dispatch<SetStateAction<PendingPermissionRequest[]>>;
   pendingViewSessionRef: MutableRefObject<PendingViewSession | null>;
-  streamTimerRef: MutableRefObject<number | null>;
+  streamTimerRef: MutableRefObject<Map<string, number>>;
   accumulatedStreamMapRef: MutableRefObject<Map<string, string>>;
   onSessionInactive?: (sessionId?: string | null) => void;
   onSessionProcessing?: (sessionId?: string | null, provider?: string, startTime?: number | null) => void;
@@ -106,12 +108,20 @@ export function useChatRealtimeHandlers({
   sessionStore,
 }: UseChatRealtimeHandlersArgs) {
   const { setAwaitingPermission, clearByRequestId, clearSession } = useAwaitingPermissions();
-  const lastProcessedMessageRef = useRef<LatestChatMessage | null>(null);
+  const { subscribeMessages } = useWebSocket();
+  const processedMessagesRef = useRef(new WeakSet<object>());
+  const getStreamKey = (sessionId: string, messageId?: string) =>
+    messageId ? `${sessionId}::${messageId}` : sessionId;
 
-  useEffect(() => {
+  // Extracted so we can invoke it BOTH synchronously (from subscribeMessages,
+  // for high-frequency streaming) AND via the legacy latestMessage effect
+  // (for the initial mount case where a message may have already fired).
+  const processMessage = (latestMessage: LatestChatMessage | null | undefined) => {
     if (!latestMessage) return;
-    if (lastProcessedMessageRef.current === latestMessage) return;
-    lastProcessedMessageRef.current = latestMessage;
+    if (typeof latestMessage === 'object') {
+      if (processedMessagesRef.current.has(latestMessage)) return;
+      processedMessagesRef.current.add(latestMessage);
+    }
 
     const activeViewSessionId =
       selectedSession?.id || currentSessionId || pendingViewSessionRef.current?.sessionId || null;
@@ -202,36 +212,54 @@ export function useChatRealtimeHandlers({
     if (msg.kind === 'stream_delta') {
       const text = msg.content || '';
       if (!text || !sid) return;
-      const prev = accumulatedStreamMapRef.current.get(sid) ?? '';
-      accumulatedStreamMapRef.current.set(sid, prev + text);
-      if (!streamTimerRef.current) {
-        streamTimerRef.current = window.setTimeout(() => {
-          streamTimerRef.current = null;
-          sessionStore.updateStreaming(sid, accumulatedStreamMapRef.current.get(sid) ?? '', provider);
+      const messageId = msg.messageId;
+      const streamKey = getStreamKey(sid, messageId);
+      const prev = accumulatedStreamMapRef.current.get(streamKey) ?? '';
+      accumulatedStreamMapRef.current.set(streamKey, prev + text);
+      if (!streamTimerRef.current.has(streamKey)) {
+        const timer = window.setTimeout(() => {
+          streamTimerRef.current.delete(streamKey);
+          sessionStore.updateStreaming(
+            sid,
+            accumulatedStreamMapRef.current.get(streamKey) ?? '',
+            provider,
+            messageId,
+          );
         }, 100);
+        streamTimerRef.current.set(streamKey, timer);
       }
-      // Also route to store for non-active sessions
-      if (sid !== activeViewSessionId) {
-        sessionStore.appendWsMessage(sid, msg as NormalizedMessage);
-      }
+      // NOTE: intentionally do NOT append individual delta frames as
+      // standalone messages for background sessions. Each stream_delta is
+      // an ephemeral fragment; if we append it, normalizedToChatMessages
+      // renders a separate assistant bubble per fragment (e.g. "的",
+      // "上一", ".md") because its stream_delta branch turns any delta
+      // into an isStreaming assistant message. Accumulation via
+      // updateStreaming (which uses a single __streaming_<sid> message
+      // id) is the correct path for the current session; for background
+      // sessions, the `complete` handler's fetchIncremental will pull the
+      // finalized text bubble from the backend.
       return;
     }
 
     if (msg.kind === 'stream_end') {
-      if (streamTimerRef.current) {
-        clearTimeout(streamTimerRef.current);
-        streamTimerRef.current = null;
-      }
       if (sid) {
-        const accumulated = accumulatedStreamMapRef.current.get(sid) ?? '';
-        if (accumulated) {
-          sessionStore.updateStreaming(sid, accumulated, provider);
+        const messageId = msg.messageId;
+        const streamKey = getStreamKey(sid, messageId);
+        const timer = streamTimerRef.current.get(streamKey);
+        if (timer) {
+          clearTimeout(timer);
+          streamTimerRef.current.delete(streamKey);
         }
-        sessionStore.finalizeStreaming(sid);
-        if (accumulated) {
-          onAssistantSpeech?.(accumulated);
+        const accumulated = accumulatedStreamMapRef.current.get(streamKey) ?? '';
+        const finalContent = msg.content || accumulated;
+        if (finalContent) {
+          sessionStore.updateStreaming(sid, finalContent, provider, messageId);
         }
-        accumulatedStreamMapRef.current.delete(sid);
+        sessionStore.finalizeStreaming(sid, messageId);
+        if (finalContent) {
+          onAssistantSpeech?.(finalContent);
+        }
+        accumulatedStreamMapRef.current.delete(streamKey);
       }
       return;
     }
@@ -266,17 +294,22 @@ export function useChatRealtimeHandlers({
 
       case 'complete': {
         // Flush any remaining streaming state
-        if (streamTimerRef.current) {
-          clearTimeout(streamTimerRef.current);
-          streamTimerRef.current = null;
-        }
         if (sid) {
-          const accumulated = accumulatedStreamMapRef.current.get(sid) ?? '';
-          if (accumulated) {
-            sessionStore.updateStreaming(sid, accumulated, provider);
-            sessionStore.finalizeStreaming(sid);
+          const sessionPrefix = `${sid}::`;
+          for (const [streamKey, accumulated] of accumulatedStreamMapRef.current) {
+            if (streamKey !== sid && !streamKey.startsWith(sessionPrefix)) continue;
+            const timer = streamTimerRef.current.get(streamKey);
+            if (timer) {
+              clearTimeout(timer);
+              streamTimerRef.current.delete(streamKey);
+            }
+            const messageId = streamKey === sid ? undefined : streamKey.slice(sessionPrefix.length);
+            if (accumulated) {
+              sessionStore.updateStreaming(sid, accumulated, provider, messageId);
+              sessionStore.finalizeStreaming(sid, messageId);
+            }
+            accumulatedStreamMapRef.current.delete(streamKey);
           }
-          accumulatedStreamMapRef.current.delete(sid);
         }
 
         const isMySession = !msg.sessionId || msg.sessionId === activeViewSessionId;
@@ -316,15 +349,23 @@ export function useChatRealtimeHandlers({
         // Delay 500ms to allow the backend JSONL to finish writing.
         if (sid) {
           const lastId = sessionStore.getLastMessageId(sid);
-          if (lastId) {
-            setTimeout(() => {
+          setTimeout(() => {
+            if (lastId) {
               sessionStore.fetchIncremental(sid, lastId, {
                 provider,
                 projectName: selectedProject?.name,
                 projectPath: selectedProject?.fullPath || selectedProject?.path || '',
               });
-            }, 500);
-          }
+            } else {
+              // Store was cleared (e.g. by navigation during session creation) — do a full refresh
+              // so assistant messages written after clearSlot are not lost.
+              sessionStore.fetchFromServer(sid, {
+                provider,
+                projectName: selectedProject?.name,
+                projectPath: selectedProject?.fullPath || selectedProject?.path || '',
+              });
+            }
+          }, 500);
         }
         break;
       }
@@ -438,42 +479,44 @@ export function useChatRealtimeHandlers({
         }
         break;
     }
-  }, [
-    latestMessage,
-    provider,
-    selectedProject,
-    selectedSession,
-    currentSessionId,
-    setCurrentSessionId,
-    setIsLoading,
-    setCanAbortSession,
-    setClaudeStatus,
-    setTokenBudget,
-    setPendingPermissionRequests,
-    pendingViewSessionRef,
-    streamTimerRef,
-    accumulatedStreamMapRef,
-    onSessionInactive,
-    onSessionProcessing,
-    onSessionNotProcessing,
-    onPreSessionCreated,
-    onReplaceTemporarySession,
-    onNavigateToSession,
-    onWebSocketReconnect,
-    onAssistantSpeech,
-    sessionStore,
-    setAwaitingPermission,
-    clearByRequestId,
-    clearSession,
-  ]);
+  };
+
+  // We store processMessage in a ref so the subscribe effect below doesn't need
+  // to be re-run every time props change — which would tear down and rebuild
+  // the WS listener on every render, and could miss messages in between.
+  const processMessageRef = useRef(processMessage);
+  processMessageRef.current = processMessage;
+
+  // Legacy path: honor an already-set latestMessage from the context (e.g. on
+  // first mount when the WS message arrived before this hook subscribed).
+  useEffect(() => {
+    processMessageRef.current(latestMessage);
+  }, [latestMessage]);
+
+  // Streaming-safe path: subscribe synchronously to WS messages so a burst
+  // of stream_delta events in the same React batch never collapses into one.
+  useEffect(() => {
+    const unsub = subscribeMessages((msg) => processMessageRef.current(msg));
+    return unsub;
+  }, [subscribeMessages]);
 
   // Clean up the accumulated stream map entry when the session changes or component unmounts
   useEffect(() => {
     const sid = currentSessionId;
+    const accumulatedStreamMap = accumulatedStreamMapRef.current;
+    const streamTimers = streamTimerRef.current;
     return () => {
       if (sid) {
-        accumulatedStreamMapRef.current.delete(sid);
+        const sessionPrefix = `${sid}::`;
+        for (const streamKey of accumulatedStreamMap.keys()) {
+          if (streamKey === sid || streamKey.startsWith(sessionPrefix)) {
+            accumulatedStreamMap.delete(streamKey);
+            const timer = streamTimers.get(streamKey);
+            if (timer) clearTimeout(timer);
+            streamTimers.delete(streamKey);
+          }
+        }
       }
     };
-  }, [currentSessionId, accumulatedStreamMapRef]);
+  }, [currentSessionId, accumulatedStreamMapRef, streamTimerRef]);
 }

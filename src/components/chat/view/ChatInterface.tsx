@@ -58,15 +58,15 @@ function ChatInterface({
   const sessionStore = useSessionStore();
   const { speak } = useTTS();
   const { registerSubmitCallback, notifyLoadingChange, status: voiceStatus, transcript: voiceTranscript, toggle: toggleVoice, isActive: isVoiceActive, supported: isVoiceSupported } = useVoiceConversation();
-  const streamTimerRef = useRef<number | null>(null);
+  const streamTimerRef = useRef<Map<string, number>>(new Map());
   const accumulatedStreamMapRef = useRef<Map<string, string>>(new Map());
   const pendingViewSessionRef = useRef<PendingViewSession | null>(null);
 
   const resetStreamingState = useCallback(() => {
-    if (streamTimerRef.current) {
-      clearTimeout(streamTimerRef.current);
-      streamTimerRef.current = null;
+    for (const timer of streamTimerRef.current.values()) {
+      clearTimeout(timer);
     }
+    streamTimerRef.current.clear();
     accumulatedStreamMapRef.current.clear();
   }, []);
 

@@ -563,6 +563,7 @@ const sessionDb = {
     ).all(...sessionIds, provider || 'claude');
     return new Map(rows.map(r => [r.session_id, r.read_at]));
   },
+
 };
 
 // Apply hidden-from-recents flags; auto-unhides sessions with new activity
@@ -755,26 +756,84 @@ const appConfigDb = {
   }
 };
 
+function normalizeSessionCachePath(filePath) {
+  const normalized = path.normalize(filePath);
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
 // Session file metadata cache — incremental .jsonl scan results keyed by file path
 const sessionFileCache = {
-  get: (filePath) =>
-    db.prepare('SELECT * FROM session_file_cache WHERE file_path = ?').get(filePath),
+  get: (filePath) => {
+    const normalizedPath = normalizeSessionCachePath(filePath);
+    if (process.platform !== 'win32') {
+      return db.prepare('SELECT * FROM session_file_cache WHERE file_path = ?').get(normalizedPath);
+    }
+
+    return db.prepare(`
+      SELECT *
+      FROM session_file_cache
+      WHERE file_path = ? COLLATE NOCASE
+      ORDER BY updated_at DESC, file_size DESC
+      LIMIT 1
+    `).get(normalizedPath);
+  },
 
   // Batch fetch: given an array of file paths, return a Map<filePath, row>.
   // Uses a single SQL query with IN clause — O(1) round trips regardless of N.
   getBatch: (filePaths) => {
     if (!filePaths || filePaths.length === 0) return new Map();
-    const placeholders = filePaths.map(() => '?').join(',');
+    const normalizedPaths = [...new Set(filePaths.map(normalizeSessionCachePath))];
+    const placeholders = normalizedPaths.map(() => '?').join(',');
     const rows = db.prepare(
-      `SELECT * FROM session_file_cache WHERE file_path IN (${placeholders})`
-    ).all(...filePaths);
+      `SELECT *
+       FROM session_file_cache
+       WHERE file_path ${process.platform === 'win32' ? 'COLLATE NOCASE' : ''} IN (${placeholders})
+       ORDER BY updated_at DESC, file_size DESC`
+    ).all(...normalizedPaths);
+    const rowsByPath = new Map();
+    for (const row of rows) {
+      const normalizedRowPath = normalizeSessionCachePath(row.file_path);
+      if (!rowsByPath.has(normalizedRowPath)) rowsByPath.set(normalizedRowPath, row);
+    }
     const map = new Map();
-    for (const row of rows) map.set(row.file_path, row);
+    for (const filePath of filePaths) {
+      const row = rowsByPath.get(normalizeSessionCachePath(filePath));
+      if (row) map.set(filePath, row);
+    }
     return map;
   },
 
-  upsert: (data) =>
-    db.prepare(`
+  getBatchBySessionIds: (sessionIds) => {
+    if (!sessionIds || sessionIds.length === 0) return new Map();
+    const uniqueSessionIds = [...new Set(sessionIds.filter(Boolean))];
+    if (uniqueSessionIds.length === 0) return new Map();
+    const placeholders = uniqueSessionIds.map(() => '?').join(',');
+    const rows = db.prepare(`
+      SELECT *
+      FROM session_file_cache
+      WHERE session_id IN (${placeholders})
+      ORDER BY updated_at DESC, file_size DESC
+    `).all(...uniqueSessionIds);
+    const map = new Map();
+    for (const row of rows) {
+      if (!map.has(row.session_id)) map.set(row.session_id, row);
+    }
+    return map;
+  },
+
+  upsert: (data) => {
+    const normalizedData = {
+      ...data,
+      file_path: normalizeSessionCachePath(data.file_path),
+    };
+
+    if (process.platform === 'win32') {
+      db.prepare(
+        'DELETE FROM session_file_cache WHERE file_path = ? COLLATE NOCASE AND file_path != ?'
+      ).run(normalizedData.file_path, normalizedData.file_path);
+    }
+
+    return db.prepare(`
       INSERT INTO session_file_cache
         (file_path, file_size, session_id, cwd, message_count, last_activity, last_user_message, last_assistant_message, updated_at)
       VALUES
@@ -788,10 +847,15 @@ const sessionFileCache = {
         last_user_message    = COALESCE(excluded.last_user_message, last_user_message),
         last_assistant_message = COALESCE(excluded.last_assistant_message, last_assistant_message),
         updated_at           = CURRENT_TIMESTAMP
-    `).run(data),
+    `).run(normalizedData);
+  },
 
-  delete: (filePath) =>
-    db.prepare('DELETE FROM session_file_cache WHERE file_path = ?').run(filePath),
+  delete: (filePath) => {
+    const normalizedPath = normalizeSessionCachePath(filePath);
+    return db.prepare(
+      `DELETE FROM session_file_cache WHERE file_path = ? ${process.platform === 'win32' ? 'COLLATE NOCASE' : ''}`
+    ).run(normalizedPath);
+  },
 
   // Return the most recent N rows ordered by last_activity (for auto-doc session collection).
   // Only returns rows for claude JSONL files that have been fully indexed (session_id + cwd).

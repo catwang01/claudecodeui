@@ -148,8 +148,12 @@ export const copilotAdapter = {
     }
   },
 
-  async fetchHistoryAfter(_sessionId, _afterId, _opts = {}) {
-    return { messages: [], total: 0, hasMore: false };
+  async fetchHistoryAfter(sessionId, afterId, opts = {}) {
+    const full = await copilotAdapter.fetchHistory(sessionId, { ...opts, limit: null, offset: 0 });
+    if (!full || full.messages.length === 0) return { messages: [], total: 0, hasMore: false };
+    const idx = full.messages.findIndex(m => m.id === afterId);
+    const after = idx >= 0 ? full.messages.slice(idx + 1) : [];
+    return { messages: after, total: after.length, hasMore: false };
   },
 };
 
@@ -164,7 +168,38 @@ function parseEvent(event, sessionId, counter) {
   if (!event || !event.type) return null;
 
   const ts = event.timestamp || new Date().toISOString();
-  const eventId = event.id || `copilot_${counter}`;
+  const eventId = event.uuid || event.id || `copilot_${counter}`;
+
+  // ── Format A: copilot-sdk.js writes Claude-style JSONL ──────────────────────
+  // { type: 'user', message: { role: 'user', content: [{type:'text', text:'...'}] }, uuid, timestamp }
+  // { type: 'assistant', message: { role: 'assistant', content: [{type:'text', text:'...'}], model, ... } }
+  if ((event.type === 'user' || event.type === 'assistant') && event.message) {
+    const msg = event.message;
+    const role = msg.role || event.type;
+    let content = '';
+    if (typeof msg.content === 'string') {
+      content = msg.content;
+    } else if (Array.isArray(msg.content)) {
+      content = msg.content
+        .filter(b => b.type === 'text')
+        .map(b => b.text || '')
+        .join('');
+    }
+    if (!content) return null;
+    return createNormalizedMessage({
+      id: eventId,
+      sessionId,
+      timestamp: ts,
+      provider: PROVIDER,
+      kind: 'text',
+      role,
+      content,
+    });
+  }
+
+  // ── Format B: Copilot SDK native events.jsonl ────────────────────────────────
+  // { type: 'user.message', data: { content: '...' }, timestamp, id }
+  // { type: 'assistant.message', data: { content: '...' }, timestamp, id }
 
   // User message
   if (event.type === 'user.message' && event.data?.content) {

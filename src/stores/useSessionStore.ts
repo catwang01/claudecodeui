@@ -46,6 +46,7 @@ export interface NormalizedMessage {
   // kind-specific fields (flat for simplicity)
   role?: 'user' | 'assistant';
   content?: string;
+  messageId?: string;
   images?: string[];
   toolName?: string;
   toolInput?: unknown;
@@ -394,8 +395,11 @@ export function useSessionStore() {
     const slot = getSlot(sessionId);
     if (dedupeMessages(slot.messages, [msg]).length === 0) return;
     slot.messages = [...slot.messages, msg];
-    notify(sessionId);
-  }, [getSlot, notify]);
+    // Always trigger re-render: the active session pointer may not have been
+    // updated yet (e.g. first Copilot reply arrives before React processes the
+    // session_created navigation), so we can't gate on activeSessionIdRef here.
+    setTick(n => n + 1);
+  }, [getSlot]);
 
   /**
    * Append multiple WebSocket messages at once (batch), deduped.
@@ -483,9 +487,14 @@ export function useSessionStore() {
    * Update or create a streaming message (accumulated text so far).
    * Uses a well-known ID so subsequent calls replace the same message.
    */
-  const updateStreaming = useCallback((sessionId: string, accumulatedText: string, msgProvider: SessionProvider) => {
+  const updateStreaming = useCallback((
+    sessionId: string,
+    accumulatedText: string,
+    msgProvider: SessionProvider,
+    messageId?: string,
+  ) => {
     const slot = getSlot(sessionId);
-    const streamId = `__streaming_${sessionId}`;
+    const streamId = `__streaming_${sessionId}${messageId ? `_${messageId}` : ''}`;
     const msg: NormalizedMessage = {
       id: streamId,
       sessionId,
@@ -493,6 +502,7 @@ export function useSessionStore() {
       provider: msgProvider,
       kind: 'stream_delta',
       content: accumulatedText,
+      messageId,
     };
     const idx = slot.messages.findIndex(m => m.id === streamId);
     if (idx >= 0) {
@@ -501,16 +511,18 @@ export function useSessionStore() {
     } else {
       slot.messages = [...slot.messages, msg];
     }
-    notify(sessionId);
-  }, [getSlot, notify]);
+    // Do not gate this notification on activeSessionIdRef. During initial
+    // session navigation, streaming can start before React updates that ref.
+    setTick(n => n + 1);
+  }, [getSlot]);
 
   /**
    * Finalize streaming: convert the streaming message to a regular text message.
    */
-  const finalizeStreaming = useCallback((sessionId: string) => {
+  const finalizeStreaming = useCallback((sessionId: string, messageId?: string) => {
     const slot = storeRef.current.get(sessionId);
     if (!slot) return;
-    const streamId = `__streaming_${sessionId}`;
+    const streamId = `__streaming_${sessionId}${messageId ? `_${messageId}` : ''}`;
     const idx = slot.messages.findIndex(m => m.id === streamId);
     if (idx >= 0) {
       const stream = slot.messages[idx];
@@ -521,9 +533,9 @@ export function useSessionStore() {
         kind: 'text',
         role: 'assistant',
       };
-      notify(sessionId);
+      setTick(n => n + 1);
     }
-  }, [notify]);
+  }, []);
 
   /**
    * Clear a session slot before a new fetch begins.

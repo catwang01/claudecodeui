@@ -3,10 +3,33 @@ import { useAuth } from '../components/auth/context/AuthContext';
 import { IS_PLATFORM } from '../constants/config';
 import { logger } from '../utils/logger';
 
+type MessageListener = (message: any) => void;
+
 type WebSocketContextType = {
   ws: WebSocket | null;
   sendMessage: (message: any) => void;
+  /**
+   * The most recent WebSocket message we received. Kept for backwards
+   * compatibility with consumers that only care about occasional / low-rate
+   * events (loading_progress, projects_updated, active-sessions).
+   *
+   * WARNING: high-frequency streams (Copilot stream_delta) can arrive multiple
+   * times in a single React batch, in which case `latestMessage` only reflects
+   * the last one and intermediate messages are lost. For anything streaming,
+   * subscribe via `subscribeMessages` instead.
+   */
   latestMessage: any | null;
+  /**
+   * Register a listener that is invoked synchronously on every incoming WS
+   * message, before React batches state updates. This guarantees no
+   * intermediate messages are dropped when many messages arrive in the same
+   * event-loop tick (which is what caused Copilot streaming to lose
+   * characters when React 18 collapsed a burst of setLatestMessage calls into
+   * one).
+   *
+   * Returns an unsubscribe function.
+   */
+  subscribeMessages: (listener: MessageListener) => () => void;
   isConnected: boolean;
 };
 
@@ -35,6 +58,24 @@ const useWebSocketProviderState = (): WebSocketContextType => {
   const [isConnected, setIsConnected] = useState(false);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const { token } = useAuth();
+
+  // Set-of-listener refs are kept out of React state so subscribe/unsubscribe
+  // doesn't trigger re-renders of the provider tree.
+  const listenersRef = useRef<Set<MessageListener>>(new Set());
+
+  const subscribeMessages = useCallback((listener: MessageListener) => {
+    listenersRef.current.add(listener);
+    return () => {
+      listenersRef.current.delete(listener);
+    };
+  }, []);
+
+  const dispatchToListeners = useCallback((data: any) => {
+    // Copy defensively — listeners may unsubscribe during iteration.
+    for (const l of Array.from(listenersRef.current)) {
+      try { l(data); } catch (err) { logger.error('[WS] listener error:', err); }
+    }
+  }, []);
 
   useEffect(() => {
     unmountedRef.current = false; // Reset on each effect run (cleanup fires on deps change too, not just unmount)
@@ -69,7 +110,9 @@ const useWebSocketProviderState = (): WebSocketContextType => {
         if (hasConnectedRef.current) {
           // This is a reconnect — signal so components can catch up on missed messages
           logger.log('[WS] Reconnected at', new Date().toISOString());
-          setLatestMessage({ type: 'websocket-reconnected', timestamp: Date.now() });
+          const reconnectMsg = { type: 'websocket-reconnected', timestamp: Date.now() };
+          dispatchToListeners(reconnectMsg);
+          setLatestMessage(reconnectMsg);
         } else {
           logger.log('[WS] Connected (first time) at', new Date().toISOString());
         }
@@ -83,6 +126,10 @@ const useWebSocketProviderState = (): WebSocketContextType => {
           if (data.type !== 'loading_progress') {
             logger.log('[WS] message kind=%s type=%s', data.kind ?? '-', data.type ?? '-', data);
           }
+          // Dispatch to synchronous listeners FIRST so streaming consumers
+          // (Copilot stream_delta) see every message even when several land
+          // in the same React batch.
+          dispatchToListeners(data);
           setLatestMessage(data);
         } catch (error) {
           logger.error('Error parsing WebSocket message:', error);
@@ -124,8 +171,9 @@ const useWebSocketProviderState = (): WebSocketContextType => {
     ws: wsRef.current,
     sendMessage,
     latestMessage,
+    subscribeMessages,
     isConnected
-  }), [sendMessage, latestMessage, isConnected]);
+  }), [sendMessage, latestMessage, subscribeMessages, isConnected]);
 
   return value;
 };
