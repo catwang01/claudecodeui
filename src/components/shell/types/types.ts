@@ -16,6 +16,7 @@ export type ShellInitMessage = {
   initialCommand: string | null | undefined;
   isPlainShell: boolean;
   skipPermissions?: boolean;
+  permissionMode?: string;
 };
 
 export type ShellResizeMessage = {

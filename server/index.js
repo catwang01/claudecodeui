@@ -2141,6 +2141,7 @@ function handleShellConnection(ws) {
                 const provider = data.provider || 'claude';
                 const initialCommand = data.initialCommand;
                 const skipPermissions = data.skipPermissions || false;
+                const permissionMode = data.permissionMode || 'default';
                 const isPlainShell = data.isPlainShell || (!!initialCommand && !hasSession) || provider === 'plain-shell';
                 urlDetectionBuffer = '';
                 announcedAuthUrls.clear();
@@ -2223,7 +2224,7 @@ function handleShellConnection(ws) {
                 if (isPlainShell) {
                     welcomeMsg = `\x1b[36mStarting terminal in: ${projectPath}\x1b[0m\r\n`;
                 } else {
-                    const providerName = provider === 'cursor' ? 'Cursor' : (provider === 'codex' ? 'Codex' : (provider === 'gemini' ? 'Gemini' : 'Claude'));
+                    const providerName = provider === 'cursor' ? 'Cursor' : (provider === 'codex' ? 'Codex' : (provider === 'gemini' ? 'Gemini' : (provider === 'copilot' ? 'Copilot' : 'Claude')));
                     welcomeMsg = hasSession ?
                         `\x1b[36mResuming ${providerName} session ${sessionId} in: ${projectPath}\x1b[0m\r\n` :
                         `\x1b[36mStarting new ${providerName} session in: ${projectPath}\x1b[0m\r\n`;
@@ -2307,13 +2308,14 @@ function handleShellConnection(ws) {
                         // GitHub Copilot CLI
                         // Use the standalone 'copilot' command (not 'gh copilot')
                         const command = initialCommand || 'copilot';
+                        const allowAllFlag = permissionMode === 'bypassPermissions' || skipPermissions ? ' --allow-all' : '';
 
                         // Use --session-id to resume or create a session with our UUID
                         // This allows CloudCLI to manage session IDs rather than Copilot CLI
                         if (hasSession && sessionId) {
-                            shellCommand = `${command} --session-id="${sessionId}"`;
+                            shellCommand = `${command} --session-id="${sessionId}"${allowAllFlag}`;
                         } else {
-                            shellCommand = command;
+                            shellCommand = `${command}${allowAllFlag}`;
                         }
                     } else {
                         // Claude (default provider)

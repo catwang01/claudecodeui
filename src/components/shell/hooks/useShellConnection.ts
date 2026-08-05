@@ -5,12 +5,30 @@ import type { Terminal } from '@xterm/xterm';
 import type { Project, ProjectSession } from '../../../types/app';
 import { SHELL_PING_INTERVAL_MS, MIN_TERMINAL_COLS, TERMINAL_INIT_DELAY_MS } from '../constants/constants';
 import { getShellWebSocketUrl, parseShellMessage, sendSocketMessage } from '../utils/socket';
-import { getClaudeSettings } from '../../chat/utils/chatStorage';
+import { getClaudeSettings, safeLocalStorage } from '../../chat/utils/chatStorage';
 import { logger } from '../../../utils/logger';
 
 const ANSI_ESCAPE_REGEX =
   /(?:\u001B\[[0-?]*[ -/]*[@-~]|\u009B[0-?]*[ -/]*[@-~]|\u001B\][^\u0007\u001B]*(?:\u0007|\u001B\\)|\u009D[^\u0007\u009C]*(?:\u0007|\u009C)|\u001B[PX^_][^\u001B]*\u001B\\|[\u0090\u0098\u009E\u009F][^\u009C]*\u009C|\u001B[@-Z\\-_])/g;
 const PROCESS_EXIT_REGEX = /Process exited with code (\d+)/;
+
+function getPermissionModeForProvider(provider: string): string {
+  if (!['codex', 'gemini', 'copilot'].includes(provider)) {
+    return 'default';
+  }
+
+  const raw = safeLocalStorage.getItem(`${provider}-settings`);
+  if (!raw) {
+    return 'default';
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as { permissionMode?: unknown };
+    return typeof parsed.permissionMode === 'string' ? parsed.permissionMode : 'default';
+  } catch {
+    return 'default';
+  }
+}
 
 type UseShellConnectionOptions = {
   wsRef: MutableRefObject<WebSocket | null>;
@@ -193,17 +211,22 @@ export function useShellConnection({
               }
             }
 
+            const provider = isPlainShellRef.current
+              ? 'plain-shell'
+              : (selectedSessionRef.current?.__provider || localStorage.getItem('selected-provider') || 'claude');
+
             sendSocketMessage(socket, {
               type: 'init',
               projectPath: currentProject.fullPath || currentProject.path || '',
               sessionId: isPlainShellRef.current ? null : selectedSessionRef.current?.id || null,
               hasSession: isPlainShellRef.current ? false : Boolean(selectedSessionRef.current),
-              provider: isPlainShellRef.current ? 'plain-shell' : (selectedSessionRef.current?.__provider || localStorage.getItem('selected-provider') || 'claude'),
+              provider,
               cols: currentTerminal.cols,
               rows: currentTerminal.rows,
               initialCommand: initialCommandRef.current,
               isPlainShell: isPlainShellRef.current,
               skipPermissions: getClaudeSettings().skipPermissions,
+              permissionMode: getPermissionModeForProvider(provider),
             });
           }, TERMINAL_INIT_DELAY_MS);
         };

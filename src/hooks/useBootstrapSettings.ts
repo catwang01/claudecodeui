@@ -10,6 +10,7 @@ const PREF_KEYS = [
   'cursor-tools-settings',
   'codex-settings',
   'gemini-settings',
+  'copilot-settings',
   'code-editor-settings',
 ] as const;
 
@@ -28,7 +29,7 @@ const PREF_KEYS = [
  */
 export function useBootstrapSettings(): void {
   useEffect(() => {
-    // Fire all 5 requests in parallel — they are independent and the goal is
+    // Fire all preference requests in parallel — they are independent and the goal is
     // to notify same-tab listeners as quickly as possible.
     // Promise.allSettled preserves per-key error isolation (one failure doesn't
     // abort the rest), and is semantically identical to the serial loop but ~5×

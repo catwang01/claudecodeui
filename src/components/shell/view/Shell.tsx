@@ -402,6 +402,25 @@ export default function Shell({
     );
   }
 
+  const provider = isPlainShell
+    ? null
+    : (selectedSession?.__provider ?? (localStorage.getItem('selected-provider') || 'claude'));
+  const providerDisplayName = (() => {
+    switch (provider) {
+      case 'cursor':
+        return 'Cursor';
+      case 'codex':
+        return 'Codex';
+      case 'gemini':
+        return 'Gemini';
+      case 'copilot':
+        return 'Copilot';
+      case 'claude':
+      default:
+        return 'Claude';
+    }
+  })();
+
   const readyDescription = isPlainShell
     ? t('shell.runCommand', {
         command: initialCommand || t('shell.defaultCommand'),
@@ -409,18 +428,14 @@ export default function Shell({
       })
     : selectedSession
       ? t('shell.resumeSession', { displayName: sessionDisplayNameLong })
-      : t('shell.startSession');
+      : t('shell.startSession', { provider: providerDisplayName });
 
   const connectingDescription = isPlainShell
     ? t('shell.runCommand', {
         command: initialCommand || t('shell.defaultCommand'),
         projectName: selectedProject.displayName,
       })
-    : t('shell.startCli', { projectName: selectedProject.displayName });
-
-  const provider = isPlainShell
-    ? null
-    : (selectedSession?.__provider ?? (localStorage.getItem('selected-provider') || 'claude'));
+    : t('shell.startCli', { provider: providerDisplayName, projectName: selectedProject.displayName });
 
   const sessionId = isPlainShell ? null : (selectedSession?.id ?? null);
   const shortSessionId = sessionId ? sessionId.slice(0, 8) : null;
@@ -438,7 +453,7 @@ export default function Shell({
           case 'codex':
             return shortSessionId ? `codex resume ${shortSessionId}...` : 'codex';
           case 'copilot':
-            return shortSessionId ? `copilot --resume ${shortSessionId}...` : 'copilot';
+            return shortSessionId ? `copilot --session-id ${shortSessionId}...` : 'copilot';
           default:
             return null;
         }
