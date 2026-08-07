@@ -5,6 +5,7 @@ import type { PendingPermissionRequest, PermissionMode } from '../types/types';
 import type { ProjectSession, SessionProvider } from '../../../types/app';
 import { logger } from '../../../utils/logger';
 import { useAwaitingPermissions } from '../../../contexts/AwaitingPermissionContext';
+import { useCopilotModels } from '../../../hooks/useCopilotModels';
 
 interface UseChatProviderStateArgs {
   selectedSession: ProjectSession | null;
@@ -31,6 +32,7 @@ export function useChatProviderState({ selectedSession }: UseChatProviderStateAr
   const [copilotModel, setCopilotModel] = useState<string>(() => {
     return localStorage.getItem('copilot-model') || COPILOT_MODELS.DEFAULT;
   });
+  const { models: copilotModelOptions, loadedFromSdk: copilotModelsLoadedFromSdk } = useCopilotModels();
 
   const lastProviderRef = useRef(provider);
 
@@ -83,6 +85,16 @@ export function useChatProviderState({ selectedSession }: UseChatProviderStateAr
   }, [pendingPermissionRequests, selectedSession?.id, clearByRequestId]);
 
   useEffect(() => {
+    if (!copilotModelsLoadedFromSdk || copilotModelOptions.some(({ value }) => value === copilotModel)) {
+      return;
+    }
+    const nextModel = copilotModelOptions[0]?.value;
+    if (!nextModel) return;
+    setCopilotModel(nextModel);
+    localStorage.setItem('copilot-model', nextModel);
+  }, [copilotModel, copilotModelOptions, copilotModelsLoadedFromSdk]);
+
+  useEffect(() => {
     if (provider !== 'cursor') {
       return;
     }
@@ -133,6 +145,7 @@ export function useChatProviderState({ selectedSession }: UseChatProviderStateAr
     setGeminiModel,
     copilotModel,
     setCopilotModel,
+    copilotModelOptions,
     permissionMode,
     setPermissionMode,
     pendingPermissionRequests,

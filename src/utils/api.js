@@ -101,6 +101,7 @@ export const api = {
   // Protected endpoints
   // config endpoint removed - no longer needed (frontend uses window.location)
   projects: ({ silent = false } = {}) => authenticatedFetch(`/api/projects${silent ? '?silent=true' : ''}`),
+  copilotModels: () => authenticatedFetch('/api/copilot/models'),
   sessions: (projectName, limit = 5, offset = 0) =>
     authenticatedFetch(`/api/projects/${projectName}/sessions?limit=${limit}&offset=${offset}`),
   // Unified endpoint — all providers through one URL

@@ -8,7 +8,7 @@ import { useChatProviderState } from '../hooks/useChatProviderState';
 import { useChatSessionState } from '../hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
-import { CLAUDE_MODELS, CURSOR_MODELS, CODEX_MODELS, GEMINI_MODELS, COPILOT_MODELS } from '../../../../shared/modelConstants';
+import { CLAUDE_MODELS, CURSOR_MODELS, CODEX_MODELS, GEMINI_MODELS } from '../../../../shared/modelConstants';
 import { useSessionStore } from '../../../stores/useSessionStore';
 import { useWebSocket } from '../../../contexts/WebSocketContext';
 import { api } from '../../../utils/api';
@@ -85,6 +85,7 @@ function ChatInterface({
     setGeminiModel,
     copilotModel,
     setCopilotModel,
+    copilotModelOptions,
     permissionMode,
     pendingPermissionRequests,
     setPendingPermissionRequests,
@@ -449,6 +450,7 @@ function ChatInterface({
           setGeminiModel={setGeminiModel}
           copilotModel={copilotModel}
           setCopilotModel={setCopilotModel}
+          copilotModelOptions={copilotModelOptions}
           tasksEnabled={tasksEnabled}
           isTaskMasterInstalled={isTaskMasterInstalled}
           onShowAllTasks={onShowAllTasks}
@@ -584,7 +586,7 @@ function ChatInterface({
             provider === 'claude' ? CLAUDE_MODELS.OPTIONS :
             provider === 'cursor' ? CURSOR_MODELS.OPTIONS :
             provider === 'codex' ? CODEX_MODELS.OPTIONS :
-            provider === 'copilot' ? COPILOT_MODELS.OPTIONS : GEMINI_MODELS.OPTIONS
+            provider === 'copilot' ? copilotModelOptions : GEMINI_MODELS.OPTIONS
           }
           onModelChange={(value) => {
             if (provider === 'claude') { setClaudeModel(value); localStorage.setItem('claude-model', value); }

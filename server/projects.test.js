@@ -9,7 +9,9 @@ import os from 'os';
 
 let getSessionFileMeta;
 let getSessions;
+let dedupeCopilotSessionAliases;
 let sessionFileCache;
+let sessionsDb;
 
 const tmpBase = path.join(os.homedir(), '.claude', 'projects');
 const projectName = `__test_session_cache_${Date.now()}`;
@@ -45,8 +47,10 @@ beforeEach(async () => {
   const mod = await import('./projects.js');
   getSessionFileMeta = mod.getSessionFileMeta;
   getSessions = mod.getSessions;
+  dedupeCopilotSessionAliases = mod.dedupeCopilotSessionAliases;
   const dbMod = await import('./database/db.js');
   sessionFileCache = dbMod.sessionFileCache;
+  sessionsDb = dbMod.sessionsDb;
 });
 
 afterEach(async () => {
@@ -57,6 +61,7 @@ afterEach(async () => {
     sessionFileCache.delete(fp);
     await fs.unlink(fp).catch(() => {});
   }
+  sessionsDb.deleteSessionsByProjectPath(projectDir);
   await fs.rmdir(projectDir).catch(() => {});
 });
 
@@ -119,6 +124,39 @@ describe('getSessionFileMeta', () => {
     expect(sessionFileCache.getBatchBySessionIds([sessionId]).get(sessionId).message_count).toBe(11);
     sessionFileCache.delete(stalePath);
     sessionFileCache.delete(currentPath);
+  });
+
+  it('prefers the latest activity over the latest cache scan', () => {
+    const sessionId = 'test-session-activity-order';
+    const activePath = path.join(projectDir, 'active.jsonl');
+    const stalePath = path.join(projectDir, 'stale-scan.jsonl');
+    const base = {
+      session_id: sessionId,
+      cwd: projectDir,
+      last_user_message: 'Hello',
+      last_assistant_message: null,
+    };
+
+    sessionFileCache.upsert({
+      ...base,
+      file_path: activePath,
+      file_size: 200,
+      message_count: 10,
+      last_activity: '2026-08-05T11:00:00.000Z',
+    });
+    sessionFileCache.upsert({
+      ...base,
+      file_path: stalePath,
+      file_size: 300,
+      message_count: 20,
+      last_activity: '2026-08-05T10:00:00.000Z',
+    });
+
+    const cached = sessionFileCache.getBatchBySessionIds([sessionId]).get(sessionId);
+    expect(cached.file_path).toBe(activePath.toLowerCase());
+    expect(cached.message_count).toBe(10);
+    sessionFileCache.delete(activePath);
+    sessionFileCache.delete(stalePath);
   });
 
   it('cold cache: reads file and returns correct metadata', async () => {
@@ -225,6 +263,99 @@ describe('getSessionFileMeta', () => {
     const meta = await getSessionFileMeta(fp);
     // lastUserMessage should be 'Real message', not the system reminder
     expect(meta.lastUserMessage).toBe('Real message');
+  });
+});
+
+describe('dedupeCopilotSessionAliases', () => {
+  it('keeps the managed transcript when a native alias has the same activity', () => {
+    sessionsDb.createSession(
+      'native-session',
+      'copilot',
+      projectDir,
+      undefined,
+      undefined,
+      undefined,
+      path.join(os.homedir(), '.copilot', 'session-state', 'native-session', 'events.jsonl'),
+      'native-session',
+    );
+    sessionsDb.createSession(
+      'managed-session',
+      'copilot',
+      projectDir,
+      undefined,
+      undefined,
+      undefined,
+      path.join(projectDir, 'managed-session.jsonl'),
+      'managed-session',
+    );
+    const sessions = [
+      {
+        id: 'native-session',
+        transcriptPath: path.join(os.homedir(), '.copilot', 'session-state', 'native-session', 'events.jsonl'),
+        summary: 'Same final prompt',
+        lastActivity: new Date('2026-08-05T11:00:01.000Z'),
+        messageCount: 100,
+      },
+      {
+        id: 'managed-session',
+        transcriptPath: path.join(projectDir, 'managed-session.jsonl'),
+        summary: 'Same final prompt',
+        lastActivity: new Date('2026-08-05T11:00:00.000Z'),
+        messageCount: 10,
+      },
+    ];
+
+    expect(dedupeCopilotSessionAliases(sessions)).toEqual([
+      expect.objectContaining({ id: 'managed-session', messageCount: 10 }),
+    ]);
+    expect(sessionsDb.getSessionById('native-session')).toBeNull();
+    expect(sessionsDb.getSessionByProviderSessionId('copilot', 'native-session')).toEqual(
+      expect.objectContaining({
+        session_id: 'managed-session',
+        provider_session_id: 'native-session',
+      }),
+    );
+  });
+
+  it('does not merge distinct sessions with the same summary far apart in time', () => {
+    const sessions = [
+      {
+        id: 'older-session',
+        transcriptPath: path.join(projectDir, 'older-session.jsonl'),
+        summary: 'Repeated prompt',
+        lastActivity: new Date('2026-08-05T10:00:00.000Z'),
+      },
+      {
+        id: 'newer-session',
+        transcriptPath: path.join(os.homedir(), '.copilot', 'session-state', 'newer-session', 'events.jsonl'),
+        summary: 'Repeated prompt',
+        lastActivity: new Date('2026-08-05T11:00:00.000Z'),
+      },
+    ];
+
+    expect(dedupeCopilotSessionAliases(sessions)).toHaveLength(2);
+  });
+});
+
+describe('Copilot provider session mapping', () => {
+  it('resolves a Copilot native session ID to its CloudCLI session', () => {
+    sessionsDb.createSession(
+      'cloudcli-session',
+      'copilot',
+      projectDir,
+      undefined,
+      undefined,
+      undefined,
+      path.join(projectDir, 'cloudcli-session.jsonl'),
+      'native-copilot-session',
+    );
+
+    expect(sessionsDb.getSessionByProviderSessionId('copilot', 'native-copilot-session')).toEqual(
+      expect.objectContaining({
+        session_id: 'cloudcli-session',
+        provider_session_id: 'native-copilot-session',
+      }),
+    );
   });
 });
 

@@ -114,6 +114,20 @@ export function runMigrations(): void {
   addColumnIfMissing(db, 'users', 'git_email', 'TEXT');
   addColumnIfMissing(db, 'users', 'has_completed_onboarding', 'BOOLEAN DEFAULT 0');
   addColumnIfMissing(db, 'projects', 'claude_dir_name', 'TEXT DEFAULT NULL');
+  const hadProviderSessionId = columnExists(db, 'sessions', 'provider_session_id');
+  addColumnIfMissing(db, 'sessions', 'provider_session_id', 'TEXT');
+  if (!hadProviderSessionId) {
+    db.exec(`
+      UPDATE sessions
+      SET provider_session_id = session_id
+      WHERE provider = 'copilot' AND provider_session_id IS NULL
+    `);
+  }
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_provider_session
+    ON sessions(provider, provider_session_id)
+    WHERE provider_session_id IS NOT NULL
+  `);
 
   // Data migrations
   migrateLegacySessionNames(db);

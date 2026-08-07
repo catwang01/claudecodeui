@@ -15,8 +15,13 @@ interface CopilotSession {
   updated_at: string;
 }
 
-function getPreferredJsonlPath(sessionId: string, nativeEventsPath: string): string {
-  const existing = sessionsDb.getSessionById(sessionId);
+function getCloudCliSession(nativeSessionId: string) {
+  return sessionsDb.getSessionByProviderSessionId('copilot', nativeSessionId)
+    ?? sessionsDb.getSessionById(nativeSessionId);
+}
+
+function getPreferredJsonlPath(nativeSessionId: string, nativeEventsPath: string): string {
+  const existing = getCloudCliSession(nativeSessionId);
   if (
     existing?.provider === 'copilot'
     && existing.jsonl_path
@@ -77,16 +82,18 @@ export const copilotSessionSynchronizer: ISessionSynchronizer = {
 
         const projectPath = session.cwd;
         const eventsJsonlPath = path.join(COPILOT_SESSION_STATE_DIR, session.id, 'events.jsonl');
+        const cloudCliSessionId = getCloudCliSession(session.id)?.session_id ?? session.id;
 
         projectsDb.createProjectPath(projectPath);
         sessionsDb.createSession(
-          session.id,
+          cloudCliSessionId,
           'copilot',
           projectPath,
           undefined, // name
           session.created_at,
           session.updated_at,
-          getPreferredJsonlPath(session.id, eventsJsonlPath)
+          getPreferredJsonlPath(session.id, eventsJsonlPath),
+          session.id
         );
 
         count++;
@@ -142,20 +149,22 @@ export const copilotSessionSynchronizer: ISessionSynchronizer = {
       }
 
       const projectPath = session.cwd;
+      const cloudCliSessionId = getCloudCliSession(session.id)?.session_id ?? session.id;
 
       projectsDb.createProjectPath(projectPath);
       sessionsDb.createSession(
-        session.id,
+        cloudCliSessionId,
         'copilot',
         projectPath,
         undefined, // name
         session.created_at,
         session.updated_at,
-        getPreferredJsonlPath(session.id, filePath)
+        getPreferredJsonlPath(session.id, filePath),
+        session.id
       );
 
       console.log('[copilot-sync] Synchronized session:', sessionId);
-      return session.id;
+      return cloudCliSessionId;
     } catch (error) {
       console.warn('[copilot-sync] Failed to synchronize file:', filePath, error);
       return null;

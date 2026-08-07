@@ -28,6 +28,7 @@ interface ChatMessagesPaneProps {
   setGeminiModel: (model: string) => void;
   copilotModel: string;
   setCopilotModel: (model: string) => void;
+  copilotModelOptions: { value: string; label: string }[];
   tasksEnabled: boolean;
   isTaskMasterInstalled: boolean | null;
   onShowAllTasks?: (() => void) | null;
@@ -78,6 +79,7 @@ export default function ChatMessagesPane({
   setGeminiModel,
   copilotModel,
   setCopilotModel,
+  copilotModelOptions,
   tasksEnabled,
   isTaskMasterInstalled,
   onShowAllTasks,
@@ -209,6 +211,7 @@ export default function ChatMessagesPane({
           setGeminiModel={setGeminiModel}
           copilotModel={copilotModel}
           setCopilotModel={setCopilotModel}
+          copilotModelOptions={copilotModelOptions}
           tasksEnabled={tasksEnabled}
           isTaskMasterInstalled={isTaskMasterInstalled}
           onShowAllTasks={onShowAllTasks}
@@ -367,4 +370,3 @@ export default function ChatMessagesPane({
     </div>
   );
 }
-

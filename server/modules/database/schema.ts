@@ -86,6 +86,7 @@ export const SESSIONS_TABLE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS sessions (
   session_id TEXT NOT NULL,
   provider TEXT NOT NULL DEFAULT 'claude',
+  provider_session_id TEXT,
   custom_name TEXT,
   project_path TEXT,
   jsonl_path TEXT,

@@ -812,7 +812,7 @@ const sessionFileCache = {
       SELECT *
       FROM session_file_cache
       WHERE session_id IN (${placeholders})
-      ORDER BY updated_at DESC, file_size DESC
+      ORDER BY datetime(last_activity) DESC, updated_at DESC, file_size DESC
     `).all(...uniqueSessionIds);
     const map = new Map();
     for (const row of rows) {

@@ -28,6 +28,7 @@ type ProviderSelectionEmptyStateProps = {
   setGeminiModel: (model: string) => void;
   copilotModel: string;
   setCopilotModel: (model: string) => void;
+  copilotModelOptions: { value: string; label: string }[];
   tasksEnabled: boolean;
   isTaskMasterInstalled: boolean | null;
   onShowAllTasks?: (() => void) | null;
@@ -86,11 +87,14 @@ const PROVIDERS: ProviderDef[] = [
   },
 ];
 
-function getModelConfig(p: SessionProvider) {
+function getModelConfig(
+  p: SessionProvider,
+  copilotModelOptions: { value: string; label: string }[],
+) {
   if (p === "claude") return CLAUDE_MODELS;
   if (p === "codex") return CODEX_MODELS;
   if (p === "gemini") return GEMINI_MODELS;
-  if (p === "copilot") return COPILOT_MODELS;
+  if (p === "copilot") return { ...COPILOT_MODELS, OPTIONS: copilotModelOptions };
   return CURSOR_MODELS;
 }
 
@@ -125,6 +129,7 @@ export default function ProviderSelectionEmptyState({
   setGeminiModel,
   copilotModel,
   setCopilotModel,
+  copilotModelOptions,
   tasksEnabled,
   isTaskMasterInstalled,
   onShowAllTasks,
@@ -160,7 +165,7 @@ export default function ProviderSelectionEmptyState({
     }
   };
 
-  const modelConfig = getModelConfig(provider);
+  const modelConfig = getModelConfig(provider, copilotModelOptions);
   const currentModel = getModelValue(
     provider,
     claudeModel,

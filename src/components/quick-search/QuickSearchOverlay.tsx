@@ -4,6 +4,7 @@ import { FolderOpen, MessageSquare, Search, X } from 'lucide-react';
 import { api } from '../../utils/api';
 import { readProjectExcludePatterns } from '../sidebar/utils/utils';
 import type { Project, ProjectSession, SessionProvider } from '../../types/app';
+import { containsAllWords, newestMatch, sortByTimestampDescending } from './quickSearchResults';
 
 type Highlight = { start: number; end: number };
 
@@ -20,6 +21,8 @@ type ResultItem =
       timestamp?: string | null;
       provider?: string;
     };
+
+type ConversationResult = Extract<ResultItem, { kind: 'conversation' }>;
 
 type Props = {
   projects: Project[];
@@ -149,8 +152,18 @@ function HighlightedText({ text, highlights }: { text: string; highlights?: High
 }
 
 function ResultIcon({ kind }: { kind: ResultItem['kind'] }) {
-  if (kind === 'project') return <FolderOpen className="h-4 w-4 flex-shrink-0 text-muted-foreground" />;
-  return <MessageSquare className="h-4 w-4 flex-shrink-0 text-muted-foreground" />;
+  if (kind === 'project') {
+    return (
+      <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-400">
+        <FolderOpen className="h-4 w-4" />
+      </span>
+    );
+  }
+  return (
+    <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-sky-500/15 text-sky-600 dark:text-sky-400">
+      <MessageSquare className="h-4 w-4" />
+    </span>
+  );
 }
 
 export default function QuickSearchOverlay({ projects, onSessionSelect, onProjectSelect, onClose }: Props) {
@@ -208,8 +221,8 @@ export default function QuickSearchOverlay({ projects, onSessionSelect, onProjec
       .flatMap((p) => {
         const primaryText = p.displayName ?? p.name;
         const primaryResult = fuzzyMatchWords(primaryText);
-        const pathResult = p.fullPath ? fuzzyMatchWords(p.fullPath) : null;
-        const bestScore = Math.max(primaryResult?.score ?? 0, pathResult?.score ?? 0);
+        const pathMatches = p.fullPath ? containsAllWords(p.fullPath, words) : false;
+        const bestScore = Math.max(primaryResult?.score ?? 0, pathMatches ? 1 : 0);
         if (bestScore === 0) return [];
         return [{ kind: 'project' as const, project: p, highlights: primaryResult?.highlights ?? [], matchScore: bestScore }];
       })
@@ -227,7 +240,7 @@ export default function QuickSearchOverlay({ projects, onSessionSelect, onProjec
         const es = new EventSource(url);
         eventSourceRef.current = es;
 
-        const convResults: ResultItem[] = [];
+        const convResults: ConversationResult[] = [];
         const seenIds = new Set<string>();
 
         es.addEventListener('result', (evt: MessageEvent) => {
@@ -254,6 +267,7 @@ export default function QuickSearchOverlay({ projects, onSessionSelect, onProjec
             if (isExcluded) return;
             for (const s of data.projectResult.sessions) {
               if (!seenIds.has(s.sessionId)) {
+                const match = newestMatch(s.matches);
                 seenIds.add(s.sessionId);
                 convResults.push({
                   kind: 'conversation',
@@ -261,16 +275,16 @@ export default function QuickSearchOverlay({ projects, onSessionSelect, onProjec
                   sessionSummary: s.sessionSummary,
                   projectName: data.projectResult.projectName,
                   projectDisplayName: data.projectResult.projectDisplayName,
-                  snippet: s.matches[0]?.snippet ?? '',
-                  highlights: s.matches[0]?.highlights,
-                  timestamp: s.matches[0]?.timestamp,
+                  snippet: match?.snippet ?? '',
+                  highlights: match?.highlights,
+                  timestamp: match?.timestamp,
                   provider: s.provider,
                 });
               }
             }
             setResults((prev) => {
               const nonConv = prev.filter((r) => r.kind !== 'conversation');
-              return [...nonConv, ...convResults.slice(0, 20)];
+              return [...nonConv, ...sortByTimestampDescending(convResults).slice(0, 20)];
             });
           } catch {
             // ignore malformed SSE

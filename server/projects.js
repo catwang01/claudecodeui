@@ -619,8 +619,9 @@ async function getProjectData(dbProject, codexSessionsIndexRef, autoDocPreFilter
   // Claude sessions: read from DB + session_file_cache (no filesystem I/O)
   // Fetch only top 45 claude sessions from DB (we only show 15, but leave room for
   // autoDoc/hidden filtering to discard some). Avoids loading 600+ rows for large projects.
-  const claudeRows = sessionsDb.getSessionsByProjectPathPage(projectPath, 45, 0)
-    .filter(row => row.provider === 'claude' && row.jsonl_path);
+  const claudeRows = sessionsDb
+    .getSessionsByProjectPathAndProviderPage(projectPath, 'claude', 45, 0)
+    .filter(row => row.jsonl_path);
   const claudeSessions = buildSessionsFromCache(claudeRows);
   claudeSessions.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
 
@@ -683,9 +684,8 @@ async function getProjectData(dbProject, codexSessionsIndexRef, autoDocPreFilter
   applyReadState(project.geminiSessions, 'gemini');
 
   // Copilot sessions: read from DB (similar to Claude sessions)
-  const copilotRows = sessionsDb.getSessionsByProjectPathPage(projectPath, 45, 0)
-    .filter(row => row.provider === 'copilot');
-  const copilotSessions = buildSessionsFromCache(copilotRows);
+  const copilotRows = sessionsDb.getSessionsByProjectPathAndProviderPage(projectPath, 'copilot', 45, 0);
+  const copilotSessions = dedupeCopilotSessionAliases(buildSessionsFromCache(copilotRows));
   copilotSessions.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
   project.copilotSessions = copilotSessions.slice(0, 15);
   applyCustomSessionNames(project.copilotSessions, 'copilot');
@@ -730,8 +730,9 @@ function refreshProjectSessions(cachedProject, projectPath) {
     ? (sessions) => sessions.filter(s => !excludedSessionIds.has(s.id))
     : null;
 
-  const claudeRows = sessionsDb.getSessionsByProjectPathPage(projectPath, 45, 0)
-    .filter(row => row.provider === 'claude' && row.jsonl_path);
+  const claudeRows = sessionsDb
+    .getSessionsByProjectPathAndProviderPage(projectPath, 'claude', 45, 0)
+    .filter(row => row.jsonl_path);
   const claudeSessions = buildSessionsFromCache(claudeRows);
   claudeSessions.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
 
@@ -1252,7 +1253,7 @@ function buildSessionsFromCache(rows) {
     const sessionCached = cacheBySessionId.get(row.session_id);
     const cached = !pathCached || (
       sessionCached
-      && new Date(sessionCached.updated_at || 0) > new Date(pathCached.updated_at || 0)
+      && new Date(sessionCached.last_activity || 0) > new Date(pathCached.last_activity || 0)
     )
       ? sessionCached
       : pathCached;
@@ -1265,6 +1266,7 @@ function buildSessionsFromCache(rows) {
 
       sessions.push({
         id: row.session_id,
+        transcriptPath: row.jsonl_path,
         summary: row.custom_name || 'New Session',
         messageCount: 0,
         lastActivity: new Date(row.updated_at || 0),
@@ -1281,6 +1283,7 @@ function buildSessionsFromCache(rows) {
 
     sessions.push({
       id: row.session_id,
+      transcriptPath: row.jsonl_path,
       summary: row.custom_name
         || (cached.last_user_message
           ? (cached.last_user_message.length > 50
@@ -1295,6 +1298,48 @@ function buildSessionsFromCache(rows) {
     });
   }
   return sessions;
+}
+
+function dedupeCopilotSessionAliases(sessions) {
+  const selected = [];
+
+  for (const session of sessions) {
+    const isNative = path.basename(session.transcriptPath || '') === 'events.jsonl';
+    const activity = new Date(session.lastActivity || 0).getTime();
+    const duplicateIndex = selected.findIndex((candidate) => {
+      const candidateIsNative = path.basename(candidate.transcriptPath || '') === 'events.jsonl';
+      const candidateActivity = new Date(candidate.lastActivity || 0).getTime();
+      return isNative !== candidateIsNative
+        && session.summary === candidate.summary
+        && Number.isFinite(activity)
+        && Number.isFinite(candidateActivity)
+        && Math.abs(activity - candidateActivity) <= 10_000;
+    });
+
+    if (duplicateIndex === -1) {
+      selected.push(session);
+    } else {
+      const candidate = selected[duplicateIndex];
+      const nativeSession = isNative ? session : candidate;
+      const managedSession = isNative ? candidate : session;
+      try {
+        sessionsDb.bindProviderSessionId(managedSession.id, 'copilot', nativeSession.id);
+      } catch (error) {
+        console.warn(
+          `[Copilot] Failed to persist session mapping ${managedSession.id} -> ${nativeSession.id}:`,
+          error.message,
+        );
+      }
+      if (!isNative) {
+        selected[duplicateIndex] = session;
+      }
+    }
+  }
+
+  for (const session of selected) {
+    delete session.transcriptPath;
+  }
+  return selected;
 }
 
 // Incremental .jsonl metadata scan with SQLite cache.
@@ -3248,5 +3293,6 @@ export {
   getGeminiCliSessionMessages,
   searchConversations,
   extractTextFromContent,
+  dedupeCopilotSessionAliases,
   invalidateExcludedSessionIdsCache
 };

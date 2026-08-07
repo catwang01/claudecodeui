@@ -104,12 +104,26 @@ async function getClient() {
   }
 }
 
+export function normalizeCopilotModels(models) {
+  const seen = new Set();
+  return models.flatMap((model) => {
+    if (!model?.id || seen.has(model.id)) return [];
+    seen.add(model.id);
+    return [{
+      value: model.id,
+      label: model.name || model.id,
+    }];
+  });
+}
+
+export async function listCopilotModels() {
+  const client = await getClient();
+  return normalizeCopilotModels(await client.listModels());
+}
+
 // ── Active session tracking ───────────────────────────────────────────────────
 // Map ourSessionId -> { copilotSession, abortController, startTime }
 const activeSessions = new Map();
-
-// Map ourSessionId -> copilotSessionId (for resume across reconnects)
-const sessionIdMap = new Map();
 
 function newRequestId() {
   return typeof crypto.randomUUID === 'function'
@@ -178,16 +192,13 @@ export async function queryCopilotSDK(command, options = {}, ws) {
 
     // ── Create or resume session ──────────────────────────────────────────────
     let session;
-    const existingCopilotId = sessionId ? sessionIdMap.get(sessionId) : null;
-
-    if (existingCopilotId) {
-      console.log(`[copilot-sdk] Resuming session ${existingCopilotId.slice(0, 8)}`);
-      try {
-        session = await client.resumeSession(existingCopilotId, { onPermissionRequest, streaming: true });
-      } catch (resumeErr) {
-        console.warn('[copilot-sdk] Resume failed, creating new session:', resumeErr.message);
-        session = await client.createSession({ model, onPermissionRequest, workingDirectory: cwd, streaming: true });
-      }
+    const existingSession = sessionId ? sessionsDb.getSessionById(sessionId) : null;
+    const providerSessionId = existingSession?.provider_session_id;
+    if (providerSessionId) {
+      console.log(
+        `[copilot-sdk] Resuming CloudCLI session ${sessionId.slice(0, 8)} via Copilot session ${providerSessionId.slice(0, 8)}`
+      );
+      session = await client.resumeSession(providerSessionId, { onPermissionRequest, streaming: true });
     } else {
       console.log('[copilot-sdk] Creating new session, model:', model);
       session = await client.createSession({ model, onPermissionRequest, workingDirectory: cwd, streaming: true });
@@ -195,10 +206,14 @@ export async function queryCopilotSDK(command, options = {}, ws) {
 
     // ── Map session IDs ───────────────────────────────────────────────────────
     const copilotSessionId = session.sessionId;
+    if (providerSessionId && copilotSessionId !== providerSessionId) {
+      throw new Error(
+        `Copilot session binding mismatch: requested ${providerSessionId}, received ${copilotSessionId}`
+      );
+    }
     if (!capturedSessionId) {
       capturedSessionId = copilotSessionId;
     }
-    sessionIdMap.set(capturedSessionId, copilotSessionId);
 
     // ── Init JSONL persistence ────────────────────────────────────────────────
     jsonlPath = getSessionJsonlPath(capturedSessionId, cwd);
@@ -207,7 +222,16 @@ export async function queryCopilotSDK(command, options = {}, ws) {
     // Register session + jsonl_path in DB so REST API can serve history
     try {
       console.log('[copilot-sdk] Registering session in DB:', capturedSessionId?.slice(0, 8), jsonlPath);
-      sessionsDb.createSession(capturedSessionId, 'copilot', cwd || process.cwd(), null, null, null, jsonlPath);
+      sessionsDb.createSession(
+        capturedSessionId,
+        'copilot',
+        cwd || process.cwd(),
+        null,
+        null,
+        null,
+        jsonlPath,
+        copilotSessionId
+      );
       console.log('[copilot-sdk] Session registered in DB');
     } catch (dbErr) {
       console.warn('[copilot-sdk] Failed to register session in DB:', dbErr.message);
