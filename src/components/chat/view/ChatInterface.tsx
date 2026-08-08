@@ -300,7 +300,7 @@ function ChatInterface({
     if (sessionId && startTime && sessionId === activeId) {
       setSessionStartTime(sessionId, startTime);
     }
-    onSessionProcessing?.(sessionId, provider);
+    onSessionProcessing?.(sessionId, provider, startTime);
   }, [onSessionProcessing, setSessionStartTime, selectedSession?.id, currentSessionId]);
 
   useChatRealtimeHandlers({

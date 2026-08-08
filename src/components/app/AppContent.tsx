@@ -28,6 +28,7 @@ export default function AppContent() {
     activeSessions,
     processingSessions,
     processingSessionsMap,
+    processingSessionStartTimes,
     markSessionAsActive,
     markSessionAsInactive,
     markSessionAsProcessing,
@@ -165,11 +166,12 @@ export default function AppContent() {
     if (!latestMessage || latestMessage.type !== 'active-sessions') return;
     const sessions = latestMessage.sessions as Record<string, string[]> | undefined;
     if (!sessions) return;
-    const entries: Array<{ sessionId: string; provider: string }> = [];
+    const startTimes = latestMessage.startTimes as Record<string, Record<string, number | null>> | undefined;
+    const entries: Array<{ sessionId: string; provider: string; startTime?: number | null }> = [];
     for (const [provider, ids] of Object.entries(sessions)) {
       if (!Array.isArray(ids)) continue;
       for (const sessionId of ids) {
-        if (sessionId) entries.push({ sessionId, provider });
+        if (sessionId) entries.push({ sessionId, provider, startTime: startTimes?.[provider]?.[sessionId] });
       }
     }
     if (entries.length > 0) batchMarkSessionsAsProcessing(entries);
@@ -181,7 +183,8 @@ export default function AppContent() {
 
     const interval = setInterval(() => {
       if (ws?.readyState !== WebSocket.OPEN) return;
-      const sessions = Array.from(processingSessionsMap.entries()).map(([sessionId, provider]) => ({ sessionId, provider }));
+      const sessions = Array.from(processingSessionsMap.entries())
+        .map(([sessionId, info]) => ({ sessionId, provider: info.provider }));
       sendMessage({ type: 'check-sessions-status', sessions });
     }, 5_000);
 
@@ -193,7 +196,7 @@ export default function AppContent() {
       {!isMobile ? (
         <>
           <div className="h-full flex-shrink-0" style={{ width: sidebarWidth }}>
-            <Sidebar {...sidebarSharedProps} onProjectSelect={handleProjectSelectWithScroll} processingSessions={processingSessions} scrollToProjectToken={scrollToProjectToken} scrollToProjectName={scrollToProjectName} />
+            <Sidebar {...sidebarSharedProps} onProjectSelect={handleProjectSelectWithScroll} processingSessions={processingSessions} processingSessionStartTimes={processingSessionStartTimes} scrollToProjectToken={scrollToProjectToken} scrollToProjectName={scrollToProjectName} />
           </div>
           <ResizeHandle onResize={handleSidebarResize} />
         </>
@@ -221,7 +224,7 @@ export default function AppContent() {
             onClick={(event) => event.stopPropagation()}
             onTouchStart={(event) => event.stopPropagation()}
           >
-            <Sidebar {...sidebarSharedProps} onProjectSelect={handleProjectSelectWithScroll} processingSessions={processingSessions} scrollToProjectToken={scrollToProjectToken} scrollToProjectName={scrollToProjectName} />
+            <Sidebar {...sidebarSharedProps} onProjectSelect={handleProjectSelectWithScroll} processingSessions={processingSessions} processingSessionStartTimes={processingSessionStartTimes} scrollToProjectToken={scrollToProjectToken} scrollToProjectName={scrollToProjectName} />
           </div>
         </div>
       )}

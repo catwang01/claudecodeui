@@ -2050,7 +2050,13 @@ function handleChatConnection(ws, request) {
                         ? [...ptySessionsMap.entries()].find(([, e]) => e.sessionId === sessionId)
                         : null;
                     console.log(`[SESSION-STATUS] check sessionId=${sessionId} provider=${prov} sdkActive=${isActive} ptyMatch=${ptyMatch ? ptyMatch[0] : 'none'}`);
-                    const startTime = isActive && prov === 'claude' ? getClaudeSDKSessionStartTime(sessionId) : null;
+                    const startTime = isActive
+                        ? prov === 'claude'
+                            ? getClaudeSDKSessionStartTime(sessionId)
+                            : prov === 'copilot'
+                                ? getCopilotSessionStartTime(sessionId)
+                                : null
+                        : null;
                     if (isActive && prov === 'claude' && startTime === null) {
                         console.warn(`[SESSION-STATUS] session ${sessionId} isActive=true but startTime=null — session entry may be missing startTime`);
                     }
@@ -2085,7 +2091,13 @@ function handleChatConnection(ws, request) {
                     sessionId,
                     provider,
                     isProcessing: isActive,
-                    startTime: isActive && provider === 'claude' ? getClaudeSDKSessionStartTime(sessionId) : null,
+                    startTime: isActive
+                        ? provider === 'claude'
+                            ? getClaudeSDKSessionStartTime(sessionId)
+                            : provider === 'copilot'
+                                ? getCopilotSessionStartTime(sessionId)
+                                : null
+                        : null,
                 });
             } else if (data.type === 'get-pending-permissions') {
                 // Return pending permission requests for a session
@@ -2107,9 +2119,20 @@ function handleChatConnection(ws, request) {
                     gemini: getActiveGeminiSessions(),
                     copilot: getActiveCopilotSessions(),
                 };
+                const startTimes = {
+                    claude: Object.fromEntries(activeSessions.claude.map((sessionId) => [
+                        sessionId,
+                        getClaudeSDKSessionStartTime(sessionId),
+                    ])),
+                    copilot: Object.fromEntries(activeSessions.copilot.map((sessionId) => [
+                        sessionId,
+                        getCopilotSessionStartTime(sessionId),
+                    ])),
+                };
                 writer.send({
                     type: 'active-sessions',
-                    sessions: activeSessions
+                    sessions: activeSessions,
+                    startTimes,
                 });
             } else if (data.type === 'mark_session_read') {
                 const { sessionId, provider, viewedAt } = data;

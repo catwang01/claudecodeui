@@ -37,6 +37,7 @@ function Sidebar({
   onCloseSettings,
   isMobile,
   processingSessions,
+  processingSessionStartTimes,
   scrollToProjectToken = 0,
   scrollToProjectName = null,
 }: SidebarProps) {
@@ -230,6 +231,7 @@ function Sidebar({
       void updateSessionSummary(projectName, sessionId, summary, provider);
     },
     processingSessions,
+    processingSessionStartTimes,
     readSessionIds,
     t,
   };

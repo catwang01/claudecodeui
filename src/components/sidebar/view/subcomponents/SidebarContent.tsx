@@ -9,7 +9,7 @@ import SidebarFooter from './SidebarFooter';
 import SidebarHeader from './SidebarHeader';
 import SidebarProjectList, { type SidebarProjectListProps } from './SidebarProjectList';
 import SidebarSessionItem from './SidebarSessionItem';
-import { getProjectColor } from '../../utils/utils';
+import { compareSessionActivity, getProjectColor, getSessionTime } from '../../utils/utils';
 import { cn } from '../../../../lib/utils';
 import { authenticatedFetch } from '../../../../utils/api';
 import { forkTreeStore } from '../../utils/forkTreeStore';
@@ -181,13 +181,11 @@ export default function SidebarContent({
         if (hiddenSet.has(`${session.id}:${provider}`)) return false;
         return true;
       })
-      .sort((a, b) => {
-        const getTime = (s: typeof a.session) => {
-          const date = s.lastActivity || s.createdAt || '';
-          return date ? new Date(date).getTime() : 0;
-        };
-        return getTime(b.session) - getTime(a.session);
-      });
+      .sort((a, b) => compareSessionActivity(
+        a.session,
+        b.session,
+        projectListProps.processingSessionStartTimes,
+      ));
   }, [searchMode, projectListProps, hiddenSet, hideAutoDoc]);
 
   const filteredProjectListProps = useMemo(() => {
@@ -237,7 +235,9 @@ export default function SidebarContent({
     const wrapped = filteredRecentSessions.map((entry, idx) => ({
       id: entry.session.id,
       forkParentId: entry.session.forkParentId as string | undefined,
-      lastActivity: entry.session.lastActivity as string | undefined,
+      lastActivity: projectListProps.processingSessionStartTimes?.has(entry.session.id)
+        ? projectListProps.currentTime.toISOString()
+        : getSessionTime(entry.session),
       createdAt: entry.session.createdAt as string | undefined,
       __idx: idx,
     }));
@@ -248,7 +248,13 @@ export default function SidebarContent({
       hasChildren: n.hasChildren,
       isCollapsed: n.isCollapsed,
     })) as Array<Entry & { depth: number; hasChildren: boolean; isCollapsed: boolean }>;
-  }, [filteredRecentSessions, forkTreeMode, collapsedForkIds]);
+  }, [
+    filteredRecentSessions,
+    forkTreeMode,
+    collapsedForkIds,
+    projectListProps.currentTime,
+    projectListProps.processingSessionStartTimes,
+  ]);
 
   const loadMore = useCallback(() => {
     setVisibleCount(prev => prev + RECENT_PAGE_SIZE);
@@ -340,6 +346,7 @@ export default function SidebarContent({
                 onToggleCollapse={() => toggleCollapseFork(session.id)}
                 currentTime={projectListProps.currentTime}
                 isProcessing={projectListProps.processingSessions?.has(session.id) ?? false}
+                processingStartTime={projectListProps.processingSessionStartTimes?.get(session.id)}
                 isRead={session.isRead || (projectListProps.readSessionIds?.has(session.id) ?? false)}
                 projectColorDot={color.dot}
                 projectDisplayName={project.displayName || project.name}

@@ -37,6 +37,7 @@ type DefaultProps = {
   onToggleCollapse?: () => void;
   isRead?: boolean;
   isProcessing?: boolean;
+  processingStartTime?: number;
   t: TFunction;
 };
 
@@ -63,6 +64,7 @@ type RecentsProps = {
   onProjectNavigate: (project: Project) => void;
   onRenameSession: (projectName: string, sessionId: string, summary: string, provider: SessionProvider) => void;
   isProcessing?: boolean;
+  processingStartTime?: number;
   t: TFunction;
 };
 
@@ -76,6 +78,7 @@ type SidebarSessionItemProps = DefaultProps | RecentsProps;
 function sessionItemPropsAreEqual(prev: SidebarSessionItemProps, next: SidebarSessionItemProps): boolean {
   if (prev.session !== next.session) return false;
   if (prev.isProcessing !== next.isProcessing) return false;
+  if (prev.processingStartTime !== next.processingStartTime) return false;
   if (prev.isRead !== next.isRead) return false;
   if (prev.variant !== next.variant) return false;
   if (prev.variant === 'recents' && next.variant === 'recents') {
@@ -96,8 +99,8 @@ function sessionItemPropsAreEqual(prev: SidebarSessionItemProps, next: SidebarSe
 }
 
 export default memo(function SidebarSessionItem(props: SidebarSessionItemProps) {
-  const { project, session, currentTime, isProcessing = false, t } = props;
-  const sessionView = createSessionViewModel(session, currentTime, t, isProcessing);
+  const { project, session, currentTime, isProcessing = false, processingStartTime, t } = props;
+  const sessionView = createSessionViewModel(session, currentTime, t, isProcessing, processingStartTime);
   const { awaitingPermissionSessions } = useAwaitingPermissions();
   const isAwaitingPermission = awaitingPermissionSessions.has(session.id);
 

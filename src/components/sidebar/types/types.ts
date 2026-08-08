@@ -39,6 +39,7 @@ export type SidebarProps = {
   onCloseSettings: () => void;
   isMobile: boolean;
   processingSessions?: Set<string>;
+  processingSessionStartTimes?: ReadonlyMap<string, number>;
   scrollToProjectToken?: number;
   scrollToProjectName?: string | null;
 };

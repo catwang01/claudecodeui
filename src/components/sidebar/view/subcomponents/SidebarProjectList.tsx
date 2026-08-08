@@ -75,6 +75,7 @@ export type SidebarProjectListProps = {
   onCancelEditingSession: () => void;
   onSaveEditingSession: (projectName: string, sessionId: string, summary: string, provider: SessionProvider) => void;
   processingSessions?: Set<string>;
+  processingSessionStartTimes?: ReadonlyMap<string, number>;
   readSessionIds?: Set<string>;
   t: TFunction;
 };

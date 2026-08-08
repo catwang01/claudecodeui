@@ -106,7 +106,14 @@ export const getSessionName = (session: SessionWithProvider, t: TFunction): stri
   return session.summary || t('projects.newSession');
 };
 
-export const getSessionTime = (session: SessionWithProvider): string => {
+export const getSessionTime = (
+  session: SessionWithProvider,
+  processingStartTime?: number,
+): string => {
+  if (typeof processingStartTime === 'number' && Number.isFinite(processingStartTime)) {
+    return new Date(processingStartTime).toISOString();
+  }
+
   if (session.__provider === 'cursor') {
     return String(session.createdAt || '');
   }
@@ -118,13 +125,37 @@ export const getSessionTime = (session: SessionWithProvider): string => {
   return String(session.lastActivity || session.createdAt || '');
 };
 
+export const getSessionTimestamp = (
+  session: SessionWithProvider,
+  processingStartTime?: number,
+): number => {
+  const timestamp = new Date(getSessionTime(session, processingStartTime)).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+};
+
+export const compareSessionActivity = (
+  a: SessionWithProvider,
+  b: SessionWithProvider,
+  processingStartTimes?: ReadonlyMap<string, number>,
+): number => {
+  const aStartTime = processingStartTimes?.get(a.id);
+  const bStartTime = processingStartTimes?.get(b.id);
+  const aIsProcessing = aStartTime !== undefined;
+  const bIsProcessing = bStartTime !== undefined;
+
+  if (aIsProcessing !== bIsProcessing) return aIsProcessing ? -1 : 1;
+  return getSessionTimestamp(b, bStartTime) - getSessionTimestamp(a, aStartTime);
+};
+
 export const createSessionViewModel = (
   session: SessionWithProvider,
   currentTime: Date,
   t: TFunction,
   isProcessing = false,
+  processingStartTime?: number,
 ): SessionViewModel => {
-  const sessionDate = getSessionDate(session);
+  const sessionTime = getSessionTime(session, processingStartTime);
+  const sessionDate = new Date(sessionTime);
   const diffInMinutes = Math.floor((currentTime.getTime() - sessionDate.getTime()) / (1000 * 60));
 
   return {
@@ -134,7 +165,7 @@ export const createSessionViewModel = (
     isActive: diffInMinutes < 10,
     isProcessing,
     sessionName: getSessionName(session, t),
-    sessionTime: getSessionTime(session),
+    sessionTime,
     messageCount: Number(session.messageCount || 0),
   };
 };
