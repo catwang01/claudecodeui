@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionWithProvider } from '../../types/types';
-import { compareSessionActivity, createSessionViewModel, getSessionTime } from '../utils';
+import { compareSessionActivity, createSessionViewModel, getSessionTime, hasSessionActivityAfter } from '../utils';
 
 const session = {
   id: 'session-1',
@@ -54,5 +54,23 @@ describe('processing session activity', () => {
 
     expect(viewModel.sessionTime).toBe('2025-02-01T12:00:00.000Z');
     expect(viewModel.isActive).toBe(true);
+  });
+
+  it('detects activity that happened after a session was hidden', () => {
+    expect(hasSessionActivityAfter(session, '2024-12-31T23:59:59.000Z')).toBe(true);
+  });
+
+  it('treats a new processing run as activity after a session was hidden', () => {
+    expect(
+      hasSessionActivityAfter(
+        session,
+        '2025-01-02T00:00:00.000Z',
+        Date.parse('2025-02-01T12:00:00.000Z'),
+      ),
+    ).toBe(true);
+  });
+
+  it('keeps a session hidden until it has newer activity', () => {
+    expect(hasSessionActivityAfter(session, '2025-01-01T00:00:00.000Z')).toBe(false);
   });
 });

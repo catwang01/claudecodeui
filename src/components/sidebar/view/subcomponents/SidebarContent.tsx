@@ -9,7 +9,7 @@ import SidebarFooter from './SidebarFooter';
 import SidebarHeader from './SidebarHeader';
 import SidebarProjectList, { type SidebarProjectListProps } from './SidebarProjectList';
 import SidebarSessionItem from './SidebarSessionItem';
-import { compareSessionActivity, getProjectColor, getSessionTime } from '../../utils/utils';
+import { compareSessionActivity, getProjectColor, getSessionTime, hasSessionActivityAfter } from '../../utils/utils';
 import { cn } from '../../../../lib/utils';
 import { authenticatedFetch } from '../../../../utils/api';
 import { forkTreeStore } from '../../utils/forkTreeStore';
@@ -113,7 +113,7 @@ export default function SidebarContent({
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const [scrollTargetProject, setScrollTargetProject] = useState<string | null>(null);
 
-  const [hiddenSet, setHiddenSet] = useState<Set<string>>(new Set());
+  const [hiddenSessions, setHiddenSessions] = useState<Map<string, string>>(new Map());
   const [hideAutoDoc, setHideAutoDoc] = useState(true);
   // Fork-tree state — the toggle now lives in the SidebarHeader (cross-tab),
   // but Recents still reads mode + collapsed set to render its tree.
@@ -154,14 +154,18 @@ export default function SidebarContent({
 
   const hideSession = useCallback(async (sessionId: string, provider: string, lastActivity: string) => {
     const key = `${sessionId}:${provider}`;
-    setHiddenSet(prev => new Set([...prev, key]));
+    setHiddenSessions(prev => new Map(prev).set(key, lastActivity));
     try {
       await authenticatedFetch(`/api/sessions/${sessionId}/hide`, {
         method: 'POST',
         body: JSON.stringify({ provider, lastActivity }),
       });
     } catch {
-      setHiddenSet(prev => { const next = new Set(prev); next.delete(key); return next; });
+      setHiddenSessions(prev => {
+        const next = new Map(prev);
+        next.delete(key);
+        return next;
+      });
     }
   }, []);
 
@@ -176,9 +180,17 @@ export default function SidebarContent({
     return all
       .filter(({ session }) => {
         if (hideAutoDoc && session.isAutoDoc) return false;
-        if (session.hiddenFromRecents) return false;
         const provider = session.__provider || 'claude';
-        if (hiddenSet.has(`${session.id}:${provider}`)) return false;
+        const hiddenAt = hiddenSessions.get(`${session.id}:${provider}`);
+        const hasNewActivity = hiddenAt
+          ? hasSessionActivityAfter(
+              session,
+              hiddenAt,
+              projectListProps.processingSessionStartTimes?.get(session.id),
+            )
+          : false;
+        if (session.hiddenFromRecents && !hasNewActivity) return false;
+        if (hiddenAt && !hasNewActivity) return false;
         return true;
       })
       .sort((a, b) => compareSessionActivity(
@@ -186,7 +198,7 @@ export default function SidebarContent({
         b.session,
         projectListProps.processingSessionStartTimes,
       ));
-  }, [searchMode, projectListProps, hiddenSet, hideAutoDoc]);
+  }, [searchMode, projectListProps, hiddenSessions, hideAutoDoc]);
 
   const filteredProjectListProps = useMemo(() => {
     if (!hideAutoDoc) return projectListProps;

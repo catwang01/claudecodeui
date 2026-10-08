@@ -133,6 +133,15 @@ export const getSessionTimestamp = (
   return Number.isFinite(timestamp) ? timestamp : 0;
 };
 
+export const hasSessionActivityAfter = (
+  session: SessionWithProvider,
+  activityTime: string,
+  processingStartTime?: number,
+): boolean => {
+  const hiddenAt = new Date(activityTime).getTime();
+  return Number.isFinite(hiddenAt) && getSessionTimestamp(session, processingStartTime) > hiddenAt;
+};
+
 export const compareSessionActivity = (
   a: SessionWithProvider,
   b: SessionWithProvider,
