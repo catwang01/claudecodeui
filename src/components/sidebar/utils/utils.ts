@@ -15,7 +15,9 @@ export const readProjectSortOrder = (): ProjectSortOrder => {
       return 'name';
     }
 
-    const settings = JSON.parse(rawSettings) as { projectSortOrder?: ProjectSortOrder };
+    const settings = JSON.parse(rawSettings) as {
+      projectSortOrder?: ProjectSortOrder;
+    };
     return settings.projectSortOrder === 'date' ? 'date' : 'name';
   } catch {
     return 'name';
@@ -29,7 +31,9 @@ export const readProjectExcludePatterns = (): string[] => {
       return [];
     }
 
-    const settings = JSON.parse(rawSettings) as { projectExcludePatterns?: string[] };
+    const settings = JSON.parse(rawSettings) as {
+      projectExcludePatterns?: string[];
+    };
     return Array.isArray(settings.projectExcludePatterns) ? settings.projectExcludePatterns : [];
   } catch {
     return [];
@@ -106,10 +110,7 @@ export const getSessionName = (session: SessionWithProvider, t: TFunction): stri
   return session.summary || t('projects.newSession');
 };
 
-export const getSessionTime = (
-  session: SessionWithProvider,
-  processingStartTime?: number,
-): string => {
+export const getSessionTime = (session: SessionWithProvider, processingStartTime?: number): string => {
   if (typeof processingStartTime === 'number' && Number.isFinite(processingStartTime)) {
     return new Date(processingStartTime).toISOString();
   }
@@ -125,10 +126,7 @@ export const getSessionTime = (
   return String(session.lastActivity || session.createdAt || '');
 };
 
-export const getSessionTimestamp = (
-  session: SessionWithProvider,
-  processingStartTime?: number,
-): number => {
+export const getSessionTimestamp = (session: SessionWithProvider, processingStartTime?: number): number => {
   const timestamp = new Date(getSessionTime(session, processingStartTime)).getTime();
   return Number.isFinite(timestamp) ? timestamp : 0;
 };
@@ -183,10 +181,10 @@ export const getAllSessions = (
   project: Project,
   additionalSessions: AdditionalSessionsByProject,
 ): SessionWithProvider[] => {
-  const claudeSessions = [
-    ...(project.sessions || []),
-    ...(additionalSessions[project.name] || []),
-  ].map((session) => ({ ...session, __provider: 'claude' as const }));
+  const claudeSessions = [...(project.sessions || []), ...(additionalSessions[project.name] || [])].map((session) => ({
+    ...session,
+    __provider: 'claude' as const,
+  }));
 
   const cursorSessions = (project.cursorSessions || []).map((session) => ({
     ...session,
@@ -213,10 +211,7 @@ export const getAllSessions = (
   );
 };
 
-export const getProjectLastActivity = (
-  project: Project,
-  additionalSessions: AdditionalSessionsByProject,
-): Date => {
+export const getProjectLastActivity = (project: Project, additionalSessions: AdditionalSessionsByProject): Date => {
   const sessions = getAllSessions(project, additionalSessions);
   if (sessions.length === 0) {
     return new Date(0);
@@ -261,7 +256,11 @@ export const sortProjects = (
   return byName;
 };
 
-export const filterProjects = (projects: Project[], searchFilter: string, excludePatterns: string[] = []): Project[] => {
+export const filterProjects = (
+  projects: Project[],
+  searchFilter: string,
+  excludePatterns: string[] = [],
+): Project[] => {
   const normalizedSearch = searchFilter.trim().toLowerCase();
 
   // Apply exclude patterns first
@@ -340,10 +339,7 @@ export const normalizeProjectForSettings = (project: Project): SettingsProject =
         ? project.displayName
         : project.name,
     fullPath: fallbackPath,
-    path:
-      typeof project.path === 'string' && project.path.length > 0
-        ? project.path
-        : fallbackPath,
+    path: typeof project.path === 'string' && project.path.length > 0 ? project.path : fallbackPath,
   };
 };
 
@@ -355,16 +351,66 @@ export type ProjectColor = {
 };
 
 const PROJECT_COLOR_PALETTE: ProjectColor[] = [
-  { dot: '#f43f5e', bg: 'rgba(244,63,94,0.07)',   border: 'rgba(244,63,94,0.25)',   text: '#fb7185' },  // rose
-  { dot: '#f97316', bg: 'rgba(249,115,22,0.07)',  border: 'rgba(249,115,22,0.25)',  text: '#fb923c' },  // orange
-  { dot: '#eab308', bg: 'rgba(234,179,8,0.07)',   border: 'rgba(234,179,8,0.25)',   text: '#fbbf24' },  // yellow
-  { dot: '#84cc16', bg: 'rgba(132,204,22,0.07)',  border: 'rgba(132,204,22,0.25)',  text: '#a3e635' },  // lime
-  { dot: '#10b981', bg: 'rgba(16,185,129,0.07)',  border: 'rgba(16,185,129,0.25)',  text: '#34d399' },  // emerald
-  { dot: '#06b6d4', bg: 'rgba(6,182,212,0.07)',   border: 'rgba(6,182,212,0.25)',   text: '#22d3ee' },  // cyan
-  { dot: '#3b82f6', bg: 'rgba(59,130,246,0.07)',  border: 'rgba(59,130,246,0.25)',  text: '#60a5fa' },  // blue
-  { dot: '#8b5cf6', bg: 'rgba(139,92,246,0.07)',  border: 'rgba(139,92,246,0.25)',  text: '#a78bfa' },  // violet
-  { dot: '#d946ef', bg: 'rgba(217,70,239,0.07)',  border: 'rgba(217,70,239,0.25)',  text: '#e879f9' },  // fuchsia
-  { dot: '#ec4899', bg: 'rgba(236,72,153,0.07)',  border: 'rgba(236,72,153,0.25)',  text: '#f472b6' },  // pink
+  {
+    dot: '#f43f5e',
+    bg: 'rgba(244,63,94,0.07)',
+    border: 'rgba(244,63,94,0.25)',
+    text: '#fb7185',
+  }, // rose
+  {
+    dot: '#f97316',
+    bg: 'rgba(249,115,22,0.07)',
+    border: 'rgba(249,115,22,0.25)',
+    text: '#fb923c',
+  }, // orange
+  {
+    dot: '#eab308',
+    bg: 'rgba(234,179,8,0.07)',
+    border: 'rgba(234,179,8,0.25)',
+    text: '#fbbf24',
+  }, // yellow
+  {
+    dot: '#84cc16',
+    bg: 'rgba(132,204,22,0.07)',
+    border: 'rgba(132,204,22,0.25)',
+    text: '#a3e635',
+  }, // lime
+  {
+    dot: '#10b981',
+    bg: 'rgba(16,185,129,0.07)',
+    border: 'rgba(16,185,129,0.25)',
+    text: '#34d399',
+  }, // emerald
+  {
+    dot: '#06b6d4',
+    bg: 'rgba(6,182,212,0.07)',
+    border: 'rgba(6,182,212,0.25)',
+    text: '#22d3ee',
+  }, // cyan
+  {
+    dot: '#3b82f6',
+    bg: 'rgba(59,130,246,0.07)',
+    border: 'rgba(59,130,246,0.25)',
+    text: '#60a5fa',
+  }, // blue
+  {
+    dot: '#8b5cf6',
+    bg: 'rgba(139,92,246,0.07)',
+    border: 'rgba(139,92,246,0.25)',
+    text: '#a78bfa',
+  }, // violet
+  {
+    dot: '#d946ef',
+    bg: 'rgba(217,70,239,0.07)',
+    border: 'rgba(217,70,239,0.25)',
+    text: '#e879f9',
+  }, // fuchsia
+  {
+    dot: '#ec4899',
+    bg: 'rgba(236,72,153,0.07)',
+    border: 'rgba(236,72,153,0.25)',
+    text: '#f472b6',
+  }, // pink
 ];
 
 export function getProjectColor(projectName: string): ProjectColor {

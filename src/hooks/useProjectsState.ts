@@ -9,6 +9,7 @@ import type {
   Project,
   ProjectSession,
   ProjectsUpdatedMessage,
+  SessionProvider,
 } from '../types/app';
 
 type UseProjectsStateArgs = {
@@ -25,7 +26,7 @@ type FetchProjectsOptions = {
 
 const serialize = (value: unknown) => JSON.stringify(value ?? null);
 
-const projectsHaveChanges = (
+export const projectsHaveChanges = (
   prevProjects: Project[],
   nextProjects: Project[],
   includeExternalSessions: boolean,
@@ -59,9 +60,26 @@ const projectsHaveChanges = (
     return (
       serialize(nextProject.cursorSessions) !== serialize(prevProject.cursorSessions) ||
       serialize(nextProject.codexSessions) !== serialize(prevProject.codexSessions) ||
-      serialize(nextProject.geminiSessions) !== serialize(prevProject.geminiSessions)
+      serialize(nextProject.geminiSessions) !== serialize(prevProject.geminiSessions) ||
+      serialize(nextProject.copilotSessions) !== serialize(prevProject.copilotSessions)
     );
   });
+};
+
+export const mergeSelectedSessionMetadata = (
+  selectedSession: ProjectSession | null,
+  latestSession: ProjectSession,
+  provider: SessionProvider,
+): ProjectSession => {
+  const merged = {
+    ...(selectedSession?.id === latestSession.id ? selectedSession : null),
+    ...latestSession,
+    __provider: provider,
+  };
+
+  return selectedSession && serialize(merged) === serialize(selectedSession)
+    ? selectedSession
+    : merged;
 };
 
 const getProjectSessions = (project: Project): ProjectSession[] => {
@@ -313,6 +331,10 @@ export function useProjectsState({
           nextProject.displayName === prevProject.displayName &&
           nextProject.fullPath === prevProject.fullPath &&
           sessionsUnchanged &&
+          serialize(nextProject.cursorSessions) === serialize(prevProject.cursorSessions) &&
+          serialize(nextProject.codexSessions) === serialize(prevProject.codexSessions) &&
+          serialize(nextProject.geminiSessions) === serialize(prevProject.geminiSessions) &&
+          serialize(nextProject.copilotSessions) === serialize(prevProject.copilotSessions) &&
           serialize(nextProject.sessionMeta) === serialize(prevProject.sessionMeta);
         if (unchanged) return prevProject;
         // Project changed — but preserve stable refs for individual sessions that didn't change.
@@ -388,14 +410,13 @@ export function useProjectsState({
       const claudeSession = project.sessions?.find((session) => session.id === sessionId);
       if (claudeSession) {
         const shouldUpdateProject = selectedProject?.name !== project.name;
-        const shouldUpdateSession =
-          selectedSession?.id !== sessionId || selectedSession.__provider !== 'claude';
+        const nextSelectedSession = mergeSelectedSessionMetadata(selectedSession, claudeSession, 'claude');
 
         if (shouldUpdateProject) {
           setSelectedProject(project);
         }
-        if (shouldUpdateSession) {
-          setSelectedSession({ ...claudeSession, __provider: 'claude' });
+        if (nextSelectedSession !== selectedSession) {
+          setSelectedSession(nextSelectedSession);
         }
         return;
       }
@@ -403,14 +424,13 @@ export function useProjectsState({
       const cursorSession = project.cursorSessions?.find((session) => session.id === sessionId);
       if (cursorSession) {
         const shouldUpdateProject = selectedProject?.name !== project.name;
-        const shouldUpdateSession =
-          selectedSession?.id !== sessionId || selectedSession.__provider !== 'cursor';
+        const nextSelectedSession = mergeSelectedSessionMetadata(selectedSession, cursorSession, 'cursor');
 
         if (shouldUpdateProject) {
           setSelectedProject(project);
         }
-        if (shouldUpdateSession) {
-          setSelectedSession({ ...cursorSession, __provider: 'cursor' });
+        if (nextSelectedSession !== selectedSession) {
+          setSelectedSession(nextSelectedSession);
         }
         return;
       }
@@ -418,14 +438,13 @@ export function useProjectsState({
       const codexSession = project.codexSessions?.find((session) => session.id === sessionId);
       if (codexSession) {
         const shouldUpdateProject = selectedProject?.name !== project.name;
-        const shouldUpdateSession =
-          selectedSession?.id !== sessionId || selectedSession.__provider !== 'codex';
+        const nextSelectedSession = mergeSelectedSessionMetadata(selectedSession, codexSession, 'codex');
 
         if (shouldUpdateProject) {
           setSelectedProject(project);
         }
-        if (shouldUpdateSession) {
-          setSelectedSession({ ...codexSession, __provider: 'codex' });
+        if (nextSelectedSession !== selectedSession) {
+          setSelectedSession(nextSelectedSession);
         }
         return;
       }
@@ -433,14 +452,13 @@ export function useProjectsState({
       const geminiSession = project.geminiSessions?.find((session) => session.id === sessionId);
       if (geminiSession) {
         const shouldUpdateProject = selectedProject?.name !== project.name;
-        const shouldUpdateSession =
-          selectedSession?.id !== sessionId || selectedSession.__provider !== 'gemini';
+        const nextSelectedSession = mergeSelectedSessionMetadata(selectedSession, geminiSession, 'gemini');
 
         if (shouldUpdateProject) {
           setSelectedProject(project);
         }
-        if (shouldUpdateSession) {
-          setSelectedSession({ ...geminiSession, __provider: 'gemini' });
+        if (nextSelectedSession !== selectedSession) {
+          setSelectedSession(nextSelectedSession);
         }
         return;
       }
@@ -448,14 +466,13 @@ export function useProjectsState({
       const copilotSession = project.copilotSessions?.find((session) => session.id === sessionId);
       if (copilotSession) {
         const shouldUpdateProject = selectedProject?.name !== project.name;
-        const shouldUpdateSession =
-          selectedSession?.id !== sessionId || selectedSession.__provider !== 'copilot';
+        const nextSelectedSession = mergeSelectedSessionMetadata(selectedSession, copilotSession, 'copilot');
 
         if (shouldUpdateProject) {
           setSelectedProject(project);
         }
-        if (shouldUpdateSession) {
-          setSelectedSession({ ...copilotSession, __provider: 'copilot' });
+        if (nextSelectedSession !== selectedSession) {
+          setSelectedSession(nextSelectedSession);
         }
         return;
       }

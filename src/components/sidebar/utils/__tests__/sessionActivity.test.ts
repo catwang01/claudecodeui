@@ -44,13 +44,7 @@ describe('processing session activity', () => {
   it('exposes processing activity to the sidebar view model', () => {
     const startTime = Date.parse('2025-02-01T12:00:00.000Z');
     const t = ((key: string) => key) as never;
-    const viewModel = createSessionViewModel(
-      session,
-      new Date('2025-02-01T12:00:30.000Z'),
-      t,
-      true,
-      startTime,
-    );
+    const viewModel = createSessionViewModel(session, new Date('2025-02-01T12:00:30.000Z'), t, true, startTime);
 
     expect(viewModel.sessionTime).toBe('2025-02-01T12:00:00.000Z');
     expect(viewModel.isActive).toBe(true);
@@ -61,13 +55,9 @@ describe('processing session activity', () => {
   });
 
   it('treats a new processing run as activity after a session was hidden', () => {
-    expect(
-      hasSessionActivityAfter(
-        session,
-        '2025-01-02T00:00:00.000Z',
-        Date.parse('2025-02-01T12:00:00.000Z'),
-      ),
-    ).toBe(true);
+    expect(hasSessionActivityAfter(session, '2025-01-02T00:00:00.000Z', Date.parse('2025-02-01T12:00:00.000Z'))).toBe(
+      true,
+    );
   });
 
   it('keeps a session hidden until it has newer activity', () => {

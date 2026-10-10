@@ -16,6 +16,8 @@ export interface ProjectSession {
   isAutoDoc?: boolean;
   isRead?: boolean;
   lastAutoDocAt?: string;
+  forkParentId?: string;
+  projectPath?: string;
   __provider?: SessionProvider;
   __projectName?: string;
   __searchTargetTimestamp?: string | null;

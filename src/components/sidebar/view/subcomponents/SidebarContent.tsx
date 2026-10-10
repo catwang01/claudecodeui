@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect, useRef, useCallback, useSyncExternalStore
 import { Clock, Folder, MessageSquare, Search } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { ScrollArea } from '../../../../shared/view/ui';
-import type { Project } from '../../../../types/app';
+import type { Project, ProjectSession } from '../../../../types/app';
 import type { ReleaseInfo } from '../../../../types/sharedTypes';
 import type { ConversationSearchResults, SearchProgress } from '../../hooks/useSidebarController';
 import SidebarFooter from './SidebarFooter';
@@ -11,13 +11,19 @@ import SidebarProjectList, { type SidebarProjectListProps } from './SidebarProje
 import SidebarSessionItem from './SidebarSessionItem';
 import { compareSessionActivity, getProjectColor, getSessionTime, hasSessionActivityAfter } from '../../utils/utils';
 import { cn } from '../../../../lib/utils';
-import { authenticatedFetch } from '../../../../utils/api';
+import { api, authenticatedFetch } from '../../../../utils/api';
 import { forkTreeStore } from '../../utils/forkTreeStore';
 import { buildForkTree } from '../../utils/forkTree';
 
 type SearchMode = 'projects' | 'conversations' | 'recent';
 
-function HighlightedSnippet({ snippet, highlights }: { snippet: string; highlights: { start: number; end: number }[] }) {
+function HighlightedSnippet({
+  snippet,
+  highlights,
+}: {
+  snippet: string;
+  highlights: { start: number; end: number }[];
+}) {
   const parts: ReactNode[] = [];
   let cursor = 0;
   for (const h of highlights) {
@@ -27,18 +33,14 @@ function HighlightedSnippet({ snippet, highlights }: { snippet: string; highligh
     parts.push(
       <mark key={h.start} className="rounded-sm bg-yellow-200 px-0.5 text-foreground dark:bg-yellow-800">
         {snippet.slice(h.start, h.end)}
-      </mark>
+      </mark>,
     );
     cursor = h.end;
   }
   if (cursor < snippet.length) {
     parts.push(snippet.slice(cursor));
   }
-  return (
-    <span className="text-xs leading-relaxed text-muted-foreground">
-      {parts}
-    </span>
-  );
+  return <span className="text-xs leading-relaxed text-muted-foreground">{parts}</span>;
 }
 
 type SidebarContentProps = {
@@ -54,7 +56,13 @@ type SidebarContentProps = {
   conversationResults: ConversationSearchResults | null;
   isSearching: boolean;
   searchProgress: SearchProgress | null;
-  onConversationResultClick: (projectName: string, sessionId: string, provider: string, messageTimestamp?: string | null, messageSnippet?: string | null) => void;
+  onConversationResultClick: (
+    projectName: string,
+    sessionId: string,
+    provider: string,
+    messageTimestamp?: string | null,
+    messageSnippet?: string | null,
+  ) => void;
   onRefresh: () => void;
   isRefreshing: boolean;
   onCreateProject: () => void;
@@ -104,11 +112,18 @@ export default function SidebarContent({
   cleanMode = false,
   t,
 }: SidebarContentProps) {
-  const showConversationSearch = (searchMode === 'conversations' || searchMode === 'recent') && searchFilter.trim().length >= 2;
+  const showConversationSearch =
+    (searchMode === 'conversations' || searchMode === 'recent') && searchFilter.trim().length >= 2;
   const hasPartialResults = conversationResults && conversationResults.results.length > 0;
 
   const RECENT_PAGE_SIZE = 10;
+  const RECENT_FETCH_SIZE = 50;
   const [visibleCount, setVisibleCount] = useState(RECENT_PAGE_SIZE);
+  const [globalRecentSessions, setGlobalRecentSessions] = useState<ProjectSession[]>([]);
+  const [globalRecentOffset, setGlobalRecentOffset] = useState(0);
+  const [globalRecentHasMore, setGlobalRecentHasMore] = useState(false);
+  const [isLoadingGlobalRecents, setIsLoadingGlobalRecents] = useState(false);
+  const isLoadingGlobalRecentsRef = useRef(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const [scrollTargetProject, setScrollTargetProject] = useState<string | null>(null);
@@ -117,29 +132,31 @@ export default function SidebarContent({
   const [hideAutoDoc, setHideAutoDoc] = useState(true);
   // Fork-tree state — the toggle now lives in the SidebarHeader (cross-tab),
   // but Recents still reads mode + collapsed set to render its tree.
-  const forkTreeMode = useSyncExternalStore(
-    forkTreeStore.subscribe,
-    forkTreeStore.getMode,
-    forkTreeStore.getMode,
-  );
+  const forkTreeMode = useSyncExternalStore(forkTreeStore.subscribe, forkTreeStore.getMode, forkTreeStore.getMode);
   const collapsedForkIds = useSyncExternalStore(
     forkTreeStore.subscribe,
     forkTreeStore.getCollapsed,
     forkTreeStore.getCollapsed,
   );
-  const toggleCollapseFork = useCallback((sessionId: string) => { forkTreeStore.toggleCollapse(sessionId); }, []);
+  const toggleCollapseFork = useCallback((sessionId: string) => {
+    forkTreeStore.toggleCollapse(sessionId);
+  }, []);
 
   useEffect(() => {
     authenticatedFetch('/api/settings/auto-doc')
-      .then(res => res.json())
-      .then(data => setHideAutoDoc(!!data.hideAutoDoc))
-      .catch(() => {/* keep default false */});
+      .then((res) => res.json())
+      .then((data) => setHideAutoDoc(!!data.hideAutoDoc))
+      .catch(() => {
+        /* keep default false */
+      });
   }, []);
 
   useEffect(() => {
     if (searchMode === 'projects' && scrollTargetProject) {
       requestAnimationFrame(() => {
-        const el = scrollAreaRef.current?.querySelector<HTMLElement>(`[data-project-name="${CSS.escape(scrollTargetProject)}"]`);
+        const el = scrollAreaRef.current?.querySelector<HTMLElement>(
+          `[data-project-name="${CSS.escape(scrollTargetProject)}"]`,
+        );
         el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         setScrollTargetProject(null);
       });
@@ -154,14 +171,14 @@ export default function SidebarContent({
 
   const hideSession = useCallback(async (sessionId: string, provider: string, lastActivity: string) => {
     const key = `${sessionId}:${provider}`;
-    setHiddenSessions(prev => new Map(prev).set(key, lastActivity));
+    setHiddenSessions((prev) => new Map(prev).set(key, lastActivity));
     try {
       await authenticatedFetch(`/api/sessions/${sessionId}/hide`, {
         method: 'POST',
         body: JSON.stringify({ provider, lastActivity }),
       });
     } catch {
-      setHiddenSessions(prev => {
+      setHiddenSessions((prev) => {
         const next = new Map(prev);
         next.delete(key);
         return next;
@@ -169,12 +186,73 @@ export default function SidebarContent({
     }
   }, []);
 
+  const loadGlobalRecents = useCallback(async (offset: number, replace: boolean) => {
+    if (isLoadingGlobalRecentsRef.current) return;
+    isLoadingGlobalRecentsRef.current = true;
+    setIsLoadingGlobalRecents(true);
+    try {
+      const response = await api.recentSessions(RECENT_FETCH_SIZE, offset);
+      if (!response.ok) {
+        throw new Error(`Failed to load recent sessions: ${response.status}`);
+      }
+      const result = (await response.json()) as {
+        sessions?: ProjectSession[];
+        hasMore?: boolean;
+        offset?: number;
+        limit?: number;
+      };
+      setGlobalRecentSessions((prev) => (replace ? result.sessions || [] : [...prev, ...(result.sessions || [])]));
+      setGlobalRecentOffset((result.offset ?? offset) + (result.limit ?? RECENT_FETCH_SIZE));
+      setGlobalRecentHasMore(result.hasMore === true);
+    } catch (error) {
+      console.error('[Sidebar] Failed to load global recent sessions:', error);
+    } finally {
+      isLoadingGlobalRecentsRef.current = false;
+      setIsLoadingGlobalRecents(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (searchMode !== 'recent') return;
+    setVisibleCount(RECENT_PAGE_SIZE);
+    void loadGlobalRecents(0, true);
+  }, [loadGlobalRecents, searchMode]);
+
   const recentSessions = useMemo(() => {
     if (searchMode !== 'recent') return [];
-    const all: Array<{ session: ReturnType<typeof projectListProps.getProjectSessions>[number]; project: Project }> = [];
+    const all: Array<{
+      session: ReturnType<typeof projectListProps.getProjectSessions>[number];
+      project: Project;
+    }> = [];
+    const includedKeys = new Set<string>();
+    const projectsByPath = new Map(
+      projectListProps.filteredProjects.map((project) => [
+        (project.fullPath || project.path || '').toLocaleLowerCase(),
+        project,
+      ]),
+    );
+    for (const session of globalRecentSessions) {
+      const project = projectsByPath.get((session.projectPath || '').toLocaleLowerCase());
+      if (project && session.__provider) {
+        all.push({
+          session: { ...session, __provider: session.__provider },
+          project,
+        });
+        includedKeys.add(`${session.id}:${session.__provider}`);
+      }
+    }
     for (const project of projectListProps.filteredProjects) {
       for (const session of projectListProps.getProjectSessions(project)) {
-        all.push({ session, project });
+        const key = `${session.id}:${session.__provider}`;
+        const hiddenAt = hiddenSessions.get(key);
+        if (
+          hiddenAt &&
+          !includedKeys.has(key) &&
+          hasSessionActivityAfter(session, hiddenAt, projectListProps.processingSessionStartTimes?.get(session.id))
+        ) {
+          all.push({ session, project });
+          includedKeys.add(key);
+        }
       }
     }
     return all
@@ -183,29 +261,21 @@ export default function SidebarContent({
         const provider = session.__provider || 'claude';
         const hiddenAt = hiddenSessions.get(`${session.id}:${provider}`);
         const hasNewActivity = hiddenAt
-          ? hasSessionActivityAfter(
-              session,
-              hiddenAt,
-              projectListProps.processingSessionStartTimes?.get(session.id),
-            )
+          ? hasSessionActivityAfter(session, hiddenAt, projectListProps.processingSessionStartTimes?.get(session.id))
           : false;
         if (session.hiddenFromRecents && !hasNewActivity) return false;
         if (hiddenAt && !hasNewActivity) return false;
         return true;
       })
-      .sort((a, b) => compareSessionActivity(
-        a.session,
-        b.session,
-        projectListProps.processingSessionStartTimes,
-      ));
-  }, [searchMode, projectListProps, hiddenSessions, hideAutoDoc]);
+      .sort((a, b) => compareSessionActivity(a.session, b.session, projectListProps.processingSessionStartTimes));
+  }, [searchMode, projectListProps, globalRecentSessions, hiddenSessions, hideAutoDoc]);
 
   const filteredProjectListProps = useMemo(() => {
     if (!hideAutoDoc) return projectListProps;
     return {
       ...projectListProps,
       getProjectSessions: (project: Parameters<typeof projectListProps.getProjectSessions>[0]) =>
-        projectListProps.getProjectSessions(project).filter(s => !s.isAutoDoc),
+        projectListProps.getProjectSessions(project).filter((s) => !s.isAutoDoc),
     };
   }, [projectListProps, hideAutoDoc]);
 
@@ -225,7 +295,7 @@ export default function SidebarContent({
   }, [recentSessions, recentsTagLimit]);
 
   useEffect(() => {
-    if (selectedProjectFilter && !projectBadges.some(b => b.project.name === selectedProjectFilter)) {
+    if (selectedProjectFilter && !projectBadges.some((b) => b.project.name === selectedProjectFilter)) {
       setSelectedProjectFilter(null);
     }
   }, [projectBadges, selectedProjectFilter]);
@@ -253,7 +323,10 @@ export default function SidebarContent({
       createdAt: entry.session.createdAt as string | undefined,
       __idx: idx,
     }));
-    const nodes = buildForkTree(wrapped, { collapsedIds: collapsedForkIds, enabled: forkTreeMode });
+    const nodes = buildForkTree(wrapped, {
+      collapsedIds: collapsedForkIds,
+      enabled: forkTreeMode,
+    });
     return nodes.map((n) => ({
       ...filteredRecentSessions[n.session.__idx],
       depth: n.depth,
@@ -269,25 +342,35 @@ export default function SidebarContent({
   ]);
 
   const loadMore = useCallback(() => {
-    setVisibleCount(prev => prev + RECENT_PAGE_SIZE);
-  }, []);
+    if (visibleCount < recentTree.length) {
+      setVisibleCount((prev) => prev + RECENT_PAGE_SIZE);
+    } else if (globalRecentHasMore && !isLoadingGlobalRecents) {
+      void loadGlobalRecents(globalRecentOffset, false);
+    }
+  }, [
+    globalRecentHasMore,
+    globalRecentOffset,
+    isLoadingGlobalRecents,
+    loadGlobalRecents,
+    recentTree.length,
+    visibleCount,
+  ]);
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
     if (!sentinel) return;
     const observer = new IntersectionObserver(
-      entries => { if (entries[0].isIntersecting) loadMore(); },
-      { threshold: 0.1 }
+      (entries) => {
+        if (entries[0].isIntersecting) loadMore();
+      },
+      { threshold: 0.1 },
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
   }, [loadMore, filteredRecentSessions.length, visibleCount]);
 
   return (
-    <div
-      className="flex h-full w-full flex-col bg-background/80 backdrop-blur-sm md:select-none"
-      style={{}}
-    >
+    <div className="flex h-full w-full flex-col bg-background/80 backdrop-blur-sm md:select-none" style={{}}>
       <SidebarHeader
         isPWA={isPWA}
         isMobile={isMobile}
@@ -320,9 +403,7 @@ export default function SidebarContent({
                       key={project.name}
                       type="button"
                       aria-pressed={isSelected}
-                      onClick={() =>
-                        setSelectedProjectFilter(isSelected ? null : project.name)
-                      }
+                      onClick={() => setSelectedProjectFilter(isSelected ? null : project.name)}
                       className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium transition-all"
                       style={{
                         background: isSelected ? color.dot : color.bg,
@@ -344,40 +425,48 @@ export default function SidebarContent({
                   {selectedProjectFilter ? 'No recent sessions for this project' : 'No recent sessions'}
                 </p>
               </div>
-            ) : recentTree.slice(0, visibleCount).map(({ session, project, depth, hasChildren, isCollapsed }) => {
-              const color = getProjectColor(project.name);
-              return (
-              <SidebarSessionItem
-                key={`${project.name}-${session.id}`}
-                variant="recents"
-                project={project}
-                session={session}
-                depth={depth}
-                hasChildren={hasChildren}
-                isCollapsed={isCollapsed}
-                onToggleCollapse={() => toggleCollapseFork(session.id)}
-                currentTime={projectListProps.currentTime}
-                isProcessing={projectListProps.processingSessions?.has(session.id) ?? false}
-                processingStartTime={projectListProps.processingSessionStartTimes?.get(session.id)}
-                isRead={session.isRead || (projectListProps.readSessionIds?.has(session.id) ?? false)}
-                projectColorDot={color.dot}
-                projectDisplayName={project.displayName || project.name}
-                onSessionSelect={projectListProps.onSessionSelect}
-                onHideSession={() => hideSession(session.id, session.__provider || 'claude', session.lastActivity || session.createdAt || '')}
-                onDeleteSession={projectListProps.onDeleteSession}
-                onRenameSession={projectListProps.onSaveEditingSession}
-                onProjectNavigate={(proj) => {
-                  setScrollTargetProject(proj.name);
-                  onSearchModeChange('projects');
-                  if (!projectListProps.expandedProjects.has(proj.name)) {
-                    projectListProps.onToggleProject(proj.name);
-                  }
-                }}
-                t={t}
-              />
-              );
-            })}
-            {visibleCount < filteredRecentSessions.length && (
+            ) : (
+              recentTree.slice(0, visibleCount).map(({ session, project, depth, hasChildren, isCollapsed }) => {
+                const color = getProjectColor(project.name);
+                return (
+                  <SidebarSessionItem
+                    key={`${project.name}-${session.id}`}
+                    variant="recents"
+                    project={project}
+                    session={session}
+                    depth={depth}
+                    hasChildren={hasChildren}
+                    isCollapsed={isCollapsed}
+                    onToggleCollapse={() => toggleCollapseFork(session.id)}
+                    currentTime={projectListProps.currentTime}
+                    isProcessing={projectListProps.processingSessions?.has(session.id) ?? false}
+                    processingStartTime={projectListProps.processingSessionStartTimes?.get(session.id)}
+                    isRead={session.isRead || (projectListProps.readSessionIds?.has(session.id) ?? false)}
+                    projectColorDot={color.dot}
+                    projectDisplayName={project.displayName || project.name}
+                    onSessionSelect={projectListProps.onSessionSelect}
+                    onHideSession={() =>
+                      hideSession(
+                        session.id,
+                        session.__provider || 'claude',
+                        session.lastActivity || session.createdAt || '',
+                      )
+                    }
+                    onDeleteSession={projectListProps.onDeleteSession}
+                    onRenameSession={projectListProps.onSaveEditingSession}
+                    onProjectNavigate={(proj) => {
+                      setScrollTargetProject(proj.name);
+                      onSearchModeChange('projects');
+                      if (!projectListProps.expandedProjects.has(proj.name)) {
+                        projectListProps.onToggleProject(proj.name);
+                      }
+                    }}
+                    t={t}
+                  />
+                );
+              })
+            )}
+            {(visibleCount < filteredRecentSessions.length || globalRecentHasMore) && (
               <div ref={sentinelRef} className="h-4" />
             )}
           </div>
@@ -390,7 +479,10 @@ export default function SidebarContent({
               <p className="text-sm text-muted-foreground">{t('search.searching')}</p>
               {searchProgress && (
                 <p className="mt-1 text-xs text-muted-foreground/60">
-                  {t('search.projectsScanned', { count: searchProgress.scannedProjects })}/{searchProgress.totalProjects}
+                  {t('search.projectsScanned', {
+                    count: searchProgress.scannedProjects,
+                  })}
+                  /{searchProgress.totalProjects}
                 </p>
               )}
             </div>
@@ -406,7 +498,9 @@ export default function SidebarContent({
             <div className="space-y-3 px-2">
               <div className="flex items-center justify-between px-1">
                 <p className="text-xs text-muted-foreground">
-                  {t('search.matches', { count: conversationResults.totalMatches })}
+                  {t('search.matches', {
+                    count: conversationResults.totalMatches,
+                  })}
                 </p>
                 {isSearching && searchProgress && (
                   <div className="flex items-center gap-1.5">
@@ -421,7 +515,9 @@ export default function SidebarContent({
                 <div className="mx-1 h-0.5 overflow-hidden rounded-full bg-muted">
                   <div
                     className="h-full rounded-full bg-primary/60 transition-all duration-300"
-                    style={{ width: `${Math.round((searchProgress.scannedProjects / searchProgress.totalProjects) * 100)}%` }}
+                    style={{
+                      width: `${Math.round((searchProgress.scannedProjects / searchProgress.totalProjects) * 100)}%`,
+                    }}
                   />
                 </div>
               )}
@@ -437,19 +533,19 @@ export default function SidebarContent({
                     <button
                       key={`${projectResult.projectName}-${session.sessionId}`}
                       className="w-full rounded-md px-2 py-2 text-left transition-colors hover:bg-accent/50"
-                      onClick={() => onConversationResultClick(
-                        projectResult.projectName,
-                        session.sessionId,
-                        session.provider || session.matches[0]?.provider || 'claude',
-                        session.matches[0]?.timestamp,
-                        session.matches[0]?.snippet
-                      )}
+                      onClick={() =>
+                        onConversationResultClick(
+                          projectResult.projectName,
+                          session.sessionId,
+                          session.provider || session.matches[0]?.provider || 'claude',
+                          session.matches[0]?.timestamp,
+                          session.matches[0]?.snippet,
+                        )
+                      }
                     >
                       <div className="mb-1 flex items-center gap-1.5">
                         <MessageSquare className="h-3 w-3 flex-shrink-0 text-primary" />
-                        <span className="truncate text-xs font-medium text-foreground">
-                          {session.sessionSummary}
-                        </span>
+                        <span className="truncate text-xs font-medium text-foreground">{session.sessionSummary}</span>
                         {session.provider && session.provider !== 'claude' && (
                           <span className="flex-shrink-0 rounded bg-muted px-1 py-0.5 text-[9px] uppercase text-muted-foreground">
                             {session.provider}
@@ -462,10 +558,7 @@ export default function SidebarContent({
                             <span className="mt-0.5 flex-shrink-0 text-[10px] font-medium uppercase text-muted-foreground/60">
                               {match.role === 'user' ? 'U' : 'A'}
                             </span>
-                            <HighlightedSnippet
-                              snippet={match.snippet}
-                              highlights={match.highlights}
-                            />
+                            <HighlightedSnippet snippet={match.snippet} highlights={match.highlights} />
                           </div>
                         ))}
                       </div>

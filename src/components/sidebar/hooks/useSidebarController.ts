@@ -574,9 +574,12 @@ export function useSidebarController({
       setLoadingSessions((prev) => ({ ...prev, [project.name]: true }));
 
       try {
-        const currentSessionCount =
-          (project.sessions?.length || 0) + (additionalSessions[project.name]?.length || 0);
-        const response = await api.sessions(project.name, 15, currentSessionCount);
+        const loadedSessions = [
+          ...(project.sessions || []),
+          ...(additionalSessions[project.name] || []),
+        ];
+        const loadedRootCount = loadedSessions.filter((session) => !session.forkParentId).length;
+        const response = await api.sessions(project.name, 15, loadedRootCount);
 
         if (!response.ok) {
           return;

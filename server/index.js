@@ -89,7 +89,7 @@ import pty from 'node-pty';
 import fetch from 'node-fetch';
 import mime from 'mime-types';
 
-import { getProjects, getProject, refreshProjectSessions, surgicallyUpdateSession, getSessions, renameProject, deleteSession, forkSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, clearSessionMessagesCache, searchConversations, getSessionFileMeta, invalidateExcludedSessionIdsCache } from './projects.js';
+import { getProjects, getProject, refreshProjectSessions, surgicallyUpdateSession, getSessions, getRecentSessions, renameProject, deleteSession, forkSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, clearSessionMessagesCache, searchConversations, getSessionFileMeta, invalidateExcludedSessionIdsCache } from './projects.js';
 import { clearFetchHistoryCache } from './providers/claude/adapter.js';
 import { queryClaudeSDK, abortClaudeSDKSession, isClaudeSDKSessionActive, getClaudeSDKSessionStartTime, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
 let queryCopilotSDK, abortCopilotSession, isCopilotSessionActive, getCopilotSessionStartTime, getActiveCopilotSessions, listCopilotModels, resolveCopilotSessionId;
@@ -791,6 +791,16 @@ app.get('/api/projects', authenticateToken, async (req, res) => {
         // Keep the cache warm so flushBroadcast can use the fast path immediately after
         _cachedProjectsList = projects;
         res.json(projects);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/sessions/recent', authenticateToken, async (req, res) => {
+    try {
+        const limit = Math.min(Math.max(parseInt(req.query.limit) || 50, 1), 100);
+        const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+        res.json(await getRecentSessions(limit, offset));
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
