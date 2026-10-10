@@ -402,6 +402,7 @@ const USER_PREF_KEYS = new Set([
   'cursor-tools-settings',
   'codex-settings',
   'gemini-settings',
+  'copilot-settings',
   'code-editor-settings',
 ]);
 

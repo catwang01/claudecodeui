@@ -357,6 +357,63 @@ async function checkCodexCredentials() {
   }
 }
 
+router.get('/copilot/status', async (req, res) => {
+  try {
+    const result = await checkCopilotCredentials();
+    res.json({
+      authenticated: result.authenticated,
+      email: result.email,
+      error: result.error,
+    });
+  } catch (error) {
+    console.error('Error checking Copilot auth status:', error);
+    res.status(500).json({
+      authenticated: false,
+      email: null,
+      error: error.message,
+    });
+  }
+});
+
+async function checkCopilotCredentials() {
+  // Priority 1: environment variable tokens (same order as Copilot CLI itself)
+  const token = process.env.COPILOT_GITHUB_TOKEN || process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
+  if (token && token.trim()) {
+    return {
+      authenticated: true,
+      email: 'GitHub Token Auth',
+      method: 'env_token',
+    };
+  }
+
+  // Priority 2: ~/.copilot/config.json written by `copilot login` (OAuth via system credential store)
+  // The token itself lives in the OS credential store; config.json records which accounts are logged in.
+  try {
+    const configPath = path.join(os.homedir(), '.copilot', 'config.json');
+    const raw = await fs.readFile(configPath, 'utf8');
+    // config.json may contain JS-style // comments — strip them before parsing
+    const cleaned = raw.replace(/^\s*\/\/.*$/gm, '');
+    const config = JSON.parse(cleaned);
+    const users = config.loggedInUsers;
+    if (Array.isArray(users) && users.length > 0) {
+      const user = users[0];
+      return {
+        authenticated: true,
+        email: user.login || 'GitHub OAuth',
+        method: 'credentials_file',
+      };
+    }
+  } catch {
+    // File missing or unreadable — fall through
+  }
+
+  return {
+    authenticated: false,
+    email: null,
+    error: 'Not logged in. Run `copilot login` or set COPILOT_GITHUB_TOKEN.',
+  };
+}
+
 async function checkGeminiCredentials() {
   if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim()) {
     return {

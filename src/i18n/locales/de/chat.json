@@ -188,7 +188,8 @@
       "anthropic": "von Anthropic",
       "openai": "von OpenAI",
       "cursorEditor": "KI-Code-Editor",
-      "google": "von Google"
+      "google": "von Google",
+      "copilot": "von GitHub"
     },
     "readyPrompt": {
       "claude": "Bereit, Claude mit {{model}} zu verwenden. Gib unten deine Nachricht ein.",

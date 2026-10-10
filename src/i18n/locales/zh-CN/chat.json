@@ -170,7 +170,8 @@
       "anthropic": "由 Anthropic 提供",
       "openai": "由 OpenAI 提供",
       "cursorEditor": "AI 代码编辑器",
-      "google": "由 Google 提供"
+      "google": "由 Google 提供",
+      "copilot": "由 GitHub 提供"
     },
     "readyPrompt": {
       "claude": "准备好使用带有 {{model}} 的 Claude。请在下方开始输入您的消息。",

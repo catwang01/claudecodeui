@@ -166,7 +166,8 @@
     "providerInfo": {
       "anthropic": "by Anthropic",
       "openai": "by OpenAI",
-      "cursorEditor": "AIコードエディタ"
+      "cursorEditor": "AIコードエディタ",
+      "copilot": "GitHub 提供"
     },
     "readyPrompt": {
       "claude": "{{model}}でClaudeを使用する準備ができました。下にメッセージを入力してください。",

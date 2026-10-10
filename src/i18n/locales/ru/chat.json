@@ -188,7 +188,8 @@
       "anthropic": "от Anthropic",
       "openai": "от OpenAI",
       "cursorEditor": "AI редактор кода",
-      "google": "от Google"
+      "google": "от Google",
+      "copilot": "от GitHub"
     },
     "readyPrompt": {
       "claude": "Готов использовать Claude с {{model}}. Начните вводить сообщение ниже.",

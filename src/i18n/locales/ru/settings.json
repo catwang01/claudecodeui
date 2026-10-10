@@ -331,6 +331,9 @@
       },
       "gemini": {
         "description": "AI-ассистент Google Gemini"
+      },
+      "copilot": {
+        "description": "AI-ассистент GitHub Copilot"
       }
     },
     "connectionStatus": "Статус подключения",

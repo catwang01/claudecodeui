@@ -352,6 +352,9 @@
       },
       "gemini": {
         "description": "Google Gemini AI 助手"
+      },
+      "copilot": {
+        "description": "GitHub Copilot AI 助手"
       }
     },
     "connectionStatus": "连接状态",

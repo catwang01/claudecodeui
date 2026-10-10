@@ -190,7 +190,8 @@
       "anthropic": "by Anthropic",
       "openai": "by OpenAI",
       "cursorEditor": "AI Code Editor",
-      "google": "by Google"
+      "google": "by Google",
+      "copilot": "by GitHub"
     },
     "readyPrompt": {
       "claude": "Ready to use Claude with {{model}}. Start typing your message below.",

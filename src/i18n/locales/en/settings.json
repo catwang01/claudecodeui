@@ -352,6 +352,9 @@
       },
       "gemini": {
         "description": "Google Gemini AI assistant"
+      },
+      "copilot": {
+        "description": "GitHub Copilot AI assistant"
       }
     },
     "connectionStatus": "Connection Status",
