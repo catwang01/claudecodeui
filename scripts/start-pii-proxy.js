@@ -34,6 +34,10 @@ function getPythonExecutable() {
 }
 
 function syncDependencies(pythonExe) {
+  if (process.env.SKIP_PII_SYNC === '1') {
+    console.log('[pii-proxy] SKIP_PII_SYNC=1, skipping dependency sync');
+    return;
+  }
   const requirementsFile = join(piiProxyDir, 'requirements.txt');
   if (!existsSync(requirementsFile)) return;
   try {

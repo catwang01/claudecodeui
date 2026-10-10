@@ -13,7 +13,7 @@ console.log(`[wait-pii-proxy] Waiting for PII proxy on port ${port}...`);
 
 waitOn({
   resources: [resource],
-  timeout: 30000,
+  timeout: 120000,
   interval: 100,
 })
   .then(() => {

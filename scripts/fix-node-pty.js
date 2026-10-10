@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
- * Fix node-pty spawn-helper permissions on macOS
+ * Apply platform-specific node-pty installation fixes.
  *
- * This script fixes a known issue with node-pty where the spawn-helper
- * binary is shipped without execute permissions, causing "posix_spawnp failed" errors.
+ * - macOS: makes the spawn-helper binary executable.
+ * - Windows: handles a ConPTY cleanup race when the shell exits before node-pty
+ *   queries its console process list.
  *
  * @see https://github.com/microsoft/node-pty/issues/850
  * @module scripts/fix-node-pty
@@ -64,4 +65,50 @@ async function fixSpawnHelper() {
   }
 }
 
-fixSpawnHelper().catch(console.error);
+async function fixWindowsConptyCleanup() {
+  if (process.platform !== 'win32') {
+    return;
+  }
+
+  const agentPath = path.join(
+    __dirname,
+    '..',
+    'node_modules',
+    'node-pty',
+    'lib',
+    'conpty_console_list_agent.js',
+  );
+  const original = [
+    'var consoleProcessList = getConsoleProcessList(shellPid);',
+    'process.send({ consoleProcessList: consoleProcessList });',
+  ].join('\n');
+  const replacement = [
+    'var consoleProcessList;',
+    'try {',
+    '    consoleProcessList = getConsoleProcessList(shellPid);',
+    '} catch (_) {',
+    '    // The shell may exit before AttachConsole runs during PTY cleanup.',
+    '    consoleProcessList = [shellPid];',
+    '}',
+    'process.send({ consoleProcessList: consoleProcessList });',
+  ].join('\n');
+
+  try {
+    const content = await fs.readFile(agentPath, 'utf8');
+    if (content.includes(replacement)) {
+      return;
+    }
+    if (!content.includes(original)) {
+      console.warn(`[postinstall] Warning: Unsupported node-pty ConPTY helper: ${agentPath}`);
+      return;
+    }
+    await fs.writeFile(agentPath, content.replace(original, replacement), 'utf8');
+    console.log(`[postinstall] Fixed ConPTY cleanup race in ${agentPath}`);
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      console.warn(`[postinstall] Warning: Could not patch ${agentPath}: ${err.message}`);
+    }
+  }
+}
+
+Promise.all([fixSpawnHelper(), fixWindowsConptyCleanup()]).catch(console.error);
