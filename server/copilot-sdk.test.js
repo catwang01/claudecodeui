@@ -93,6 +93,120 @@ describe('resolveCopilotSessionId', () => {
   });
 });
 
+describe('normalizeLegacyCopilotEvents', () => {
+  it('normalizes a cancelled self-paced schedule for current resume validation', () => {
+    const content = [
+      JSON.stringify({
+        type: 'session.schedule_created',
+        data: {
+          id: 1,
+          prompt: 'Continue later',
+          recurring: true,
+          displayPrompt: 'Continue later',
+          selfPaced: true,
+          origin: 'user',
+        },
+        id: 'created',
+        timestamp: '2026-09-30T03:25:46.010Z',
+        parentId: 'previous',
+      }),
+      JSON.stringify({
+        type: 'session.schedule_cancelled',
+        data: { id: 1 },
+        id: 'cancelled',
+        timestamp: '2026-09-30T05:18:19.476Z',
+        parentId: 'created',
+      }),
+    ].join('\n');
+
+    const result = copilotSdk.normalizeLegacyCopilotEvents(content);
+    const migrated = JSON.parse(result.content.split('\n')[0]);
+
+    expect(result.changed).toBe(true);
+    expect(migrated.data).toEqual({
+      id: 1,
+      intervalMs: 1,
+      prompt: 'Continue later',
+      recurring: true,
+      displayPrompt: 'Continue later',
+    });
+  });
+
+  it('does not change an active self-paced schedule', () => {
+    const content = JSON.stringify({
+      type: 'session.schedule_created',
+      data: {
+        id: 1,
+        prompt: 'Continue later',
+        recurring: true,
+        selfPaced: true,
+        origin: 'user',
+      },
+    });
+
+    expect(copilotSdk.normalizeLegacyCopilotEvents(content)).toEqual({
+      content,
+      changed: false,
+    });
+  });
+
+  it('removes legacy nullable and unsupported skill metadata', () => {
+    const content = JSON.stringify({
+      type: 'skill.invoked',
+      data: {
+        name: 'web-search',
+        path: 'C:\\skills\\web-search\\SKILL.md',
+        content: '# Web Search',
+        allowedTools: [],
+        source: 'personal-copilot',
+        pluginName: null,
+        pluginVersion: null,
+        description: 'Search the web',
+        trigger: 'agent-invoked',
+        model: 'gpt-5.6-sol',
+        invokedAtTurn: 42,
+      },
+    });
+
+    const result = copilotSdk.normalizeLegacyCopilotEvents(content);
+
+    expect(result.changed).toBe(true);
+    expect(JSON.parse(result.content).data).toEqual({
+      name: 'web-search',
+      path: 'C:\\skills\\web-search\\SKILL.md',
+      content: '# Web Search',
+      allowedTools: [],
+      source: 'personal-copilot',
+      description: 'Search the web',
+      trigger: 'agent-invoked',
+    });
+  });
+
+  it('backs up and migrates a legacy events file before resume', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'copilot-legacy-events-'));
+    tempPaths.push(tempDir);
+    const eventsPath = path.join(tempDir, 'events.jsonl');
+    const content = [
+      JSON.stringify({
+        type: 'session.schedule_created',
+        data: { id: 1, prompt: 'Continue later', selfPaced: true, origin: 'user' },
+      }),
+      JSON.stringify({ type: 'session.schedule_cancelled', data: { id: 1 } }),
+    ].join('\n');
+    fs.writeFileSync(eventsPath, content, 'utf8');
+
+    const changed = copilotSdk.migrateLegacyCopilotEventsFile(eventsPath);
+
+    expect(changed).toBe(true);
+    expect(fs.readFileSync(`${eventsPath}.cloudcli-backup`, 'utf8')).toBe(content);
+    expect(JSON.parse(fs.readFileSync(eventsPath, 'utf8').split('\n')[0]).data).toEqual({
+      id: 1,
+      intervalMs: 1,
+      prompt: 'Continue later',
+    });
+  });
+});
+
 describe('buildCopilotForkPrompt', () => {
   it('imports forked user and assistant history before the current request', () => {
     const history = [

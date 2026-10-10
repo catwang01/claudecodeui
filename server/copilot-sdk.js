@@ -60,6 +60,109 @@ export function resolveCopilotSessionId(sessionId) {
   return sessionsDb.getSessionById(sessionId)?.provider_session_id || sessionId;
 }
 
+export function normalizeLegacyCopilotEvents(content) {
+  const lines = String(content).split('\n');
+  const cancelledScheduleIds = new Set();
+
+  for (const line of lines) {
+    if (!line.includes('"type":"session.schedule_cancelled"')) continue;
+    try {
+      const event = JSON.parse(line);
+      if (Number.isInteger(event.data?.id)) cancelledScheduleIds.add(event.data.id);
+    } catch {
+      // Leave malformed lines unchanged so the native resume error remains actionable.
+    }
+  }
+
+  let changed = false;
+  const normalizedLines = lines.map((line) => {
+    if (line.includes('"type":"skill.invoked"')) {
+      try {
+        const event = JSON.parse(line);
+        const data = event.data;
+        if (
+          typeof data?.name === 'string'
+          && typeof data.path === 'string'
+          && typeof data.content === 'string'
+        ) {
+          const normalizedData = {
+            name: data.name,
+            path: data.path,
+            content: data.content,
+            ...(Array.isArray(data.allowedTools) ? { allowedTools: data.allowedTools } : {}),
+            ...(typeof data.source === 'string' ? { source: data.source } : {}),
+            ...(typeof data.pluginName === 'string' ? { pluginName: data.pluginName } : {}),
+            ...(typeof data.pluginVersion === 'string' ? { pluginVersion: data.pluginVersion } : {}),
+            ...(typeof data.description === 'string' ? { description: data.description } : {}),
+            ...(
+              ['user-invoked', 'agent-invoked', 'context-load'].includes(data.trigger)
+                ? { trigger: data.trigger }
+                : {}
+            ),
+          };
+          if (JSON.stringify(normalizedData) !== JSON.stringify(data)) {
+            event.data = normalizedData;
+            changed = true;
+            return JSON.stringify(event);
+          }
+        }
+      } catch {
+        return line;
+      }
+    }
+
+    if (!line.includes('"type":"session.schedule_created"')) return line;
+    try {
+      const event = JSON.parse(line);
+      const data = event.data;
+      if (
+        data?.selfPaced !== true
+        || data.intervalMs != null
+        || !Number.isInteger(data.id)
+        || !cancelledScheduleIds.has(data.id)
+        || typeof data.prompt !== 'string'
+      ) {
+        return line;
+      }
+
+      event.data = {
+        id: data.id,
+        intervalMs: 1,
+        prompt: data.prompt,
+        ...(typeof data.recurring === 'boolean' ? { recurring: data.recurring } : {}),
+        ...(typeof data.displayPrompt === 'string' ? { displayPrompt: data.displayPrompt } : {}),
+      };
+      changed = true;
+      return JSON.stringify(event);
+    } catch {
+      return line;
+    }
+  });
+
+  return {
+    content: changed ? normalizedLines.join('\n') : content,
+    changed,
+  };
+}
+
+export function migrateLegacyCopilotEventsFile(eventsPath) {
+  if (!fs.existsSync(eventsPath)) return false;
+
+  const original = fs.readFileSync(eventsPath, 'utf8');
+  const normalized = normalizeLegacyCopilotEvents(original);
+  if (!normalized.changed) return false;
+
+  const backupPath = `${eventsPath}.cloudcli-backup`;
+  if (!fs.existsSync(backupPath)) {
+    fs.copyFileSync(eventsPath, backupPath, fs.constants.COPYFILE_EXCL);
+  }
+
+  const tempPath = `${eventsPath}.cloudcli-migrating`;
+  fs.writeFileSync(tempPath, normalized.content, 'utf8');
+  fs.renameSync(tempPath, eventsPath);
+  return true;
+}
+
 function extractMessageText(content) {
   if (typeof content === 'string') return content.trim();
   if (!Array.isArray(content)) return '';
@@ -421,6 +524,10 @@ export async function queryCopilotSDK(command, options = {}, ws) {
       console.log(
         `[copilot-sdk] Resuming CloudCLI session ${sessionId.slice(0, 8)} via Copilot session ${providerSessionId.slice(0, 8)}`
       );
+      const eventsPath = getCopilotEventsPath(providerSessionId);
+      if (migrateLegacyCopilotEventsFile(eventsPath)) {
+        console.log(`[copilot-sdk] Migrated cancelled legacy schedule metadata in ${eventsPath}`);
+      }
       session = await client.resumeSession(providerSessionId, buildCopilotSessionConfig({
         onPermissionRequest,
         workingDirectory: cwd,
