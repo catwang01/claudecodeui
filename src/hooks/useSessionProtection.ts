@@ -18,6 +18,10 @@ export function useSessionProtection() {
     () => new Set([...processingSessionsMap.keys(), ...shellProcessingSessions.keys()]),
     [processingSessionsMap, shellProcessingSessions],
   );
+  const chatProcessingSessions = useMemo(
+    () => new Set(processingSessionsMap.keys()),
+    [processingSessionsMap],
+  );
 
   const processingSessionStartTimes = useMemo(() => {
     const startTimes = new Map<string, number>();
@@ -150,6 +154,7 @@ export function useSessionProtection() {
   return {
     activeSessions,
     processingSessions,
+    chatProcessingSessions,
     processingSessionsMap,
     processingSessionStartTimes,
     markSessionAsActive,

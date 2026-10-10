@@ -53,6 +53,7 @@ export type MainContentProps = {
   // Shell-specific callbacks — isolated from chat so they don't override each other
   onShellSessionProcessing: SessionLifecycleHandler;
   onShellSessionNotProcessing: SessionLifecycleHandler;
+  // SDK-backed chat sessions only. Shell PTY activity is tracked separately.
   processingSessions: Set<string>;
   onReplaceTemporarySession: SessionLifecycleHandler;
   onNavigateToSession: (targetSessionId: string) => void;

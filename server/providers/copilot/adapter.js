@@ -12,6 +12,11 @@ import path from 'path';
 import os from 'os';
 import { createNormalizedMessage, generateMessageId } from '../types.js';
 import { sessionsDb } from '../../modules/database/index.js';
+import {
+  createArtifactUrl,
+  getSafeImageMimeType,
+  isSafeLocalArtifactPath,
+} from '../../utils/artifact-metadata.js';
 
 const PROVIDER = 'copilot';
 
@@ -170,7 +175,7 @@ function parseEvent(event, sessionId, counter) {
   const ts = event.timestamp || new Date().toISOString();
   const eventId = event.uuid || event.id || `copilot_${counter}`;
 
-  // ── Format A: copilot-sdk.js writes Claude-style JSONL ──────────────────────
+  // ── Format A: legacy CloudCLI-managed Copilot transcripts ──────────────────
   // { type: 'user', message: { role: 'user', content: [{type:'text', text:'...'}] }, uuid, timestamp }
   // { type: 'assistant', message: { role: 'assistant', content: [{type:'text', text:'...'}], model, ... } }
   if ((event.type === 'user' || event.type === 'assistant') && event.message) {
@@ -195,6 +200,41 @@ function parseEvent(event, sessionId, counter) {
       role,
       content,
     });
+  }
+
+  if (event.type === 'cloudcli.message' && event.message) {
+    const message = event.message;
+    const filepath = isSafeLocalArtifactPath(message.filepath)
+      ? path.normalize(message.filepath)
+      : null;
+    if (message.kind === 'file_download' && filepath) {
+      return createNormalizedMessage({
+        id: eventId,
+        sessionId,
+        timestamp: ts,
+        provider: PROVIDER,
+        kind: 'file_download',
+        filename: path.basename(filepath),
+        filepath,
+        downloadUrl: createArtifactUrl('download', filepath),
+        fileSize: message.fileSize,
+      });
+    }
+    const mimeType = filepath ? getSafeImageMimeType(filepath) : null;
+    if (message.kind === 'image_display' && filepath && mimeType) {
+      return createNormalizedMessage({
+        id: eventId,
+        sessionId,
+        timestamp: ts,
+        provider: PROVIDER,
+        kind: 'image_display',
+        filename: path.basename(filepath),
+        filepath,
+        imageUrl: createArtifactUrl('image', filepath),
+        fileSize: message.fileSize,
+        mimeType,
+      });
+    }
   }
 
   // ── Format B: Copilot SDK native events.jsonl ────────────────────────────────

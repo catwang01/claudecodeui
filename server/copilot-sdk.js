@@ -13,7 +13,7 @@
  * for Node.js — no separate installation required.
  */
 
-import { CopilotClient, approveAll } from '@github/copilot-sdk';
+import { CopilotClient, approveAll, defineTool } from '@github/copilot-sdk';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -21,11 +21,17 @@ import os from 'os';
 import { createNormalizedMessage } from './providers/types.js';
 import { notifyRunFailed, notifyRunStopped } from './services/notification-orchestrator.js';
 import { COPILOT_MODELS } from '../shared/modelConstants.js';
-import { sessionsDb } from './database/db.js';
+import { sessionDb, sessionsDb } from './database/db.js';
 import { getProjects } from './projects.js';
 import {
   waitForCopilotSessionSummary,
 } from './modules/providers/list/copilot/copilot-session-synchronizer.provider.js';
+import {
+  assertRegularFile,
+  assertSafeLocalArtifactPath,
+  createArtifactUrl,
+  getSafeImageMimeType,
+} from './utils/artifact-metadata.js';
 console.log('[copilot-sdk] Module loaded, sessionsDb type:', typeof sessionsDb, 'createSession:', typeof sessionsDb?.createSession);
 
 export async function refreshCopilotSessionSummary(nativeSessionId, send) {
@@ -46,48 +52,228 @@ export async function refreshCopilotSessionSummary(nativeSessionId, send) {
   return true;
 }
 
-// ── JSONL persistence ─────────────────────────────────────────────────────────
-function getSessionJsonlPath(sessionId, cwd) {
-  let projectPath = path.resolve(cwd || process.cwd());
-  if (process.platform === 'win32') {
-    projectPath = projectPath.toLowerCase();
+export function getCopilotEventsPath(sessionId) {
+  return path.join(os.homedir(), '.copilot', 'session-state', sessionId, 'events.jsonl');
+}
+
+export function resolveCopilotSessionId(sessionId) {
+  return sessionsDb.getSessionById(sessionId)?.provider_session_id || sessionId;
+}
+
+function extractMessageText(content) {
+  if (typeof content === 'string') return content.trim();
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter((part) => part?.type === 'text' && typeof part.text === 'string')
+    .map((part) => part.text)
+    .join('\n')
+    .trim();
+}
+
+export function buildCopilotForkPrompt(jsonlContent, command, maxHistoryChars = 100_000) {
+  const messages = [];
+  for (const line of String(jsonlContent || '').split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+      const role = entry.message?.role
+        ?? (entry.type === 'user.message' ? 'user' : null)
+        ?? (entry.type === 'assistant.message' ? 'assistant' : null);
+      if (role !== 'user' && role !== 'assistant') continue;
+      const text = extractMessageText(entry.message?.content ?? entry.data?.content);
+      if (text) messages.push({ role, text });
+    } catch {
+      // Ignore malformed transcript lines.
+    }
   }
-  const encodedPath = projectPath.replace(/[^a-zA-Z0-9]/g, '-');
-  const projectDir = path.join(os.homedir(), '.claude', 'projects', encodedPath);
-  fs.mkdirSync(projectDir, { recursive: true });
-  return path.join(projectDir, `${sessionId}.jsonl`);
+
+  if (messages.length === 0) return command;
+
+  const selected = [];
+  let remaining = maxHistoryChars;
+  for (let i = messages.length - 1; i >= 0 && remaining > 0; i--) {
+    const message = messages[i];
+    const label = message.role === 'user' ? 'User' : 'Assistant';
+    const availableText = message.text.length > remaining
+      ? message.text.slice(message.text.length - remaining)
+      : message.text;
+    selected.unshift(`${label}:\n${availableText}`);
+    remaining -= availableText.length;
+  }
+
+  return [
+    'This conversation was forked from an earlier point. Use the prior conversation below as context, then respond to the current user request. Do not describe or repeat the imported context unless asked.',
+    '',
+    '<prior_conversation>',
+    selected.join('\n\n'),
+    '</prior_conversation>',
+    '',
+    '<current_user_request>',
+    command,
+    '</current_user_request>',
+  ].join('\n');
 }
 
-function appendJsonl(filePath, obj) {
-  try {
-    fs.appendFileSync(filePath, JSON.stringify(obj) + '\n', 'utf8');
-  } catch (_) {}
+export function buildCopilotAttachments({ images = [], files = [], references = [] } = {}) {
+  const attachments = [];
+  const attachedPaths = new Set();
+
+  for (const image of images) {
+    const match = typeof image?.data === 'string'
+      ? image.data.match(/^data:([^;]+);base64,(.+)$/)
+      : null;
+    if (!match) continue;
+    attachments.push({
+      type: 'blob',
+      data: match[2],
+      mimeType: image.mimeType || match[1],
+      displayName: image.name || 'image',
+    });
+  }
+
+  const fileCandidates = [
+    ...files.map((file) => ({
+      path: file?.path,
+      displayName: file?.name,
+    })),
+    ...references.map((reference) => ({
+      path: reference,
+      displayName: path.basename(reference || ''),
+    })),
+  ];
+
+  for (const candidate of fileCandidates) {
+    if (!candidate.path || attachedPaths.has(candidate.path)) continue;
+    try {
+      if (!fs.statSync(candidate.path).isFile()) continue;
+    } catch {
+      continue;
+    }
+    attachedPaths.add(candidate.path);
+    attachments.push({
+      type: 'file',
+      path: candidate.path,
+      displayName: candidate.displayName || path.basename(candidate.path),
+    });
+  }
+
+  return attachments;
 }
 
-function writeUserMessage(jsonlPath, sessionId, content) {
-  appendJsonl(jsonlPath, {
-    type: 'user',
-    message: { role: 'user', content: [{ type: 'text', text: content }] },
-    sessionId,
-    uuid: crypto.randomUUID(),
-    timestamp: new Date().toISOString(),
-  });
-}
-
-function writeAssistantMessage(jsonlPath, sessionId, content, model) {
-  appendJsonl(jsonlPath, {
-    type: 'assistant',
-    message: {
-      role: 'assistant',
-      content: [{ type: 'text', text: content }],
-      model: model || 'copilot',
-      stop_reason: 'end_turn',
-      usage: { input_tokens: 0, output_tokens: 0 },
+const FILEPATH_SCHEMA = {
+  type: 'object',
+  properties: {
+    filepath: {
+      type: 'string',
+      description: 'Absolute path to the existing file',
     },
-    sessionId,
-    uuid: crypto.randomUUID(),
-    timestamp: new Date().toISOString(),
-  });
+  },
+  required: ['filepath'],
+  additionalProperties: false,
+};
+
+function resolveArtifactPath(filepath, workingDirectory) {
+  return path.isAbsolute(filepath)
+    ? filepath
+    : path.resolve(workingDirectory || process.cwd(), filepath);
+}
+
+export function createCopilotInternalTools(workingDirectory) {
+  return [
+    defineTool('download', {
+      description: 'Make an existing file available for the user to download. Use this for generated files, including HTML artifacts. The file must already exist on disk.',
+      parameters: FILEPATH_SCHEMA,
+      skipPermission: true,
+      handler: async ({ filepath }) => {
+        const absolutePath = resolveArtifactPath(filepath, workingDirectory);
+        assertSafeLocalArtifactPath(absolutePath);
+        await fs.promises.access(absolutePath);
+        const stats = await fs.promises.stat(absolutePath);
+        assertRegularFile(stats, absolutePath);
+        const filename = path.basename(absolutePath);
+        return JSON.stringify({
+          artifactKind: 'download',
+          filepath: absolutePath,
+          filename,
+          downloadUrl: createArtifactUrl('download', absolutePath),
+          fileSize: stats.size,
+          message: `File "${filename}" is ready. The UI will display a download button.`,
+        });
+      },
+    }),
+    defineTool('image', {
+      description: 'Display an existing image inline in the chat UI. Use this when showing a generated or existing image would be helpful. The file must already exist on disk.',
+      parameters: FILEPATH_SCHEMA,
+      skipPermission: true,
+      handler: async ({ filepath }) => {
+        const absolutePath = resolveArtifactPath(filepath, workingDirectory);
+        assertSafeLocalArtifactPath(absolutePath);
+        await fs.promises.access(absolutePath);
+        const stats = await fs.promises.stat(absolutePath);
+        assertRegularFile(stats, absolutePath);
+        const filename = path.basename(absolutePath);
+        const mimeType = getSafeImageMimeType(absolutePath);
+        if (!mimeType) {
+          throw new Error(`Unsupported image format: ${path.extname(filename) || '(none)'}`);
+        }
+        return JSON.stringify({
+          artifactKind: 'image',
+          filepath: absolutePath,
+          filename,
+          imageUrl: createArtifactUrl('image', absolutePath),
+          fileSize: stats.size,
+          mimeType,
+          message: `Image "${filename}" is ready. The UI will display it inline.`,
+        });
+      },
+    }),
+  ];
+}
+
+export function buildCopilotSessionConfig(config) {
+  return {
+    ...config,
+    tools: [
+      ...(config.tools || []),
+      ...createCopilotInternalTools(config.workingDirectory),
+    ],
+  };
+}
+
+export function buildCopilotArtifactMessage(toolResult, pendingTools, sessionId) {
+  const toolName = pendingTools.get(toolResult.toolCallId);
+  if (toolName !== 'download' && toolName !== 'image') return null;
+
+  const resultData = typeof toolResult.content === 'string'
+    ? JSON.parse(toolResult.content)
+    : toolResult.content;
+
+  if (toolName === 'download' && resultData?.artifactKind === 'download') {
+    return createNormalizedMessage({
+      kind: 'file_download',
+      sessionId,
+      provider: 'copilot',
+      filename: resultData.filename,
+      filepath: resultData.filepath,
+      downloadUrl: resultData.downloadUrl,
+      fileSize: resultData.fileSize,
+    });
+  }
+
+  if (toolName === 'image' && resultData?.artifactKind === 'image') {
+    return createNormalizedMessage({
+      kind: 'image_display',
+      sessionId,
+      provider: 'copilot',
+      filename: resultData.filename,
+      filepath: resultData.filepath,
+      imageUrl: resultData.imageUrl,
+      fileSize: resultData.fileSize,
+      mimeType: resultData.mimeType,
+    });
+  }
+
+  throw new Error(`Invalid ${toolName} tool result`);
 }
 
 // ── Singleton client ──────────────────────────────────────────────────────────
@@ -216,14 +402,40 @@ export async function queryCopilotSDK(command, options = {}, ws) {
     let session;
     const existingSession = sessionId ? sessionsDb.getSessionById(sessionId) : null;
     const providerSessionId = existingSession?.provider_session_id;
+    const isUnboundFork = Boolean(
+      sessionId
+      && !providerSessionId
+      && sessionDb.getForkParentMap([sessionId], 'copilot').has(sessionId)
+    );
+    let promptToSend = command;
+    if (isUnboundFork && existingSession?.jsonl_path) {
+      try {
+        const forkHistory = fs.readFileSync(existingSession.jsonl_path, 'utf8');
+        promptToSend = buildCopilotForkPrompt(forkHistory, command);
+        console.log(`[copilot-sdk] Bootstrapping fork ${sessionId.slice(0, 8)} from managed transcript`);
+      } catch (err) {
+        throw new Error(`Unable to load Copilot fork history: ${err.message}`);
+      }
+    }
     if (providerSessionId) {
       console.log(
         `[copilot-sdk] Resuming CloudCLI session ${sessionId.slice(0, 8)} via Copilot session ${providerSessionId.slice(0, 8)}`
       );
-      session = await client.resumeSession(providerSessionId, { onPermissionRequest, streaming: true });
+      session = await client.resumeSession(providerSessionId, buildCopilotSessionConfig({
+        onPermissionRequest,
+        workingDirectory: cwd,
+        streaming: true,
+        enableConfigDiscovery: true,
+      }));
     } else {
       console.log('[copilot-sdk] Creating new session, model:', model);
-      session = await client.createSession({ model, onPermissionRequest, workingDirectory: cwd, streaming: true });
+      session = await client.createSession(buildCopilotSessionConfig({
+        model,
+        onPermissionRequest,
+        workingDirectory: cwd,
+        streaming: true,
+        enableConfigDiscovery: true,
+      }));
     }
 
     // ── Map session IDs ───────────────────────────────────────────────────────
@@ -237,11 +449,10 @@ export async function queryCopilotSDK(command, options = {}, ws) {
       capturedSessionId = copilotSessionId;
     }
 
-    // ── Init JSONL persistence ────────────────────────────────────────────────
-    jsonlPath = getSessionJsonlPath(capturedSessionId, cwd);
-    writeUserMessage(jsonlPath, capturedSessionId, command);
+    // Copilot owns the transcript. Keep only a reference to its native event log.
+    jsonlPath = getCopilotEventsPath(copilotSessionId);
 
-    // Register session + jsonl_path in DB so REST API can serve history
+    // Register the native Copilot transcript so REST API can serve history.
     try {
       console.log('[copilot-sdk] Registering session in DB:', capturedSessionId?.slice(0, 8), jsonlPath);
       sessionsDb.createSession(
@@ -277,6 +488,7 @@ export async function queryCopilotSDK(command, options = {}, ws) {
 
     // ── Stream events ─────────────────────────────────────────────────────────
     const accumulatedTextByMessage = new Map();
+    const pendingInternalTools = new Map();
 
     // Register streaming event listeners BEFORE send().
     session.on('assistant.message_delta', (event) => {
@@ -307,12 +519,6 @@ export async function queryCopilotSDK(command, options = {}, ws) {
         streamed.length,
         event?.data?.toolRequests?.length || 0,
       );
-
-      // Persist the assistant's text for this turn to our JSONL so history
-      // survives reloads. Skip empty content (tool-only turns).
-      if (finalContent && jsonlPath) {
-        writeAssistantMessage(jsonlPath, capturedSessionId, finalContent, model);
-      }
 
       if (streamed) {
         // The final SDK message is authoritative. Sending it with stream_end
@@ -349,6 +555,9 @@ export async function queryCopilotSDK(command, options = {}, ws) {
     session.on('tool.execution_start', (event) => {
       const t = event?.data;
       if (!t) return;
+      if (t.toolName === 'download' || t.toolName === 'image') {
+        pendingInternalTools.set(t.toolCallId, t.toolName);
+      }
       send(createNormalizedMessage({
         kind: 'tool_use',
         toolName: t.toolName || t.mcpToolName || 'unknown',
@@ -375,6 +584,22 @@ export async function queryCopilotSDK(command, options = {}, ws) {
         sessionId: capturedSessionId,
         provider: 'copilot',
       }));
+
+      if (pendingInternalTools.has(t.toolCallId)) {
+        try {
+          const artifactMessage = buildCopilotArtifactMessage({
+            toolCallId: t.toolCallId,
+            content: contentStr,
+          }, pendingInternalTools, capturedSessionId);
+          if (artifactMessage) {
+            send(artifactMessage);
+          }
+        } catch (error) {
+          console.error(`[copilot-sdk] Failed to emit ${pendingInternalTools.get(t.toolCallId)} artifact:`, error);
+        } finally {
+          pendingInternalTools.delete(t.toolCallId);
+        }
+      }
     });
 
     // Send the prompt, then wait for session.idle.
@@ -382,7 +607,11 @@ export async function queryCopilotSDK(command, options = {}, ws) {
     // idle event emitted right after createSession/resumeSession is already past
     // and we only catch the idle that signals the end of this turn.
     console.log('[copilot-sdk] Calling session.send()...');
-    await session.send({ prompt: command });
+    const attachments = buildCopilotAttachments(options);
+    await session.send({
+      prompt: promptToSend,
+      ...(attachments.length > 0 ? { attachments } : {}),
+    });
     console.log('[copilot-sdk] session.send() resolved, now waiting for session.idle');
 
     await new Promise((resolve) => {

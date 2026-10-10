@@ -179,6 +179,93 @@ describe('Copilot Adapter - fetchHistory', () => {
     });
   });
 
+  it('restores CloudCLI artifact cards from managed Copilot history', async () => {
+    const events = [
+      {
+        type: 'cloudcli.message',
+        timestamp: '2026-06-09T07:00:05.000Z',
+        id: 'download-card',
+        message: {
+          kind: 'file_download',
+          filename: 'report.html',
+          filepath: 'C:\\reports\\report.html',
+          downloadUrl: 'https://attacker.example/steal-token',
+          fileSize: 42,
+        },
+      },
+      {
+        type: 'cloudcli.message',
+        timestamp: '2026-06-09T07:00:06.000Z',
+        id: 'image-card',
+        message: {
+          kind: 'image_display',
+          filename: 'chart.png',
+          filepath: 'C:\\images\\chart.png',
+          imageUrl: 'https://attacker.example/steal-token',
+          fileSize: 84,
+          mimeType: 'image/png',
+        },
+      },
+    ];
+    await fs.writeFile(testJsonlPath, events.map((event) => JSON.stringify(event)).join('\n'), 'utf-8');
+    mockSessionsDb.getSessionById.mockReturnValue({
+      session_id: testSessionId,
+      jsonl_path: testJsonlPath,
+    });
+
+    const result = await copilotAdapter.fetchHistory(testSessionId);
+
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages[0]).toMatchObject({
+      kind: 'file_download',
+      provider: 'copilot',
+      filename: 'report.html',
+      downloadUrl: `/api/download?filepath=${encodeURIComponent('C:\\reports\\report.html')}`,
+    });
+    expect(result.messages[1]).toMatchObject({
+      kind: 'image_display',
+      provider: 'copilot',
+      filename: 'chart.png',
+      imageUrl: `/api/image?filepath=${encodeURIComponent('C:\\images\\chart.png')}`,
+      mimeType: 'image/png',
+    });
+  });
+
+  it('does not restore active content as an image card', async () => {
+    await fs.writeFile(testJsonlPath, [
+      {
+        type: 'cloudcli.message',
+        id: 'unsafe-image-card',
+        message: {
+          kind: 'image_display',
+          filename: 'preview.svg',
+          filepath: 'C:\\images\\preview.svg',
+          imageUrl: '/api/image?filepath=unsafe',
+          mimeType: 'image/svg+xml',
+        },
+      },
+      {
+        type: 'cloudcli.message',
+        id: 'network-image-card',
+        message: {
+          kind: 'image_display',
+          filename: 'preview.png',
+          filepath: '\\\\attacker.example\\share\\preview.png',
+          imageUrl: '/api/image?filepath=unsafe',
+          mimeType: 'image/png',
+        },
+      },
+    ].map((event) => JSON.stringify(event)).join('\n'), 'utf-8');
+    mockSessionsDb.getSessionById.mockReturnValue({
+      session_id: testSessionId,
+      jsonl_path: testJsonlPath,
+    });
+
+    const result = await copilotAdapter.fetchHistory(testSessionId);
+
+    expect(result.messages).toEqual([]);
+  });
+
   it('should support pagination with limit and offset', async () => {
     const events = Array.from({ length: 10 }, (_, i) => ({
       type: 'user.message',

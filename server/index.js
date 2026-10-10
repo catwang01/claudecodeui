@@ -92,7 +92,7 @@ import mime from 'mime-types';
 import { getProjects, getProject, refreshProjectSessions, surgicallyUpdateSession, getSessions, renameProject, deleteSession, forkSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, clearSessionMessagesCache, searchConversations, getSessionFileMeta, invalidateExcludedSessionIdsCache } from './projects.js';
 import { clearFetchHistoryCache } from './providers/claude/adapter.js';
 import { queryClaudeSDK, abortClaudeSDKSession, isClaudeSDKSessionActive, getClaudeSDKSessionStartTime, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
-let queryCopilotSDK, abortCopilotSession, isCopilotSessionActive, getCopilotSessionStartTime, getActiveCopilotSessions, listCopilotModels;
+let queryCopilotSDK, abortCopilotSession, isCopilotSessionActive, getCopilotSessionStartTime, getActiveCopilotSessions, listCopilotModels, resolveCopilotSessionId;
 try {
   const copilotModule = await import('./copilot-sdk.js');
   queryCopilotSDK = copilotModule.queryCopilotSDK;
@@ -101,6 +101,7 @@ try {
   getCopilotSessionStartTime = copilotModule.getCopilotSessionStartTime;
   getActiveCopilotSessions = copilotModule.getActiveCopilotSessions;
   listCopilotModels = copilotModule.listCopilotModels;
+  resolveCopilotSessionId = copilotModule.resolveCopilotSessionId;
 } catch (e) {
   console.warn('[copilot-sdk] @github/copilot-sdk not available, Copilot features disabled:', e.message);
   queryCopilotSDK = async () => { throw new Error('Copilot SDK not available'); };
@@ -109,6 +110,7 @@ try {
   getCopilotSessionStartTime = () => null;
   getActiveCopilotSessions = () => [];
   listCopilotModels = async () => { throw new Error('Copilot SDK not available'); };
+  resolveCopilotSessionId = (sessionId) => sessionId;
 }
 import { pendingLocalIdMappings, saveLocalIdMapping } from './localids.js';
 import { spawnCursor, abortCursorSession, isCursorSessionActive, getActiveCursorSessions } from './cursor-cli.js';
@@ -2345,10 +2347,13 @@ function handleShellConnection(ws) {
                         const command = initialCommand || 'copilot';
                         const allowAllFlag = permissionMode === 'bypassPermissions' || skipPermissions ? ' --allow-all' : '';
 
-                        // Use --session-id to resume or create a session with our UUID
-                        // This allows CloudCLI to manage session IDs rather than Copilot CLI
                         if (hasSession && sessionId) {
-                            shellCommand = `${command} --session-id="${sessionId}"${allowAllFlag}`;
+                            const nativeSessionId = resolveCopilotSessionId(sessionId);
+                            if (!safeSessionIdPattern.test(nativeSessionId)) {
+                                ws.send(JSON.stringify({ type: 'error', message: 'Invalid Copilot session ID' }));
+                                return;
+                            }
+                            shellCommand = `${command} --session-id="${nativeSessionId}"${allowAllFlag}`;
                         } else {
                             shellCommand = `${command}${allowAllFlag}`;
                         }

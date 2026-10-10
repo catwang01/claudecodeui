@@ -26,6 +26,7 @@ type PendingViewSession = {
 };
 
 function ChatInterface({
+  isActive,
   selectedProject,
   selectedSession,
   ws,
@@ -56,6 +57,7 @@ function ChatInterface({
   const { isConnected } = useWebSocket();
 
   const sessionStore = useSessionStore();
+  const wasActiveRef = useRef(isActive);
   const { speak } = useTTS();
   const { registerSubmitCallback, notifyLoadingChange, status: voiceStatus, transcript: voiceTranscript, toggle: toggleVoice, isActive: isVoiceActive, supported: isVoiceSupported } = useVoiceConversation();
   const streamTimerRef = useRef<Map<string, number>>(new Map());
@@ -71,6 +73,23 @@ function ChatInterface({
   }, []);
 
   const [isForkingSession, setIsForkingSession] = useState(false);
+
+  useEffect(() => {
+    const becameActive = isActive && !wasActiveRef.current;
+    wasActiveRef.current = isActive;
+    if (!becameActive || !selectedProject || selectedSession?.__provider !== 'copilot') return;
+
+    void sessionStore.refreshFromServer(selectedSession.id, {
+      provider: 'copilot',
+      projectName: selectedProject.name,
+      projectPath: selectedProject.fullPath || selectedProject.path || '',
+    });
+  }, [
+    isActive,
+    selectedProject,
+    selectedSession,
+    sessionStore,
+  ]);
 
   const {
     provider,

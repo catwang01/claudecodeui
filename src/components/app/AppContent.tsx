@@ -27,6 +27,7 @@ export default function AppContent() {
   const {
     activeSessions,
     processingSessions,
+    chatProcessingSessions,
     processingSessionsMap,
     processingSessionStartTimes,
     markSessionAsActive,
@@ -248,7 +249,7 @@ export default function AppContent() {
           onSessionNotProcessing={markSessionAsNotProcessing}
           onShellSessionProcessing={markShellSessionAsProcessing}
           onShellSessionNotProcessing={markShellSessionAsNotProcessing}
-          processingSessions={processingSessions}
+          processingSessions={chatProcessingSessions}
           onReplaceTemporarySession={replaceTemporarySession}
           onNavigateToSession={(targetSessionId: string) => navigate(`/session/${targetSessionId}`)}
           onShowSettings={() => setShowSettings(true)}
