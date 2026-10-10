@@ -9,6 +9,7 @@ type SessionRow = {
   project_path: string | null;
   jsonl_path: string | null;
   custom_name: string | null;
+  generated_summary: string | null;
   isArchived: number;
   created_at: string;
   updated_at: string;
@@ -16,7 +17,7 @@ type SessionRow = {
 
 type SessionMetadataLookupRow = Pick<
   SessionRow,
-  'session_id' | 'provider' | 'provider_session_id' | 'project_path' | 'jsonl_path' | 'custom_name' | 'isArchived' | 'created_at' | 'updated_at'
+  'session_id' | 'provider' | 'provider_session_id' | 'project_path' | 'jsonl_path' | 'custom_name' | 'generated_summary' | 'isArchived' | 'created_at' | 'updated_at'
 >;
 
 function normalizeTimestamp(value?: string): string | null {
@@ -69,7 +70,7 @@ export const sessionsDb = {
          project_path = excluded.project_path,
          jsonl_path = excluded.jsonl_path,
          isArchived = 0,
-         custom_name = COALESCE(excluded.custom_name, sessions.custom_name)`
+         custom_name = COALESCE(sessions.custom_name, excluded.custom_name)`
     ).run(
       sessionId,
       provider,
@@ -93,11 +94,30 @@ export const sessionsDb = {
     ).run(customName, sessionId);
   },
 
+  updateSessionGeneratedSummaryIfEmpty(sessionId: string, generatedSummary: string): boolean {
+    const db = getConnection();
+    return db.prepare(
+      `UPDATE sessions
+       SET generated_summary = ?
+       WHERE session_id = ?
+         AND (generated_summary IS NULL OR generated_summary = '')`
+    ).run(generatedSummary, sessionId).changes > 0;
+  },
+
+  clearSessionCustomNameIfMatches(sessionId: string, customName: string): void {
+    const db = getConnection();
+    db.prepare(
+      `UPDATE sessions
+       SET custom_name = NULL
+       WHERE session_id = ? AND custom_name = ?`
+    ).run(sessionId, customName);
+  },
+
   getSessionById(sessionId: string): SessionMetadataLookupRow | null {
     const db = getConnection();
     const row = db
       .prepare(
-        `SELECT session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, isArchived, created_at, updated_at
+        `SELECT session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, generated_summary, isArchived, created_at, updated_at
          FROM sessions
          WHERE session_id = ?
          ORDER BY updated_at DESC
@@ -112,7 +132,7 @@ export const sessionsDb = {
     const db = getConnection();
     const row = db
       .prepare(
-        `SELECT session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, isArchived, created_at, updated_at
+        `SELECT session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, generated_summary, isArchived, created_at, updated_at
          FROM sessions
          WHERE provider = ? AND provider_session_id = ?
          LIMIT 1`
@@ -146,7 +166,7 @@ export const sessionsDb = {
     const db = getConnection();
     return db
       .prepare(
-        `SELECT session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, isArchived, created_at, updated_at
+        `SELECT session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, generated_summary, isArchived, created_at, updated_at
          FROM sessions
          WHERE isArchived = 0`
       )
@@ -161,7 +181,7 @@ export const sessionsDb = {
     const db = getConnection();
     return db
       .prepare(
-        `SELECT session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, isArchived, created_at, updated_at
+        `SELECT session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, generated_summary, isArchived, created_at, updated_at
          FROM sessions
          WHERE isArchived = 1
          ORDER BY datetime(COALESCE(updated_at, created_at)) DESC, session_id DESC`
@@ -174,7 +194,7 @@ export const sessionsDb = {
     const normalizedProjectPath = normalizeProjectPath(projectPath);
     return db
       .prepare(
-        `SELECT session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, isArchived, created_at, updated_at
+        `SELECT session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, generated_summary, isArchived, created_at, updated_at
          FROM sessions
          WHERE project_path = ?
            AND isArchived = 0`
@@ -191,7 +211,7 @@ export const sessionsDb = {
     const normalizedProjectPath = normalizeProjectPath(projectPath);
     return db
       .prepare(
-        `SELECT session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, isArchived, created_at, updated_at
+        `SELECT session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, generated_summary, isArchived, created_at, updated_at
          FROM sessions
          WHERE project_path = ?`
       )
@@ -203,7 +223,7 @@ export const sessionsDb = {
     const normalizedProjectPath = normalizeProjectPath(projectPath);
     return db
       .prepare(
-        `SELECT session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, isArchived, created_at, updated_at
+        `SELECT session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, generated_summary, isArchived, created_at, updated_at
          FROM sessions
          WHERE project_path = ?
            AND isArchived = 0
@@ -223,7 +243,7 @@ export const sessionsDb = {
     const normalizedProjectPath = normalizeProjectPath(projectPath);
     return db
       .prepare(
-        `SELECT session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, isArchived, created_at, updated_at
+        `SELECT session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, generated_summary, isArchived, created_at, updated_at
          FROM sessions
          WHERE project_path = ?
            AND provider = ?

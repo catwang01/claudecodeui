@@ -11,6 +11,7 @@ const COPILOT_SESSION_STATE_DIR = path.join(COPILOT_HOME, 'session-state');
 interface CopilotSession {
   id: string;
   cwd: string | null;
+  summary: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -20,7 +21,14 @@ function getCloudCliSession(nativeSessionId: string) {
     ?? sessionsDb.getSessionById(nativeSessionId);
 }
 
-function getPreferredJsonlPath(nativeSessionId: string, nativeEventsPath: string): string {
+function getPreferredJsonlPath(
+  nativeSessionId: string,
+  nativeEventsPath: string,
+  hasNativeEvents: boolean
+): string {
+  if (hasNativeEvents) {
+    return nativeEventsPath;
+  }
   const existing = getCloudCliSession(nativeSessionId);
   if (
     existing?.provider === 'copilot'
@@ -32,15 +40,104 @@ function getPreferredJsonlPath(nativeSessionId: string, nativeEventsPath: string
   return nativeEventsPath;
 }
 
+async function synchronizeCopilotSessionById(nativeSessionId: string): Promise<{
+  sessionId: string | null;
+  hasSummary: boolean;
+}> {
+  let db: Database.Database | null = null;
+  try {
+    const fs = await import('fs/promises');
+    try {
+      await fs.access(COPILOT_DB);
+    } catch {
+      return { sessionId: null, hasSummary: false };
+    }
+
+    db = new Database(COPILOT_DB, { readonly: true });
+    const session = db.prepare('SELECT id, cwd, summary, created_at, updated_at FROM sessions WHERE id = ?')
+      .get(nativeSessionId) as CopilotSession | undefined;
+
+    if (!session?.cwd) {
+      return { sessionId: null, hasSummary: false };
+    }
+
+    const existingSession = getCloudCliSession(session.id);
+    const cloudCliSessionId = existingSession?.session_id ?? session.id;
+    const eventsJsonlPath = path.join(COPILOT_SESSION_STATE_DIR, session.id, 'events.jsonl');
+    let hasEventsJsonl = true;
+    try {
+      await fs.access(eventsJsonlPath);
+    } catch {
+      hasEventsJsonl = false;
+    }
+
+    projectsDb.createProjectPath(session.cwd);
+    sessionsDb.createSession(
+      cloudCliSessionId,
+      'copilot',
+      session.cwd,
+      hasEventsJsonl ? undefined : session.summary || undefined,
+      session.created_at,
+      session.updated_at,
+      getPreferredJsonlPath(session.id, eventsJsonlPath, hasEventsJsonl),
+      session.id
+    );
+
+    const summary = session.summary?.trim() || '';
+    if (summary) {
+      sessionsDb.updateSessionGeneratedSummaryIfEmpty(cloudCliSessionId, summary);
+    }
+    if (
+      hasEventsJsonl
+      && summary
+      && existingSession?.custom_name === summary
+    ) {
+      sessionsDb.clearSessionCustomNameIfMatches(cloudCliSessionId, summary);
+    }
+
+    return { sessionId: cloudCliSessionId, hasSummary: Boolean(summary) };
+  } catch (error) {
+    console.warn('[copilot-sync] Failed to synchronize session:', nativeSessionId, error);
+    return { sessionId: null, hasSummary: false };
+  } finally {
+    db?.close();
+  }
+}
+
+export async function waitForCopilotSessionSummary(
+  nativeSessionId: string,
+  options: { maxWaitMs?: number; pollIntervalMs?: number } = {}
+): Promise<string | null> {
+  const maxWaitMs = options.maxWaitMs ?? 30_000;
+  const pollIntervalMs = options.pollIntervalMs ?? 2_000;
+  const deadline = Date.now() + maxWaitMs;
+
+  while (true) {
+    const result = await synchronizeCopilotSessionById(nativeSessionId);
+    if (result.hasSummary) {
+      return result.sessionId;
+    }
+
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      return null;
+    }
+
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, Math.min(pollIntervalMs, remainingMs));
+      timer.unref?.();
+    });
+  }
+}
+
 export const copilotSessionSynchronizer: ISessionSynchronizer = {
   provider: 'copilot',
 
-  // Watch session-state directory (like Codex watches sessions/)
-  // Each session has its own subdirectory with events.jsonl
+  // Each session directory contains events.jsonl, session.db, or both.
   watchPaths: [COPILOT_SESSION_STATE_DIR],
 
   async synchronize(since: Date | null): Promise<number> {
-    console.log('[copilot-sync] Starting synchronization, since:', since);
+    console.log('[copilot-sync] Starting full synchronization');
     let db: Database.Database | null = null;
 
     try {
@@ -62,17 +159,13 @@ export const copilotSessionSynchronizer: ISessionSynchronizer = {
       db = new Database(COPILOT_DB, { readonly: true });
       console.log('[copilot-sync] Database opened successfully');
 
-      // Build query based on whether we have a 'since' timestamp
-      let query = 'SELECT id, cwd, created_at, updated_at FROM sessions';
-      const params: any[] = [];
-
-      if (since) {
-        query += ' WHERE updated_at >= ?';
-        params.push(since.toISOString());
-      }
-
-      const sessions = db.prepare(query).all(...params) as CopilotSession[];
-      console.log('[copilot-sync] Found sessions:', sessions.length, 'since:', since?.toISOString() || 'null');
+      // Copilot support may be enabled after the shared scan cursor has advanced.
+      // The local metadata table is small and upserts are idempotent, so always
+      // reconcile every row to backfill sessions missed by older installations.
+      const sessions = db
+        .prepare('SELECT id, cwd, summary, created_at, updated_at FROM sessions')
+        .all() as CopilotSession[];
+      console.log('[copilot-sync] Found sessions:', sessions.length);
 
       let count = 0;
       for (const session of sessions) {
@@ -82,19 +175,62 @@ export const copilotSessionSynchronizer: ISessionSynchronizer = {
 
         const projectPath = session.cwd;
         const eventsJsonlPath = path.join(COPILOT_SESSION_STATE_DIR, session.id, 'events.jsonl');
-        const cloudCliSessionId = getCloudCliSession(session.id)?.session_id ?? session.id;
+        const existingSession = getCloudCliSession(session.id);
+        const cloudCliSessionId = existingSession?.session_id ?? session.id;
+        const summary = session.summary?.trim() || '';
+        const updatedAtMs = Date.parse(session.updated_at);
+        const isWithinScanWindow = !since
+          || Number.isNaN(updatedAtMs)
+          || updatedAtMs >= since.getTime();
+
+        if (!existingSession && !isWithinScanWindow) {
+          continue;
+        }
+
+        if (existingSession && !isWithinScanWindow) {
+          if (summary) {
+            sessionsDb.updateSessionGeneratedSummaryIfEmpty(cloudCliSessionId, summary);
+          }
+          if (
+            summary
+            && existingSession.custom_name === summary
+            && existingSession.jsonl_path
+            && path.basename(existingSession.jsonl_path) !== 'events.jsonl'
+          ) {
+            sessionsDb.clearSessionCustomNameIfMatches(cloudCliSessionId, summary);
+          }
+          count++;
+          continue;
+        }
+
+        let hasEventsJsonl = true;
+        try {
+          await fs.access(eventsJsonlPath);
+        } catch {
+          hasEventsJsonl = false;
+        }
 
         projectsDb.createProjectPath(projectPath);
         sessionsDb.createSession(
           cloudCliSessionId,
           'copilot',
           projectPath,
-          undefined, // name
+          hasEventsJsonl ? undefined : session.summary || undefined,
           session.created_at,
           session.updated_at,
-          getPreferredJsonlPath(session.id, eventsJsonlPath),
+          getPreferredJsonlPath(session.id, eventsJsonlPath, hasEventsJsonl),
           session.id
         );
+        if (summary) {
+          sessionsDb.updateSessionGeneratedSummaryIfEmpty(cloudCliSessionId, summary);
+        }
+        if (
+          hasEventsJsonl
+          && summary
+          && existingSession?.custom_name === summary
+        ) {
+          sessionsDb.clearSessionCustomNameIfMatches(cloudCliSessionId, summary);
+        }
 
         count++;
       }
@@ -116,7 +252,7 @@ export const copilotSessionSynchronizer: ISessionSynchronizer = {
   },
 
   async synchronizeFile(filePath: string): Promise<string | null> {
-    // filePath format: ~/.copilot/session-state/{session-id}/events.jsonl
+    // filePath format: ~/.copilot/session-state/{session-id}/events.jsonl or session.db
     // Extract session ID from directory name
     const sessionDir = path.dirname(filePath);
     const sessionId = path.basename(sessionDir);
@@ -126,56 +262,7 @@ export const copilotSessionSynchronizer: ISessionSynchronizer = {
     }
 
     console.log('[copilot-sync] Synchronizing file for session:', sessionId);
-
-    // Query session metadata from session-store.db
-    let db: Database.Database | null = null;
-    try {
-      const fs = await import('fs/promises');
-      try {
-        await fs.access(COPILOT_DB);
-      } catch {
-        console.log('[copilot-sync] Database not found at:', COPILOT_DB);
-        return null;
-      }
-
-      db = new Database(COPILOT_DB, { readonly: true });
-
-      const session = db.prepare('SELECT id, cwd, created_at, updated_at FROM sessions WHERE id = ?')
-        .get(sessionId) as CopilotSession | undefined;
-
-      if (!session || !session.cwd) {
-        console.log('[copilot-sync] Session not found in DB:', sessionId);
-        return null;
-      }
-
-      const projectPath = session.cwd;
-      const cloudCliSessionId = getCloudCliSession(session.id)?.session_id ?? session.id;
-
-      projectsDb.createProjectPath(projectPath);
-      sessionsDb.createSession(
-        cloudCliSessionId,
-        'copilot',
-        projectPath,
-        undefined, // name
-        session.created_at,
-        session.updated_at,
-        getPreferredJsonlPath(session.id, filePath),
-        session.id
-      );
-
-      console.log('[copilot-sync] Synchronized session:', sessionId);
-      return cloudCliSessionId;
-    } catch (error) {
-      console.warn('[copilot-sync] Failed to synchronize file:', filePath, error);
-      return null;
-    } finally {
-      if (db) {
-        try {
-          db.close();
-        } catch {
-          // Ignore close errors
-        }
-      }
-    }
+    const result = await synchronizeCopilotSessionById(sessionId);
+    return result.sessionId;
   },
 };

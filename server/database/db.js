@@ -378,12 +378,17 @@ const pushSubscriptionsDb = {
 const sessionNamesDb = {
   // Set (insert or update) a custom session name
   setName: (sessionId, provider, customName) => {
-    db.prepare(`
-      INSERT INTO session_names (session_id, provider, custom_name)
-      VALUES (?, ?, ?)
-      ON CONFLICT(session_id, provider)
-      DO UPDATE SET custom_name = excluded.custom_name, updated_at = CURRENT_TIMESTAMP
-    `).run(sessionId, provider, customName);
+    db.transaction(() => {
+      db.prepare(`
+        INSERT INTO session_names (session_id, provider, custom_name)
+        VALUES (?, ?, ?)
+        ON CONFLICT(session_id, provider)
+        DO UPDATE SET custom_name = excluded.custom_name, updated_at = CURRENT_TIMESTAMP
+      `).run(sessionId, provider, customName);
+      db.prepare(
+        'UPDATE sessions SET custom_name = ? WHERE session_id = ? AND provider = ?'
+      ).run(customName, sessionId, provider);
+    })();
   },
 
   // Get a single custom session name
@@ -407,9 +412,15 @@ const sessionNamesDb = {
 
   // Delete a custom session name
   deleteName: (sessionId, provider) => {
-    return db.prepare(
-      'DELETE FROM session_names WHERE session_id = ? AND provider = ?'
-    ).run(sessionId, provider).changes > 0;
+    return db.transaction(() => {
+      const deleted = db.prepare(
+        'DELETE FROM session_names WHERE session_id = ? AND provider = ?'
+      ).run(sessionId, provider).changes > 0;
+      const cleared = db.prepare(
+        'UPDATE sessions SET custom_name = NULL WHERE session_id = ? AND provider = ?'
+      ).run(sessionId, provider).changes > 0;
+      return deleted || cleared;
+    })();
   },
 };
 
@@ -825,6 +836,7 @@ const sessionFileCache = {
     const normalizedData = {
       ...data,
       file_path: normalizeSessionCachePath(data.file_path),
+      generated_summary: data.generated_summary ?? null,
     };
 
     if (process.platform === 'win32') {
@@ -835,15 +847,16 @@ const sessionFileCache = {
 
     return db.prepare(`
       INSERT INTO session_file_cache
-        (file_path, file_size, session_id, cwd, message_count, last_activity, last_user_message, last_assistant_message, updated_at)
+        (file_path, file_size, session_id, cwd, message_count, last_activity, generated_summary, last_user_message, last_assistant_message, updated_at)
       VALUES
-        (@file_path, @file_size, @session_id, @cwd, @message_count, @last_activity, @last_user_message, @last_assistant_message, CURRENT_TIMESTAMP)
+        (@file_path, @file_size, @session_id, @cwd, @message_count, @last_activity, @generated_summary, @last_user_message, @last_assistant_message, CURRENT_TIMESTAMP)
       ON CONFLICT(file_path) DO UPDATE SET
         file_size            = excluded.file_size,
         session_id           = COALESCE(excluded.session_id, session_id),
         cwd                  = COALESCE(excluded.cwd, cwd),
         message_count        = excluded.message_count,
         last_activity        = excluded.last_activity,
+        generated_summary    = COALESCE(NULLIF(generated_summary, ''), excluded.generated_summary),
         last_user_message    = COALESCE(excluded.last_user_message, last_user_message),
         last_assistant_message = COALESCE(excluded.last_assistant_message, last_assistant_message),
         updated_at           = CURRENT_TIMESTAMP

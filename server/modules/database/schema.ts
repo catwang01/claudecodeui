@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   provider TEXT NOT NULL DEFAULT 'claude',
   provider_session_id TEXT,
   custom_name TEXT,
+  generated_summary TEXT,
   project_path TEXT,
   jsonl_path TEXT,
   isArchived BOOLEAN DEFAULT 0,
@@ -171,6 +172,7 @@ CREATE TABLE IF NOT EXISTS session_file_cache (
   cwd TEXT,
   message_count INTEGER NOT NULL DEFAULT 0,
   last_activity TEXT,
+  generated_summary TEXT,
   last_user_message TEXT,
   last_assistant_message TEXT,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -184,6 +186,16 @@ CREATE TABLE IF NOT EXISTS session_hidden_from_recents (
   provider       TEXT NOT NULL DEFAULT 'claude',
   last_activity_at DATETIME,
   hidden_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(session_id, provider)
+);`;
+
+export const SESSION_NAMES_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS session_names (
+  session_id TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'claude',
+  custom_name TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(session_id, provider)
 );`;
 

@@ -10,6 +10,7 @@ import {
   SESSION_FILE_CACHE_SCHEMA_SQL,
   SESSION_FORK_PARENTS_SCHEMA_SQL,
   SESSION_HIDDEN_FROM_RECENTS_SCHEMA_SQL,
+  SESSION_NAMES_SCHEMA_SQL,
   SESSION_READ_STATE_SCHEMA_SQL,
   SESSION_SUMMARY_STATE_SCHEMA_SQL,
   SESSIONS_TABLE_SCHEMA_SQL,
@@ -99,6 +100,7 @@ export function runMigrations(): void {
   db.exec(SESSION_FORK_PARENTS_SCHEMA_SQL);
   db.exec(SESSION_FILE_CACHE_SCHEMA_SQL);
   db.exec(SESSION_HIDDEN_FROM_RECENTS_SCHEMA_SQL);
+  db.exec(SESSION_NAMES_SCHEMA_SQL);
   db.exec(SESSION_READ_STATE_SCHEMA_SQL);
 
   // Indexes
@@ -108,12 +110,18 @@ export function runMigrations(): void {
   db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_project_path ON sessions(project_path)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_projects_path ON projects(project_path)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_session_file_cache_session ON session_file_cache(session_id)');
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_session_fork_parents_identity
+    ON session_fork_parents(fork_session_id, provider)
+  `);
 
   // Column additions (idempotent)
   addColumnIfMissing(db, 'users', 'git_name', 'TEXT');
   addColumnIfMissing(db, 'users', 'git_email', 'TEXT');
   addColumnIfMissing(db, 'users', 'has_completed_onboarding', 'BOOLEAN DEFAULT 0');
   addColumnIfMissing(db, 'projects', 'claude_dir_name', 'TEXT DEFAULT NULL');
+  addColumnIfMissing(db, 'sessions', 'generated_summary', 'TEXT');
+  addColumnIfMissing(db, 'session_file_cache', 'generated_summary', 'TEXT');
   const hadProviderSessionId = columnExists(db, 'sessions', 'provider_session_id');
   addColumnIfMissing(db, 'sessions', 'provider_session_id', 'TEXT');
   if (!hadProviderSessionId) {

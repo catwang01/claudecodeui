@@ -1,4 +1,5 @@
 import chokidar, { type FSWatcher } from 'chokidar';
+import path from 'path';
 import { sessionSynchronizerService } from './session-synchronizer.service.js';
 import { ALL_SYNCHRONIZERS } from '../registry.js';
 
@@ -87,10 +88,6 @@ export function initializeSessionsWatcher(opts: {
   getProjectsFn = opts.getProjects;
   broadcastFn = opts.broadcast;
 
-  sessionSynchronizerService.synchronizeSessions().catch((err) => {
-    console.error('[sessions-watcher] initial sync failed:', err);
-  });
-
   const allPaths = ALL_SYNCHRONIZERS.flatMap(s => s.watchPaths);
 
   if (allPaths.length === 0) return;
@@ -98,13 +95,21 @@ export function initializeSessionsWatcher(opts: {
   watcher = chokidar.watch(allPaths, {
     persistent: true,
     ignoreInitial: true,
-    ignored: /(^|[/\\])\../,
+    ignored: (filePath) => {
+      const resolvedPath = path.resolve(filePath);
+      const isExplicitlyWatched = allPaths.some((watchPath) => {
+        const resolvedWatchPath = path.resolve(watchPath);
+        return resolvedPath === resolvedWatchPath
+          || resolvedPath.startsWith(`${resolvedWatchPath}${path.sep}`);
+      });
+      return !isExplicitlyWatched && /(^|[/\\])\../.test(filePath);
+    },
   });
 
   const onUpdate = (changeType: string, filePath: string): void => {
+    const provider = providerForFile(filePath);
     if (!filePath.endsWith('.jsonl') && !filePath.endsWith('.json')) return;
 
-    const provider = providerForFile(filePath);
     sessionSynchronizerService
       .synchronizeProviderFile(provider, filePath)
       .then((sessionId) => queuePendingUpdate(changeType, provider, sessionId))

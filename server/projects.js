@@ -616,12 +616,12 @@ async function getProjectData(dbProject, codexSessionsIndexRef, autoDocPreFilter
     sessionMeta: { hasMore: false, total: 0 },
   };
 
-  // Claude sessions: read from DB + session_file_cache (no filesystem I/O)
-  // Fetch only top 45 claude sessions from DB (we only show 15, but leave room for
-  // autoDoc/hidden filtering to discard some). Avoids loading 600+ rows for large projects.
-  const claudeRows = sessionsDb
-    .getSessionsByProjectPathAndProviderPage(projectPath, 'claude', 45, 0)
-    .filter(row => row.jsonl_path);
+  // Read the lightweight DB index for all sessions, then enrich only the newest
+  // 45 fork trees. Fork children travel with their root and do not consume slots.
+  const allClaudeRows = sessionsDb
+    .getSessionsByProjectPath(projectPath)
+    .filter(row => row.provider === 'claude' && row.jsonl_path);
+  const claudeRows = selectForkTreeRows(allClaudeRows, 'claude', 45);
   const claudeSessions = buildSessionsFromCache(claudeRows);
   claudeSessions.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
 
@@ -633,9 +633,9 @@ async function getProjectData(dbProject, codexSessionsIndexRef, autoDocPreFilter
   filterHiddenAutoDocSessions(filteredClaude);
   applyReadState(filteredClaude, 'claude');
   applyForkParent(filteredClaude, 'claude');
-  project.sessions = filteredClaude.slice(0, 15);
+  project.sessions = paginateForkTrees(filteredClaude, 15);
   project.sessionMeta = {
-    hasMore: filteredClaude.length > 15,
+    hasMore: countForkTreeRoots(filteredClaude) > 15,
     total: sessionsDb.countSessionsByProjectPath(projectPath),
   };
 
@@ -684,14 +684,17 @@ async function getProjectData(dbProject, codexSessionsIndexRef, autoDocPreFilter
   applyReadState(project.geminiSessions, 'gemini');
 
   // Copilot sessions: read from DB (similar to Claude sessions)
-  const copilotRows = sessionsDb.getSessionsByProjectPathAndProviderPage(projectPath, 'copilot', 45, 0);
+  const allCopilotRows = sessionsDb
+    .getSessionsByProjectPath(projectPath)
+    .filter(row => row.provider === 'copilot' && row.jsonl_path);
+  const copilotRows = selectForkTreeRows(allCopilotRows, 'copilot', 45);
   const copilotSessions = dedupeCopilotSessionAliases(buildSessionsFromCache(copilotRows));
   copilotSessions.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
-  project.copilotSessions = copilotSessions.slice(0, 15);
-  applyCustomSessionNames(project.copilotSessions, 'copilot');
-  applyHiddenFromRecents(project.copilotSessions, 'copilot');
-  applyReadState(project.copilotSessions, 'copilot');
-  applyForkParent(project.copilotSessions, 'copilot');
+  applyCustomSessionNames(copilotSessions, 'copilot');
+  applyHiddenFromRecents(copilotSessions, 'copilot');
+  applyReadState(copilotSessions, 'copilot');
+  applyForkParent(copilotSessions, 'copilot');
+  project.copilotSessions = paginateForkTrees(copilotSessions, 15);
 
   if (taskMasterResult.status === 'fulfilled') {
     const r = taskMasterResult.value;
@@ -730,9 +733,10 @@ function refreshProjectSessions(cachedProject, projectPath) {
     ? (sessions) => sessions.filter(s => !excludedSessionIds.has(s.id))
     : null;
 
-  const claudeRows = sessionsDb
-    .getSessionsByProjectPathAndProviderPage(projectPath, 'claude', 45, 0)
-    .filter(row => row.jsonl_path);
+  const allClaudeRows = sessionsDb
+    .getSessionsByProjectPath(projectPath)
+    .filter(row => row.provider === 'claude' && row.jsonl_path);
+  const claudeRows = selectForkTreeRows(allClaudeRows, 'claude', 45);
   const claudeSessions = buildSessionsFromCache(claudeRows);
   claudeSessions.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
 
@@ -745,9 +749,9 @@ function refreshProjectSessions(cachedProject, projectPath) {
   applyReadState(filteredClaude, 'claude');
   applyForkParent(filteredClaude, 'claude');
 
-  cachedProject.sessions = filteredClaude.slice(0, 15);
+  cachedProject.sessions = paginateForkTrees(filteredClaude, 15);
   cachedProject.sessionMeta = {
-    hasMore: filteredClaude.length > 15,
+    hasMore: countForkTreeRoots(filteredClaude) > 15,
     total: sessionsDb.countSessionsByProjectPath(projectPath),
   };
   return true;
@@ -782,6 +786,8 @@ function surgicallyUpdateSession(cachedProject, sessionId) {
     session = {
       id: row.session_id,
       summary: row.custom_name
+        || row.generated_summary
+        || cached.generated_summary
         || (cached.last_user_message
           ? (cached.last_user_message.length > 50
             ? cached.last_user_message.slice(0, 50) + '...'
@@ -798,7 +804,7 @@ function surgicallyUpdateSession(cachedProject, sessionId) {
     scheduleSessionFileMeta(row.jsonl_path);
     session = {
       id: row.session_id,
-      summary: row.custom_name || 'New Session',
+      summary: row.custom_name || row.generated_summary || 'New Session',
       messageCount: 0,
       lastActivity: new Date(row.updated_at || 0),
       cwd: row.project_path || '',
@@ -1121,10 +1127,12 @@ async function getSessions(projectName, limit = 5, offset = 0, preFilter = null)
     const actualProjectDir = await extractProjectDirectory(projectName);
     const claudeProjectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
 
-    // DB-backed: get session rows (index only) sorted by updated_at DESC
-    const pageSize = Math.max((limit + offset) * 3, 30);
-    let sessionRows = sessionsDb.getSessionsByProjectPathPage(actualProjectDir, pageSize, 0)
+    // DB-backed: read the lightweight index, then enrich only enough fork trees
+    // for this page. Child sessions do not consume limit/offset slots.
+    const rootCandidateCount = Math.max((limit + offset) * 3, 30);
+    let allSessionRows = sessionsDb.getSessionsByProjectPath(actualProjectDir)
       .filter(row => row.provider === 'claude' && row.jsonl_path);
+    let sessionRows = selectForkTreeRows(allSessionRows, 'claude', rootCandidateCount);
 
     // Sync-on-miss: if DB is empty, try to sync filesystem and re-query
     if (sessionRows.length === 0) {
@@ -1134,8 +1142,9 @@ async function getSessions(projectName, limit = 5, offset = 0, preFilter = null)
           if (!file.endsWith('.jsonl') || file.startsWith('agent-')) continue;
           await claudeSessionSynchronizer.synchronizeFile(path.join(claudeProjectDir, file));
         }
-        sessionRows = sessionsDb.getSessionsByProjectPathPage(actualProjectDir, pageSize, 0)
+        allSessionRows = sessionsDb.getSessionsByProjectPath(actualProjectDir)
           .filter(row => row.provider === 'claude' && row.jsonl_path);
+        sessionRows = selectForkTreeRows(allSessionRows, 'claude', rootCandidateCount);
       } catch { /* directory doesn't exist */ }
     }
 
@@ -1151,8 +1160,9 @@ async function getSessions(projectName, limit = 5, offset = 0, preFilter = null)
     sessions.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
 
     const filteredSessions = preFilter ? preFilter(sessions) : sessions;
-    const total = sessionsDb.countSessionsByProjectPath(actualProjectDir);
-    const paginatedSessions = filteredSessions.slice(offset, offset + limit);
+    applyForkParent(filteredSessions, 'claude');
+    const total = countForkTreeRootsForRows(allSessionRows, 'claude');
+    const paginatedSessions = paginateForkTrees(filteredSessions, limit, offset);
     const hasMore = offset + limit < total;
 
     return { sessions: paginatedSessions, hasMore, total, offset, limit };
@@ -1160,6 +1170,96 @@ async function getSessions(projectName, limit = 5, offset = 0, preFilter = null)
     console.error(`Error getting sessions for project ${projectName}:`, error);
     return { sessions: [], hasMore: false, total: 0 };
   }
+}
+
+function paginateRecentSessionRows(rows, limit, offset = 0) {
+  const indexedSessions = [];
+
+  for (const provider of new Set(rows.map(row => row.provider))) {
+    const providerRows = rows.filter(row => row.provider === provider);
+    const providerSessions = providerRows.map(row => ({
+      id: row.session_id,
+      lastActivity: row.updated_at || row.created_at,
+    }));
+    applyForkParentBatched(providerSessions, provider);
+    indexedSessions.push(...providerSessions.map(session => ({
+      ...session,
+      id: `${provider}:${session.id}`,
+      forkParentId: session.forkParentId
+        ? `${provider}:${session.forkParentId}`
+        : undefined,
+    })));
+  }
+
+  const paginated = paginateForkTrees(indexedSessions, limit, offset);
+  const selectedKeys = new Set(paginated.map(session => session.id));
+  return {
+    rows: rows.filter(row => selectedKeys.has(`${row.provider}:${row.session_id}`)),
+    total: countForkTreeRoots(indexedSessions),
+  };
+}
+
+async function getRecentSessions(limit = 50, offset = 0) {
+  const excludedByProvider = new Map();
+  const allRows = sessionsDb.getAllSessions().filter(row => {
+    if (!row.jsonl_path) return false;
+    if (!excludedByProvider.has(row.provider)) {
+      excludedByProvider.set(row.provider, buildExcludedSessionIds(row.provider));
+    }
+    return !excludedByProvider.get(row.provider).has(row.session_id);
+  });
+  const page = paginateRecentSessionRows(allRows, limit, offset);
+  const sessions = [];
+  const cachedByPath = sessionFileCache.getBatch(
+    page.rows.map(row => row.jsonl_path).filter(Boolean)
+  );
+  const cachedBySessionId = sessionFileCache.getBatchBySessionIds(
+    page.rows.map(row => row.session_id)
+  );
+
+  await Promise.allSettled(page.rows.map(async row => {
+    if (!row.jsonl_path) return;
+    const cached = cachedByPath.get(row.jsonl_path)
+      || cachedBySessionId.get(row.session_id);
+    if (!cached?.session_id) {
+      await _runFileMeta(() => getSessionFileMeta(row.jsonl_path));
+    }
+  }));
+
+  for (const provider of new Set(page.rows.map(row => row.provider))) {
+    const providerRows = page.rows.filter(row => row.provider === provider);
+    const projectPathById = new Map(
+      providerRows.map(row => [row.session_id, row.project_path || ''])
+    );
+    let providerSessions = buildSessionsFromCache(providerRows);
+    if (provider === 'copilot') {
+      providerSessions = dedupeCopilotSessionAliases(providerSessions);
+    }
+
+    applyCustomSessionNames(providerSessions, provider);
+    applyHiddenFromRecents(providerSessions, provider);
+    applyReadState(providerSessions, provider);
+    applyForkParent(providerSessions, provider);
+    if (provider === 'claude') {
+      applyAutoDocFlag(providerSessions, provider);
+      applyLastAutoDocAt(providerSessions, provider);
+    }
+
+    sessions.push(...providerSessions.map(session => ({
+      ...session,
+      __provider: provider,
+      projectPath: projectPathById.get(session.id) || session.cwd,
+    })));
+  }
+
+  sessions.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
+  return {
+    sessions,
+    hasMore: offset + limit < page.total,
+    total: page.total,
+    offset,
+    limit,
+  };
 }
 
 async function getSessionsLegacy(projectName, limit = 5, offset = 0, preFilter = null) {
@@ -1191,9 +1291,10 @@ async function getSessionsLegacy(projectName, limit = 5, offset = 0, preFilter =
       if (!allSessions.has(meta.sessionId)) {
         allSessions.set(meta.sessionId, {
           id: meta.sessionId,
-          summary: meta.lastUserMessage
-            ? (meta.lastUserMessage.length > 50 ? meta.lastUserMessage.slice(0, 50) + '...' : meta.lastUserMessage)
-            : 'New Session',
+          summary: meta.generatedSummary
+            || (meta.lastUserMessage
+              ? (meta.lastUserMessage.length > 50 ? meta.lastUserMessage.slice(0, 50) + '...' : meta.lastUserMessage)
+              : 'New Session'),
           messageCount: meta.messageCount,
           lastActivity: meta.lastActivity ? new Date(meta.lastActivity) : meta.mtime,
           cwd: meta.cwd || '',
@@ -1212,8 +1313,9 @@ async function getSessionsLegacy(projectName, limit = 5, offset = 0, preFilter =
       .sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
 
     const filteredSessions = preFilter ? preFilter(sessions) : sessions;
-    const total = filteredSessions.length;
-    const paginatedSessions = filteredSessions.slice(offset, offset + limit);
+    applyForkParent(filteredSessions, 'claude');
+    const total = countForkTreeRoots(filteredSessions);
+    const paginatedSessions = paginateForkTrees(filteredSessions, limit, offset);
     const hasMore = offset + limit < total;
 
     return { sessions: paginatedSessions, hasMore, total, offset, limit };
@@ -1238,7 +1340,7 @@ function isSubAgentEntry(entry) {
  * we still include the session using the info already available in the DB row,
  * and kick off an async getSessionFileMeta() to populate the cache for next time.
  *
- * @param {Array<{session_id, jsonl_path, custom_name, project_path, updated_at}>} rows
+ * @param {Array<{session_id, jsonl_path, custom_name, generated_summary, project_path, updated_at}>} rows
  * @returns {Array<{id, summary, messageCount, lastActivity, cwd, lastUserMessage, lastAssistantMessage}>}
  */
 function buildSessionsFromCache(rows) {
@@ -1267,7 +1369,7 @@ function buildSessionsFromCache(rows) {
       sessions.push({
         id: row.session_id,
         transcriptPath: row.jsonl_path,
-        summary: row.custom_name || 'New Session',
+        summary: row.custom_name || row.generated_summary || 'New Session',
         messageCount: 0,
         lastActivity: new Date(row.updated_at || 0),
         cwd: row.project_path || '',
@@ -1285,6 +1387,8 @@ function buildSessionsFromCache(rows) {
       id: row.session_id,
       transcriptPath: row.jsonl_path,
       summary: row.custom_name
+        || row.generated_summary
+        || cached.generated_summary
         || (cached.last_user_message
           ? (cached.last_user_message.length > 50
             ? cached.last_user_message.slice(0, 50) + '...'
@@ -1298,6 +1402,79 @@ function buildSessionsFromCache(rows) {
     });
   }
   return sessions;
+}
+
+function getForkTreeRootId(sessionId, byId) {
+  const visited = new Set();
+  let currentId = sessionId;
+
+  while (!visited.has(currentId)) {
+    visited.add(currentId);
+    const current = byId.get(currentId);
+    const parentId = current?.forkParentId;
+    if (!parentId || !byId.has(parentId)) return currentId;
+    currentId = parentId;
+  }
+
+  return sessionId;
+}
+
+function paginateForkTrees(sessions, limit, offset = 0) {
+  if (!sessions.length || limit <= 0) return [];
+
+  const byId = new Map(sessions.map(session => [session.id, session]));
+  const roots = new Map();
+
+  for (const session of sessions) {
+    const rootId = getForkTreeRootId(session.id, byId);
+    const activity = new Date(session.lastActivity || session.createdAt || 0).getTime();
+    const weight = Number.isFinite(activity) ? activity : 0;
+    roots.set(rootId, Math.max(roots.get(rootId) ?? 0, weight));
+  }
+
+  const selectedRootIds = new Set(
+    [...roots.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(offset, offset + limit)
+      .map(([rootId]) => rootId)
+  );
+
+  return sessions.filter(session =>
+    selectedRootIds.has(getForkTreeRootId(session.id, byId))
+  );
+}
+
+function countForkTreeRoots(sessions) {
+  const byId = new Map(sessions.map(session => [session.id, session]));
+  return new Set(sessions.map(session => getForkTreeRootId(session.id, byId))).size;
+}
+
+function applyForkParentBatched(sessions, provider) {
+  const batchSize = 500;
+  for (let start = 0; start < sessions.length; start += batchSize) {
+    applyForkParent(sessions.slice(start, start + batchSize), provider);
+  }
+}
+
+function selectForkTreeRows(rows, provider, rootLimit) {
+  const indexedSessions = rows.map(row => ({
+    id: row.session_id,
+    lastActivity: row.updated_at || row.created_at,
+  }));
+  applyForkParentBatched(indexedSessions, provider);
+  const selectedIds = new Set(
+    paginateForkTrees(indexedSessions, rootLimit).map(session => session.id)
+  );
+  return rows.filter(row => selectedIds.has(row.session_id));
+}
+
+function countForkTreeRootsForRows(rows, provider) {
+  const indexedSessions = rows.map(row => ({
+    id: row.session_id,
+    lastActivity: row.updated_at || row.created_at,
+  }));
+  applyForkParentBatched(indexedSessions, provider);
+  return countForkTreeRoots(indexedSessions);
 }
 
 function dedupeCopilotSessionAliases(sessions) {
@@ -1344,7 +1521,7 @@ function dedupeCopilotSessionAliases(sessions) {
 
 // Incremental .jsonl metadata scan with SQLite cache.
 // Reads only the bytes appended since the last scan (append-only assumption).
-// Returns { sessionId, cwd, messageCount, lastActivity, lastUserMessage, lastAssistantMessage, mtime }
+// Returns { sessionId, cwd, messageCount, lastActivity, generatedSummary, lastUserMessage, lastAssistantMessage, mtime }
 async function getSessionFileMeta(filePath) {
   const stat = await fs.stat(filePath);
   const currentSize = stat.size;
@@ -1358,6 +1535,7 @@ async function getSessionFileMeta(filePath) {
       cwd: cached.cwd,
       messageCount: cached.message_count,
       lastActivity: cached.last_activity,
+      generatedSummary: cached.generated_summary,
       lastUserMessage: cached.last_user_message,
       lastAssistantMessage: cached.last_assistant_message,
       mtime: stat.mtime,
@@ -1375,6 +1553,7 @@ async function getSessionFileMeta(filePath) {
     cwd: isIncremental ? (cached?.cwd ?? null) : null,
     messageCount: isIncremental ? (cached?.message_count ?? 0) : 0,
     lastActivity: isIncremental ? (cached?.last_activity ?? null) : null,
+    generatedSummary: isIncremental ? (cached?.generated_summary ?? null) : null,
     lastUserMessage: isIncremental ? (cached?.last_user_message ?? null) : null,
     lastAssistantMessage: isIncremental ? (cached?.last_assistant_message ?? null) : null,
   };
@@ -1421,6 +1600,7 @@ async function getSessionFileMeta(filePath) {
 
     // Backward scan: grab latest lastActivity, lastUserMessage, lastAssistantMessage from delta
     let needActivity = true;
+    let needSummary = !meta.generatedSummary;
     let needUser = true;
     let needAssistant = true;
     for (let i = lines.length - 1; i >= 0; i--) {
@@ -1431,6 +1611,10 @@ async function getSessionFileMeta(filePath) {
         if (needActivity && e.timestamp) {
           meta.lastActivity = e.timestamp;
           needActivity = false;
+        }
+        if (needSummary && e.type === 'summary' && typeof e.summary === 'string' && e.summary.trim()) {
+          meta.generatedSummary = e.summary.trim();
+          needSummary = false;
         }
         // Claude format: { message: { role: 'user', content: '...' } }
         if (needUser && e.message?.role === 'user' && e.message?.content) {
@@ -1477,7 +1661,7 @@ async function getSessionFileMeta(filePath) {
             needAssistant = false;
           }
         }
-        if (!needActivity && !needUser && !needAssistant) break;
+        if (!needActivity && !needSummary && !needUser && !needAssistant) break;
       } catch { /* skip malformed */ }
     }
   }
@@ -1491,6 +1675,7 @@ async function getSessionFileMeta(filePath) {
       cwd: meta.cwd,
       message_count: meta.messageCount,
       last_activity: meta.lastActivity,
+      generated_summary: meta.generatedSummary,
       last_user_message: meta.lastUserMessage,
       last_assistant_message: meta.lastAssistantMessage,
     });
@@ -1782,7 +1967,11 @@ async function forkSession(projectName, sessionId, forkAfterTimestamp = null, pr
   try {
     sessionDb.markForkParent(newSessionId, sessionId, provider);
   } catch (err) {
-    console.warn(`[Fork] Failed to record fork parent for ${newSessionId}:`, err.message);
+    await fs.unlink(newSessionFile).catch(() => {});
+    if (provider === 'copilot') {
+      sessionsDb.deleteSessionById(newSessionId);
+    }
+    throw new Error(`Failed to record fork parent: ${err.message}`);
   }
 
   return newSessionId;
@@ -3273,6 +3462,7 @@ export {
   refreshProjectSessions,
   surgicallyUpdateSession,
   getSessions,
+  getRecentSessions,
   getSessionMessages,
   getSessionFileMeta,
   renameProject,
@@ -3294,5 +3484,7 @@ export {
   searchConversations,
   extractTextFromContent,
   dedupeCopilotSessionAliases,
+  paginateRecentSessionRows,
+  paginateForkTrees,
   invalidateExcludedSessionIdsCache
 };

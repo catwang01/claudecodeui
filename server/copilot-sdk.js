@@ -22,7 +22,29 @@ import { createNormalizedMessage } from './providers/types.js';
 import { notifyRunFailed, notifyRunStopped } from './services/notification-orchestrator.js';
 import { COPILOT_MODELS } from '../shared/modelConstants.js';
 import { sessionsDb } from './database/db.js';
+import { getProjects } from './projects.js';
+import {
+  waitForCopilotSessionSummary,
+} from './modules/providers/list/copilot/copilot-session-synchronizer.provider.js';
 console.log('[copilot-sdk] Module loaded, sessionsDb type:', typeof sessionsDb, 'createSession:', typeof sessionsDb?.createSession);
+
+export async function refreshCopilotSessionSummary(nativeSessionId, send) {
+  const sessionId = await waitForCopilotSessionSummary(nativeSessionId);
+  if (!sessionId) {
+    return false;
+  }
+
+  send({
+    type: 'projects_updated',
+    projects: await getProjects(),
+    timestamp: new Date().toISOString(),
+    changeType: 'change',
+    watchProvider: 'copilot',
+    updatedSessionIds: [sessionId],
+    batched: false,
+  });
+  return true;
+}
 
 // ── JSONL persistence ─────────────────────────────────────────────────────────
 function getSessionJsonlPath(sessionId, cwd) {
@@ -391,6 +413,10 @@ export async function queryCopilotSDK(command, options = {}, ws) {
 
     if (wasAborted) {
       notifyRunStopped({ writer: ws, sessionId: capturedSessionId, provider: 'copilot' });
+    } else {
+      void refreshCopilotSessionSummary(copilotSessionId, send).catch((error) => {
+        console.error('[copilot-sdk] Failed to refresh delayed session summary:', error);
+      });
     }
 
     console.log(`[copilot-sdk] Session ${capturedSessionId?.slice(0, 8)} complete (aborted=${wasAborted})`);

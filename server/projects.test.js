@@ -10,7 +10,10 @@ import os from 'os';
 let getSessionFileMeta;
 let getSessions;
 let dedupeCopilotSessionAliases;
+let paginateForkTrees;
+let paginateRecentSessionRows;
 let sessionFileCache;
+let sessionDb;
 let sessionsDb;
 
 const tmpBase = path.join(os.homedir(), '.claude', 'projects');
@@ -48,8 +51,11 @@ beforeEach(async () => {
   getSessionFileMeta = mod.getSessionFileMeta;
   getSessions = mod.getSessions;
   dedupeCopilotSessionAliases = mod.dedupeCopilotSessionAliases;
+  paginateForkTrees = mod.paginateForkTrees;
+  paginateRecentSessionRows = mod.paginateRecentSessionRows;
   const dbMod = await import('./database/db.js');
   sessionFileCache = dbMod.sessionFileCache;
+  sessionDb = dbMod.sessionDb;
   sessionsDb = dbMod.sessionsDb;
 });
 
@@ -175,6 +181,24 @@ describe('getSessionFileMeta', () => {
     expect(meta.lastAssistantMessage).toContain('Hi');
     expect(meta.messageCount).toBe(2);
     expect(meta.lastActivity).toBe('2024-01-01T10:00:01.000Z');
+  });
+
+  it('extracts and caches the provider-generated session summary', async () => {
+    const sid = 'test-session-generated-summary';
+    const fp = path.join(projectDir, 'generated-summary.jsonl');
+    await writeSession('generated-summary.jsonl', [
+      makeLine(sid, 'user', 'Please investigate why reconnect loses state', '2024-01-01T10:00:00.000Z'),
+      JSON.stringify({
+        type: 'summary',
+        sessionId: sid,
+        summary: 'Fix reconnect session state',
+        timestamp: '2024-01-01T10:00:01.000Z',
+      }),
+    ]);
+
+    const meta = await getSessionFileMeta(fp);
+    expect(meta.generatedSummary).toBe('Fix reconnect session state');
+    expect(sessionFileCache.get(fp).generated_summary).toBe('Fix reconnect session state');
   });
 
   it('warm cache: returns cached data without reading file content', async () => {
@@ -337,6 +361,70 @@ describe('dedupeCopilotSessionAliases', () => {
   });
 });
 
+describe('paginateForkTrees', () => {
+  const session = (id, lastActivity, forkParentId) => ({
+    id,
+    lastActivity: new Date(lastActivity),
+    ...(forkParentId ? { forkParentId } : {}),
+  });
+
+  describe('paginateRecentSessionRows', () => {
+    it('counts roots globally while keeping equal IDs from different providers isolated', () => {
+      const childId = `recent-child-${Date.now()}`;
+      const parentId = `recent-parent-${Date.now()}`;
+      const sharedId = `recent-shared-${Date.now()}`;
+      const rows = [
+        { session_id: childId, provider: 'copilot', updated_at: '2026-09-04T00:00:00Z' },
+        { session_id: sharedId, provider: 'claude', updated_at: '2026-09-03T00:00:00Z' },
+        { session_id: sharedId, provider: 'copilot', updated_at: '2026-09-02T00:00:00Z' },
+        { session_id: parentId, provider: 'copilot', updated_at: '2026-09-01T00:00:00Z' },
+      ];
+      sessionDb.markForkParent(childId, parentId, 'copilot');
+
+      try {
+        const page = paginateRecentSessionRows(rows, 2);
+
+        expect(page.total).toBe(3);
+        expect(page.rows.map(row => `${row.provider}:${row.session_id}`)).toEqual([
+          `copilot:${childId}`,
+          `claude:${sharedId}`,
+          `copilot:${parentId}`,
+        ]);
+      } finally {
+        sessionDb.removeForkLinks(childId, 'copilot');
+      }
+    });
+  });
+
+  it('counts roots toward the limit and includes all of their descendants', () => {
+    const sessions = [
+      session('child-2', '2026-09-04T00:00:00Z', 'child-1'),
+      session('root-2', '2026-09-03T00:00:00Z'),
+      session('child-1', '2026-09-02T00:00:00Z', 'root-1'),
+      session('root-1', '2026-09-01T00:00:00Z'),
+      session('root-3', '2026-08-31T00:00:00Z'),
+    ];
+
+    expect(paginateForkTrees(sessions, 2).map(item => item.id)).toEqual([
+      'child-2',
+      'root-2',
+      'child-1',
+      'root-1',
+    ]);
+  });
+
+  it('applies offsets to roots instead of returned rows', () => {
+    const sessions = [
+      session('child-1', '2026-09-04T00:00:00Z', 'root-1'),
+      session('root-2', '2026-09-03T00:00:00Z'),
+      session('root-1', '2026-09-01T00:00:00Z'),
+      session('root-3', '2026-08-31T00:00:00Z'),
+    ];
+
+    expect(paginateForkTrees(sessions, 1, 1).map(item => item.id)).toEqual(['root-2']);
+  });
+});
+
 describe('Copilot provider session mapping', () => {
   it('resolves a Copilot native session ID to its CloudCLI session', () => {
     sessionsDb.createSession(
@@ -357,11 +445,78 @@ describe('Copilot provider session mapping', () => {
       }),
     );
   });
+
+  it('preserves a user rename when native metadata is synchronized again', () => {
+    const sessionId = `copilot-title-${Date.now()}`;
+    sessionsDb.createSession(
+      sessionId,
+      'copilot',
+      projectDir,
+      'Native summary',
+      undefined,
+      undefined,
+      path.join(projectDir, `${sessionId}.jsonl`),
+      sessionId,
+    );
+    sessionsDb.updateSessionCustomName(sessionId, 'User title');
+
+    sessionsDb.createSession(
+      sessionId,
+      'copilot',
+      projectDir,
+      'Updated native summary',
+      undefined,
+      undefined,
+      path.join(projectDir, `${sessionId}.jsonl`),
+      sessionId,
+    );
+
+    expect(sessionsDb.getSessionById(sessionId)?.custom_name).toBe('User title');
+  });
+
+  it('stores only the first generated summary without changing a user rename', () => {
+    const sessionId = `generated-title-${Date.now()}`;
+    sessionsDb.createSession(
+      sessionId,
+      'copilot',
+      projectDir,
+      undefined,
+      undefined,
+      undefined,
+      path.join(projectDir, `${sessionId}.jsonl`),
+      sessionId,
+    );
+
+    expect(sessionsDb.updateSessionGeneratedSummaryIfEmpty(sessionId, 'Initial agent title')).toBe(true);
+    expect(sessionsDb.updateSessionGeneratedSummaryIfEmpty(sessionId, 'Later agent title')).toBe(false);
+    sessionsDb.updateSessionCustomName(sessionId, 'User title');
+
+    expect(sessionsDb.getSessionById(sessionId)).toEqual(expect.objectContaining({
+      custom_name: 'User title',
+      generated_summary: 'Initial agent title',
+    }));
+  });
 });
 
 // ─── getSessions ─────────────────────────────────────────────────────────────
 
 describe('getSessions', () => {
+  it('prefers the provider-generated summary over the latest user message', async () => {
+    const sid = 'generated-summary-display';
+    await writeSession('generated-summary-display.jsonl', [
+      makeLine(sid, 'user', 'A much longer raw user request', '2024-01-01T00:00:00.000Z'),
+      JSON.stringify({
+        type: 'summary',
+        sessionId: sid,
+        summary: 'Concise agent title',
+        timestamp: '2024-01-01T00:00:01.000Z',
+      }),
+    ]);
+
+    const result = await getSessions(projectName, 10, 0);
+    expect(result.sessions.find(session => session.id === sid)?.summary).toBe('Concise agent title');
+  });
+
   it('returns sessions sorted by lastActivity desc', async () => {
     const sid1 = 'sess-older';
     const sid2 = 'sess-newer';
