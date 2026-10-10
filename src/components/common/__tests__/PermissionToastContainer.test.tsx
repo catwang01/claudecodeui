@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import { vi } from 'vitest';
 import React from 'react';
 import { PermissionToastContainer } from '../PermissionToastContainer';
@@ -81,4 +81,36 @@ test('shows at most 3 toasts and a collapsed row for the rest', async () => {
   );
   expect(await screen.findAllByRole('button', { name: /close/i })).toHaveLength(3);
   expect(await screen.findByText(/and 1 more/i)).toBeInTheDocument();
+});
+
+test('auto-dismiss hides the toast without clearing the pending request', async () => {
+  vi.useFakeTimers();
+
+  function PendingRequestCount() {
+    const { awaitingPermissionSessions } = useAwaitingPermissions();
+    return <div data-testid="pending-count">{awaitingPermissionSessions.get('session-2')?.length ?? 0}</div>;
+  }
+
+  render(
+    <AwaitingPermissionProvider>
+      <Seeder sessions={[{ id: 'session-2', toolName: 'AskUserQuestion', requestId: 'req-1' }]} />
+      <PendingRequestCount />
+      <PermissionToastContainer
+        selectedSessionId="session-1"
+        getSessionName={() => 'Background'}
+        onNavigate={vi.fn()}
+      />
+    </AwaitingPermissionProvider>,
+  );
+
+  expect(screen.getByText('Background')).toBeInTheDocument();
+  expect(screen.getByTestId('pending-count')).toHaveTextContent('1');
+
+  act(() => {
+    vi.advanceTimersByTime(8000);
+  });
+
+  expect(screen.queryByText('Background')).not.toBeInTheDocument();
+  expect(screen.getByTestId('pending-count')).toHaveTextContent('1');
+  vi.useRealTimers();
 });

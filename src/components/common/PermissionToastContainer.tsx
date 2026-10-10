@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useAwaitingPermissions } from '../../contexts/AwaitingPermissionContext';
 import { PermissionToast } from './PermissionToast';
 
@@ -14,11 +15,16 @@ export function PermissionToastContainer({
   getSessionName,
   onNavigate,
 }: PermissionToastContainerProps) {
-  const { awaitingPermissionSessions, clearSession, clearByRequestId } = useAwaitingPermissions();
+  const { awaitingPermissionSessions } = useAwaitingPermissions();
+  const [dismissedRequestIds, setDismissedRequestIds] = useState<Set<string>>(() => new Set());
 
-  const backgroundSessions = [...awaitingPermissionSessions.entries()].filter(
-    ([sessionId]) => sessionId !== selectedSessionId,
-  );
+  const backgroundSessions = [...awaitingPermissionSessions.entries()]
+    .filter(([sessionId]) => sessionId !== selectedSessionId)
+    .map(([sessionId, entries]) => [
+      sessionId,
+      entries.filter((entry) => !dismissedRequestIds.has(entry.requestId)),
+    ] as const)
+    .filter(([, entries]) => entries.length > 0);
 
   if (backgroundSessions.length === 0) return null;
 
@@ -42,11 +48,11 @@ export function PermissionToastContainer({
             toolName={firstEntry.toolName}
             onNavigate={() => onNavigate(sessionId)}
             onDismiss={() => {
-              if (firstEntry.requestId) {
-                clearByRequestId(firstEntry.requestId);
-              } else {
-                clearSession(sessionId);
-              }
+              setDismissedRequestIds((previous) => {
+                const next = new Set(previous);
+                next.add(firstEntry.requestId);
+                return next;
+              });
             }}
           />
         );
