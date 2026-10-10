@@ -378,6 +378,7 @@ export function useChatComposerState({
     showFileDropdown,
     filteredFiles,
     selectedFileIndex,
+    activeFileMentions,
     renderInputWithMentions,
     selectFile,
     setCursorPosition,
@@ -586,6 +587,7 @@ export function useChatComposerState({
         }
       }
 
+      let uploadedFiles: Array<{ name: string; path: string }> = [];
       if (attachedFiles.length > 0) {
         const formData = new FormData();
         attachedFiles.forEach((file) => {
@@ -600,7 +602,8 @@ export function useChatComposerState({
             throw new Error('Failed to upload files');
           }
           const result = await response.json();
-          const paths = (result.files ?? [])
+          uploadedFiles = result.files ?? [];
+          const paths = uploadedFiles
             .map((f: { path: string }) => `- ${f.path}`)
             .join('\n');
           messageContent = `${messageContent}\n\nAttached files:\n${paths}`;
@@ -735,6 +738,10 @@ export function useChatComposerState({
             model: copilotModel,
             sessionSummary,
             permissionMode,
+            toolsSettings,
+            images: uploadedImages,
+            files: uploadedFiles,
+            references: activeFileMentions,
           },
         });
       } else if (provider === 'gemini') {
@@ -793,6 +800,7 @@ export function useChatComposerState({
       selectedSession,
       attachedImages,
       attachedFiles,
+      activeFileMentions,
       claudeModel,
       codexModel,
       copilotModel,
