@@ -6,7 +6,7 @@ import rehypeKatex from 'rehype-katex';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { useTranslation } from 'react-i18next';
-import { normalizeInlineCodeFences } from '../../utils/chatFormatting';
+import { normalizeInlineCodeFences, normalizeLatexDelimiters } from '../../utils/chatFormatting';
 import { copyTextToClipboard } from '../../../../utils/clipboard';
 
 type MarkdownProps = {
@@ -144,7 +144,7 @@ const markdownComponents = {
 };
 
 export function Markdown({ children, className }: MarkdownProps) {
-  const content = normalizeInlineCodeFences(String(children ?? ''));
+  const content = normalizeLatexDelimiters(normalizeInlineCodeFences(String(children ?? '')));
   const remarkPlugins = useMemo(() => [remarkGfm, remarkMath], []);
   const rehypePlugins = useMemo(() => [rehypeKatex], []);
 

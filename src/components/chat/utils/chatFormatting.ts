@@ -17,6 +17,29 @@ export function normalizeInlineCodeFences(text: string) {
   }
 }
 
+function normalizeLatexChunk(text: string) {
+  return text
+    .replace(/\\\[([\s\S]*?)\\\]/g, (_, formula: string) => `$$\n${formula.trim()}\n$$`)
+    .replace(/\\\(([\s\S]*?)\\\)/g, (_, formula: string) => `$${formula.trim()}$`);
+}
+
+export function normalizeLatexDelimiters(text: string) {
+  if (!text || typeof text !== 'string') return text;
+
+  const codePattern = /(`{1,})([\s\S]*?)\1/g;
+  let result = '';
+  let cursor = 0;
+
+  for (const match of text.matchAll(codePattern)) {
+    const index = match.index ?? 0;
+    result += normalizeLatexChunk(text.slice(cursor, index));
+    result += match[0];
+    cursor = index + match[0].length;
+  }
+
+  return result + normalizeLatexChunk(text.slice(cursor));
+}
+
 export function preserveLiteralBackslashes(text: string) {
   // WebSocket and JSON parsing have already decoded transport escapes.
   // Decoding again here corrupts Windows paths such as \tests into a tab.
