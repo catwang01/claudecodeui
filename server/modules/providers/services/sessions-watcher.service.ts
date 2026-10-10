@@ -6,7 +6,7 @@ import { ALL_SYNCHRONIZERS } from '../registry.js';
 type BroadcastFn = (message: Record<string, unknown>) => void;
 type GetProjectsFn = () => Promise<unknown[]>;
 
-let watcher: FSWatcher | null = null;
+let watchers: FSWatcher[] = [];
 let pendingUpdate: {
   changeTypes: string[];
   providers: string[];
@@ -92,20 +92,6 @@ export function initializeSessionsWatcher(opts: {
 
   if (allPaths.length === 0) return;
 
-  watcher = chokidar.watch(allPaths, {
-    persistent: true,
-    ignoreInitial: true,
-    ignored: (filePath) => {
-      const resolvedPath = path.resolve(filePath);
-      const isExplicitlyWatched = allPaths.some((watchPath) => {
-        const resolvedWatchPath = path.resolve(watchPath);
-        return resolvedPath === resolvedWatchPath
-          || resolvedPath.startsWith(`${resolvedWatchPath}${path.sep}`);
-      });
-      return !isExplicitlyWatched && /(^|[/\\])\../.test(filePath);
-    },
-  });
-
   const onUpdate = (changeType: string, filePath: string): void => {
     const provider = providerForFile(filePath);
     if (!filePath.endsWith('.jsonl') && !filePath.endsWith('.json')) return;
@@ -116,17 +102,33 @@ export function initializeSessionsWatcher(opts: {
       .catch((err) => console.error('[sessions-watcher] onUpdate error:', err));
   };
 
-  watcher
-    .on('add', (fp) => onUpdate('add', fp))
-    .on('change', (fp) => onUpdate('change', fp))
-    .on('unlink', (fp) => onUpdate('unlink', fp));
+  watchers = ALL_SYNCHRONIZERS.map((synchronizer) => {
+    const watcher = chokidar.watch(synchronizer.watchPaths, {
+      persistent: true,
+      ignoreInitial: true,
+      ...(synchronizer.provider === 'copilot' ? { depth: 1 } : {}),
+      ignored: (filePath) => {
+        const resolvedPath = path.resolve(filePath);
+        const isExplicitlyWatched = synchronizer.watchPaths.some((watchPath) => {
+          const resolvedWatchPath = path.resolve(watchPath);
+          return resolvedPath === resolvedWatchPath
+            || resolvedPath.startsWith(`${resolvedWatchPath}${path.sep}`);
+        });
+        return !isExplicitlyWatched && /(^|[/\\])\../.test(filePath);
+      },
+    });
+
+    watcher
+      .on('add', (fp) => onUpdate('add', fp))
+      .on('change', (fp) => onUpdate('change', fp))
+      .on('unlink', (fp) => onUpdate('unlink', fp));
+    return watcher;
+  });
 }
 
 export async function closeSessionsWatcher(): Promise<void> {
   if (flushTimer) clearTimeout(flushTimer);
   if (maxWaitTimer) clearTimeout(maxWaitTimer);
-  if (watcher) {
-    await watcher.close();
-    watcher = null;
-  }
+  await Promise.all(watchers.map((watcher) => watcher.close()));
+  watchers = [];
 }

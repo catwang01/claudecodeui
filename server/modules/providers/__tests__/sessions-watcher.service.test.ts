@@ -24,15 +24,23 @@ vi.mock('chokidar', () => ({
 }));
 
 vi.mock('../registry.js', () => ({
-  ALL_SYNCHRONIZERS: [{
-    provider: 'copilot',
-    watchPaths: [
-      'C:\\Users\\test\\.copilot\\session-state',
-      'C:\\Users\\test\\.copilot\\session-store.db',
-    ],
-    synchronize: mocks.synchronize,
-    synchronizeFile: vi.fn(),
-  }],
+  ALL_SYNCHRONIZERS: [
+    {
+      provider: 'claude',
+      watchPaths: ['C:\\Users\\test\\.claude\\projects'],
+      synchronize: vi.fn(),
+      synchronizeFile: vi.fn(),
+    },
+    {
+      provider: 'copilot',
+      watchPaths: [
+        'C:\\Users\\test\\.copilot\\session-state',
+        'C:\\Users\\test\\.copilot\\session-store.db',
+      ],
+      synchronize: mocks.synchronize,
+      synchronizeFile: vi.fn(),
+    },
+  ],
 }));
 
 vi.mock('../services/session-synchronizer.service.js', () => ({
@@ -77,6 +85,25 @@ describe('sessions watcher', () => {
     await Promise.resolve();
 
     expect(mocks.synchronizeSessions).not.toHaveBeenCalled();
+  });
+
+  it('limits Copilot watcher traversal to native session files', () => {
+    initializeSessionsWatcher({
+      getProjects: vi.fn().mockResolvedValue([]),
+      broadcast: vi.fn(),
+    });
+
+    expect(mocks.watch).toHaveBeenCalledWith(
+      [
+        'C:\\Users\\test\\.copilot\\session-state',
+        'C:\\Users\\test\\.copilot\\session-store.db',
+      ],
+      expect.objectContaining({ depth: 1 })
+    );
+    expect(mocks.watch).toHaveBeenCalledWith(
+      ['C:\\Users\\test\\.claude\\projects'],
+      expect.not.objectContaining({ depth: expect.anything() })
+    );
   });
 
   it('ignores Copilot session database writes', async () => {
