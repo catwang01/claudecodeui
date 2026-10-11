@@ -138,9 +138,11 @@ export function useSidebarController({
   }, []);
 
   useEffect(() => {
-    setAdditionalSessions({});
-    setInitialSessionsLoaded(new Set());
-    setProjectHasMoreOverrides({});
+    // Bail out with the same reference when already empty so a projects reference
+    // change cannot turn into an extra (or runaway) render.
+    setAdditionalSessions((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+    setInitialSessionsLoaded((prev) => (prev.size === 0 ? prev : new Set()));
+    setProjectHasMoreOverrides((prev) => (Object.keys(prev).length === 0 ? prev : {}));
   }, [projects]);
 
   useEffect(() => {

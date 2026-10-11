@@ -26,6 +26,35 @@ type FetchProjectsOptions = {
 
 const serialize = (value: unknown) => JSON.stringify(value ?? null);
 
+export const projectHasChanges = (
+  prevProject: Project,
+  nextProject: Project,
+  includeExternalSessions: boolean,
+): boolean => {
+  const baseChanged =
+    nextProject.name !== prevProject.name ||
+    nextProject.displayName !== prevProject.displayName ||
+    nextProject.fullPath !== prevProject.fullPath ||
+    serialize(nextProject.sessionMeta) !== serialize(prevProject.sessionMeta) ||
+    serialize(nextProject.sessions) !== serialize(prevProject.sessions) ||
+    serialize(nextProject.taskmaster) !== serialize(prevProject.taskmaster);
+
+  if (baseChanged) {
+    return true;
+  }
+
+  if (!includeExternalSessions) {
+    return false;
+  }
+
+  return (
+    serialize(nextProject.cursorSessions) !== serialize(prevProject.cursorSessions) ||
+    serialize(nextProject.codexSessions) !== serialize(prevProject.codexSessions) ||
+    serialize(nextProject.geminiSessions) !== serialize(prevProject.geminiSessions) ||
+    serialize(nextProject.copilotSessions) !== serialize(prevProject.copilotSessions)
+  );
+};
+
 export const projectsHaveChanges = (
   prevProjects: Project[],
   nextProjects: Project[],
@@ -40,29 +69,55 @@ export const projectsHaveChanges = (
     if (!prevProject) {
       return true;
     }
+    return projectHasChanges(prevProject, nextProject, includeExternalSessions);
+  });
+};
 
-    const baseChanged =
-      nextProject.name !== prevProject.name ||
-      nextProject.displayName !== prevProject.displayName ||
-      nextProject.fullPath !== prevProject.fullPath ||
-      serialize(nextProject.sessionMeta) !== serialize(prevProject.sessionMeta) ||
-      serialize(nextProject.sessions) !== serialize(prevProject.sessions) ||
-      serialize(nextProject.taskmaster) !== serialize(prevProject.taskmaster);
+/**
+ * Rebuild the projects array from a `projects_updated` payload, reusing unchanged
+ * project/session object references so React.memo can bail out cheaply.
+ *
+ * Must stay consistent with `projectsHaveChanges`: when that guard reports a change,
+ * the rebuilt array must actually differ in content. If it doesn't, the guard keeps
+ * allocating a fresh array on every pass, re-triggering the projects_updated effect
+ * until React throws "Maximum update depth exceeded".
+ */
+export const mergeProjects = (
+  prevProjects: Project[],
+  updatedProjects: Project[],
+): Project[] => {
+  if (prevProjects.length === 0) {
+    return updatedProjects;
+  }
+  if (!projectsHaveChanges(prevProjects, updatedProjects, true)) {
+    return prevProjects;
+  }
 
-    if (baseChanged) {
-      return true;
+  return updatedProjects.map((nextProject) => {
+    const prevProject = prevProjects.find((p) => p.name === nextProject.name);
+    if (!prevProject) {
+      return nextProject;
     }
-
-    if (!includeExternalSessions) {
-      return false;
+    // Same predicate as the guard above — never return a stale object for a changed project.
+    if (!projectHasChanges(prevProject, nextProject, true)) {
+      return prevProject;
     }
-
-    return (
-      serialize(nextProject.cursorSessions) !== serialize(prevProject.cursorSessions) ||
-      serialize(nextProject.codexSessions) !== serialize(prevProject.codexSessions) ||
-      serialize(nextProject.geminiSessions) !== serialize(prevProject.geminiSessions) ||
-      serialize(nextProject.copilotSessions) !== serialize(prevProject.copilotSessions)
-    );
+    // Project changed — but preserve stable refs for individual sessions that didn't change,
+    // so React.memo on SidebarSessionItem can bail out for the untouched sessions.
+    if (nextProject.sessions && prevProject.sessions) {
+      const prevSessionMap = new Map(prevProject.sessions.map((s) => [s.id, s]));
+      const stableSessions = nextProject.sessions.map((nextSess) => {
+        const prevSess = prevSessionMap.get(nextSess.id);
+        // Full content compare, so the rebuilt array still serializes equal to
+        // nextProject.sessions and the guard converges on the next pass.
+        if (prevSess && serialize(prevSess) === serialize(nextSess)) {
+          return prevSess;
+        }
+        return nextSess;
+      });
+      return { ...nextProject, sessions: stableSessions };
+    }
+    return nextProject;
   });
 };
 
@@ -312,54 +367,7 @@ export function useProjectsState({
       return;
     }
 
-    setProjects((prevProjects) => {
-      if (prevProjects.length === 0) return updatedProjects;
-      if (!projectsHaveChanges(prevProjects, updatedProjects, true)) return prevProjects;
-      // Preserve stable object references for unchanged projects.
-      // React.memo on SidebarProjectItem uses reference equality on the `project` prop,
-      // so unchanged projects bail out cheaply instead of re-rendering ~200 session items.
-      return updatedProjects.map((nextProject) => {
-        const prevProject = prevProjects.find((p) => p.name === nextProject.name);
-        if (!prevProject) return nextProject;
-        // Quick field check: reuse old reference if nothing material changed
-        const sessionsUnchanged =
-          nextProject.sessions?.length === prevProject.sessions?.length &&
-          nextProject.sessions?.[0]?.id === prevProject.sessions?.[0]?.id &&
-          nextProject.sessions?.[0]?.lastActivity === prevProject.sessions?.[0]?.lastActivity &&
-          nextProject.sessions?.[0]?.messageCount === prevProject.sessions?.[0]?.messageCount;
-        const unchanged =
-          nextProject.displayName === prevProject.displayName &&
-          nextProject.fullPath === prevProject.fullPath &&
-          sessionsUnchanged &&
-          serialize(nextProject.cursorSessions) === serialize(prevProject.cursorSessions) &&
-          serialize(nextProject.codexSessions) === serialize(prevProject.codexSessions) &&
-          serialize(nextProject.geminiSessions) === serialize(prevProject.geminiSessions) &&
-          serialize(nextProject.copilotSessions) === serialize(prevProject.copilotSessions) &&
-          serialize(nextProject.sessionMeta) === serialize(prevProject.sessionMeta);
-        if (unchanged) return prevProject;
-        // Project changed — but preserve stable refs for individual sessions that didn't change.
-        // This lets React.memo on SidebarSessionItem bail out for the unchanged sessions.
-        if (nextProject.sessions && prevProject.sessions) {
-          const prevSessionMap = new Map(prevProject.sessions.map((s) => [s.id, s]));
-          const stableSessions = nextProject.sessions.map((nextSess) => {
-            const prevSess = prevSessionMap.get(nextSess.id);
-            if (!prevSess) return nextSess;
-            if (
-              prevSess.lastActivity === nextSess.lastActivity &&
-              prevSess.messageCount === nextSess.messageCount &&
-              prevSess.title === nextSess.title &&
-              prevSess.isRead === nextSess.isRead &&
-              prevSess.summary === nextSess.summary
-            ) {
-              return prevSess; // Stable reference — session content unchanged
-            }
-            return nextSess;
-          });
-          return { ...nextProject, sessions: stableSessions };
-        }
-        return nextProject;
-      });
-    });
+    setProjects((prevProjects) => mergeProjects(prevProjects, updatedProjects));
 
     if (!selectedProject) {
       return;
@@ -514,12 +522,7 @@ export function useProjectsState({
       }
 
       if (isMobile) {
-        const sessionProjectName = session.__projectName;
-        const currentProjectName = selectedProject?.name;
-
-        if (sessionProjectName !== currentProjectName) {
-          setSidebarOpen(false);
-        }
+        setSidebarOpen(false);
       }
 
       navigate(`/session/${session.id}`);
