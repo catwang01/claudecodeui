@@ -292,7 +292,9 @@ router.get('/auto-doc', async (req, res) => {
     const hideAutoDocRaw = appConfigDb.get('auto_doc_hide_sessions');
     const hideAutoDoc = hideAutoDocRaw === null ? true : hideAutoDocRaw === 'true';
     const model = appConfigDb.get('auto_doc_model') || AUTO_DOC_DEFAULT_MODEL;
-    res.json({ intervalMs, prompt, minMessageCount, hideAutoDoc, model });
+    const enabledRaw = appConfigDb.get('auto_doc_enabled');
+    const enabled = enabledRaw === null ? true : enabledRaw === 'true';
+    res.json({ intervalMs, prompt, minMessageCount, hideAutoDoc, model, enabled });
   } catch (error) {
     console.error('Error fetching auto-doc config:', error);
     res.status(500).json({ error: 'Failed to fetch auto-doc config' });
@@ -301,7 +303,7 @@ router.get('/auto-doc', async (req, res) => {
 
 router.put('/auto-doc', async (req, res) => {
   try {
-    const { intervalMs, prompt, minMessageCount, hideAutoDoc, model } = req.body;
+    const { intervalMs, prompt, minMessageCount, hideAutoDoc, model, enabled } = req.body;
 
     if (intervalMs != null) {
       const ms = parseInt(intervalMs, 10);
@@ -330,6 +332,10 @@ router.put('/auto-doc', async (req, res) => {
       appConfigDb.set('auto_doc_hide_sessions', hideAutoDoc ? 'true' : 'false');
     }
 
+    if (enabled != null) {
+      appConfigDb.set('auto_doc_enabled', enabled ? 'true' : 'false');
+    }
+
     if (model != null) {
       if (typeof model !== 'string' || !model.trim()) {
         return res.status(400).json({ error: 'model must be a non-empty string' });
@@ -342,7 +348,9 @@ router.put('/auto-doc', async (req, res) => {
     const savedMinMessageCount = parseInt(appConfigDb.get('auto_doc_min_message_count'), 10) || AUTO_DOC_DEFAULT_MIN_MESSAGE_COUNT;
     const savedHideAutoDoc = appConfigDb.get('auto_doc_hide_sessions') === 'true';
     const savedModel = appConfigDb.get('auto_doc_model') || AUTO_DOC_DEFAULT_MODEL;
-    res.json({ success: true, intervalMs: savedIntervalMs, prompt: savedPrompt, minMessageCount: savedMinMessageCount, hideAutoDoc: savedHideAutoDoc, model: savedModel });
+    const savedEnabledRaw = appConfigDb.get('auto_doc_enabled');
+    const savedEnabled = savedEnabledRaw === null ? true : savedEnabledRaw === 'true';
+    res.json({ success: true, intervalMs: savedIntervalMs, prompt: savedPrompt, minMessageCount: savedMinMessageCount, hideAutoDoc: savedHideAutoDoc, model: savedModel, enabled: savedEnabled });
   } catch (error) {
     console.error('Error saving auto-doc config:', error);
     res.status(500).json({ error: 'Failed to save auto-doc config' });

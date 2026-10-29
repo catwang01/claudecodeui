@@ -216,6 +216,8 @@
   "autoDoc": {
     "title": "自动文档生成",
     "description": "配置定期在 Claude 会话上运行的后台自动化任务。",
+    "enabledLabel": "启用自动文档生成",
+    "enabledDescription": "对会话运行后台自动文档生成。",
     "intervalLabel": "运行间隔",
     "intervalDescription": "处理近期会话的频率。",
     "promptLabel": "Agent 提示词",

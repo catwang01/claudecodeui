@@ -25,6 +25,7 @@ export default function AutomationsSettingsTab() {
   const [minMessageCount, setMinMessageCount] = useState(DEFAULT_MIN_MESSAGE_COUNT);
   const [hideAutoDoc, setHideAutoDoc] = useState(true);
   const [model, setModel] = useState(DEFAULT_MODEL);
+  const [enabled, setEnabled] = useState(true);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'success' | 'error' | null>(null);
@@ -38,6 +39,7 @@ export default function AutomationsSettingsTab() {
         if (data.minMessageCount) setMinMessageCount(data.minMessageCount);
         if (data.model) setModel(data.model);
         setHideAutoDoc(!!data.hideAutoDoc);
+        setEnabled(data.enabled !== false);
       })
       .catch(() => {/* use defaults */})
       .finally(() => setLoading(false));
@@ -50,7 +52,7 @@ export default function AutomationsSettingsTab() {
       const res = await authenticatedFetch('/api/settings/auto-doc', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ intervalMs, prompt, minMessageCount, hideAutoDoc, model }),
+        body: JSON.stringify({ intervalMs, prompt, minMessageCount, hideAutoDoc, model, enabled }),
       });
       if (res.ok) {
         setSaveStatus('success');
@@ -84,6 +86,35 @@ export default function AutomationsSettingsTab() {
       </div>
 
       <div className="space-y-5 bg-card border border-border rounded-lg p-4">
+        <div className="flex items-center justify-between gap-4">
+          <div className="space-y-1 flex-1">
+            <label className="text-sm font-medium text-foreground" htmlFor="auto-doc-enabled">
+              {t('autoDoc.enabledLabel')}
+            </label>
+            <p className="text-xs text-muted-foreground">{t('autoDoc.enabledDescription')}</p>
+          </div>
+          <button
+            id="auto-doc-enabled"
+            type="button"
+            role="switch"
+            aria-checked={enabled}
+            onClick={() => setEnabled(prev => !prev)}
+            className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${
+              enabled ? 'bg-primary' : 'bg-input'
+            }`}
+          >
+            <span
+              className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-background shadow-lg transition-transform ${
+                enabled ? 'translate-x-4' : 'translate-x-0'
+              }`}
+            />
+          </button>
+        </div>
+
+        <fieldset
+          disabled={!enabled}
+          className={`space-y-5 transition-opacity ${enabled ? '' : 'opacity-50'}`}
+        >
         <div className="space-y-2">
           <label className="text-sm font-medium text-foreground" htmlFor="auto-doc-interval">
             {t('autoDoc.intervalLabel')}
@@ -171,6 +202,8 @@ export default function AutomationsSettingsTab() {
             />
           </button>
         </div>
+
+        </fieldset>
 
         <div className="flex items-center gap-3">
           <button

@@ -39,7 +39,9 @@ function getConfig() {
   const prompt = appConfigDb.get('auto_doc_prompt') || DEFAULT_PROMPT;
   const minMessageCount = parseInt(appConfigDb.get('auto_doc_min_message_count'), 10) || DEFAULT_MIN_SESSION_MSG_COUNT;
   const model = appConfigDb.get('auto_doc_model') || DEFAULT_MODEL;
-  return { intervalMs, prompt, minMessageCount, model };
+  const enabledRaw = appConfigDb.get('auto_doc_enabled');
+  const enabled = enabledRaw === null ? true : enabledRaw === 'true';
+  return { intervalMs, prompt, minMessageCount, model, enabled };
 }
 
 // ─── Candidate selection ──────────────────────────────────────────────────────
@@ -239,15 +241,21 @@ export function startAutoDocTimer() {
   const fire = () =>
     runBatch().catch(err => console.warn('[AutoDoc] Batch error:', err.message));
 
+  // Re-read enabled on every tick so a toggle from Settings takes effect without a restart.
+  const tick = () => {
+    if (!getConfig().enabled) return;
+    return fire();
+  };
+
   // Recursive setTimeout so that interval changes in settings take effect on the next cycle
   function scheduleNext() {
     const { intervalMs } = getConfig();
-    setTimeout(async () => { await fire(); scheduleNext(); }, intervalMs);
+    setTimeout(async () => { await tick(); scheduleNext(); }, intervalMs);
   }
 
-  fire(); // Run immediately on startup
+  tick(); // Run immediately on startup (skipped when disabled)
   scheduleNext();
 
-  const { intervalMs } = getConfig();
-  console.log(`[AutoDoc] Timer started (interval: ${intervalMs / 1000}s)`);
+  const { intervalMs, enabled } = getConfig();
+  console.log(`[AutoDoc] Timer started (interval: ${intervalMs / 1000}s, enabled: ${enabled})`);
 }
