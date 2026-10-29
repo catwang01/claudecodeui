@@ -300,3 +300,191 @@ describe('queryClaudeSDK — executable path mapping', () => {
     }
   });
 });
+
+describe('queryClaudeSDK — result-based completion', () => {
+  let queryClaudeSDK;
+  let mockQuery;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.resetModules();
+    const sdkMod = await import('@anthropic-ai/claude-agent-sdk');
+    mockQuery = sdkMod.query;
+    const mod = await import('./claude-sdk.js');
+    queryClaudeSDK = mod.queryClaudeSDK;
+  });
+
+  function makeAssistantMessage(text) {
+    return {
+      type: 'assistant',
+      session_id: FAKE_SESSION,
+      uuid: `msg-${Math.random()}`,
+      parent_tool_use_id: null,
+      message: {
+        role: 'assistant',
+        model: 'claude-sonnet-4-6',
+        content: [{ type: 'text', text }],
+      },
+    };
+  }
+
+  it('treats a stream that drains without a result message as a failure (no complete)', async () => {
+    mockQuery.mockImplementation(() => makeAsyncIterable([
+      makeAssistantMessage('Working on it.'),
+    ]));
+
+    const { ws, sent } = makeWs();
+    await queryClaudeSDK('do something', { sessionId: FAKE_SESSION, cwd: '/tmp' }, ws);
+
+    // A missing result means "iterator drained", not "turn completed" — no retry loop spin
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+
+    const errorMsgs = sent.filter(m => m.kind === 'error');
+    expect(errorMsgs).toHaveLength(1);
+    expect(errorMsgs[0].content).toMatch(/without reporting a result/i);
+
+    // Must not report a misleading success
+    expect(sent.find(m => m.kind === 'complete')).toBeUndefined();
+  });
+
+  it('treats an error-subtype result as a failure and surfaces its errors[]', async () => {
+    mockQuery.mockImplementation(() => makeAsyncIterable([
+      makeAssistantMessage('Working on it.'),
+      {
+        type: 'result',
+        subtype: 'error_max_turns',
+        is_error: true,
+        num_turns: 20,
+        terminal_reason: 'max_turns',
+        errors: ['Reached maximum number of turns (20)'],
+        session_id: FAKE_SESSION,
+        uuid: 'result-err',
+        modelUsage: {},
+      },
+    ]));
+
+    const { ws, sent } = makeWs();
+    await queryClaudeSDK('do something', { sessionId: FAKE_SESSION, cwd: '/tmp' }, ws);
+
+    const errorMsgs = sent.filter(m => m.kind === 'error');
+    expect(errorMsgs).toHaveLength(1);
+    expect(errorMsgs[0].content).toContain('Reached maximum number of turns');
+
+    expect(sent.find(m => m.kind === 'complete')).toBeUndefined();
+  });
+
+  it('treats a success-subtype result with is_error as a failure', async () => {
+    mockQuery.mockImplementation(() => makeAsyncIterable([
+      {
+        type: 'result',
+        subtype: 'success',
+        is_error: true,
+        result: 'API Error: overloaded',
+        session_id: FAKE_SESSION,
+        uuid: 'result-apierr',
+        modelUsage: {},
+      },
+    ]));
+
+    const { ws, sent } = makeWs();
+    await queryClaudeSDK('do something', { sessionId: FAKE_SESSION, cwd: '/tmp' }, ws);
+
+    const errorMsgs = sent.filter(m => m.kind === 'error');
+    expect(errorMsgs).toHaveLength(1);
+    expect(errorMsgs[0].content).toContain('API Error: overloaded');
+
+    expect(sent.find(m => m.kind === 'complete')).toBeUndefined();
+  });
+});
+
+describe('queryClaudeSDK — SDK-wrapped stream errors', () => {
+  let queryClaudeSDK;
+  let mockQuery;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.resetModules();
+    const sdkMod = await import('@anthropic-ai/claude-agent-sdk');
+    mockQuery = sdkMod.query;
+    const mod = await import('./claude-sdk.js');
+    queryClaudeSDK = mod.queryClaudeSDK;
+  });
+
+  // An abnormal CLI exit surfaces as a thrown `Error` carrying the last error-result
+  // text — the iterator rejects instead of yielding a result message.
+  function makeThrowingStream(errorMessage) {
+    return (async function* () {
+      yield {
+        type: 'assistant',
+        session_id: FAKE_SESSION,
+        uuid: 'msg-partial',
+        parent_tool_use_id: null,
+        message: {
+          role: 'assistant',
+          model: 'claude-sonnet-4-6',
+          content: [{ type: 'text', text: 'partial response' }],
+        },
+      };
+      throw new Error(errorMessage);
+    })();
+  }
+
+  const SDK_STREAM_ERROR =
+    'Claude Code returned an error result: API Error: Stream error: error decoding response body';
+
+  it('retries the SDK-wrapped stream error, then succeeds', async () => {
+    let callCount = 0;
+    mockQuery.mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) return makeThrowingStream(SDK_STREAM_ERROR);
+      return makeAsyncIterable([makeResultMessage()]);
+    });
+
+    const { ws, sent } = makeWs();
+    await queryClaudeSDK('do something', { sessionId: FAKE_SESSION, cwd: '/tmp' }, ws);
+
+    expect(callCount).toBe(2);
+    expect(mockQuery.mock.calls[1][0].options.resume).toBe(FAKE_SESSION);
+
+    expect(sent.find(m => m.kind === 'status' && m.text === 'stall_retry')).toBeDefined();
+    expect(sent.find(m => m.kind === 'error')).toBeUndefined();
+    expect(sent.find(m => m.kind === 'complete')?.exitCode).toBe(0);
+  });
+
+  it('gives up after MAX_STALL_RETRIES and surfaces the error once (no complete)', async () => {
+    let callCount = 0;
+    mockQuery.mockImplementation(() => {
+      callCount++;
+      return makeThrowingStream(SDK_STREAM_ERROR);
+    });
+
+    const { ws, sent } = makeWs();
+    await expect(
+      queryClaudeSDK('do something', { sessionId: FAKE_SESSION, cwd: '/tmp' }, ws)
+    ).rejects.toThrow(/error decoding response body/);
+
+    // original attempt + MAX_STALL_RETRIES retries
+    expect(callCount).toBe(MAX_STALL_RETRIES + 1);
+
+    const errorMsgs = sent.filter(m => m.kind === 'error');
+    expect(errorMsgs).toHaveLength(1);
+    expect(errorMsgs[0].content).toMatch(/error decoding response body/);
+    expect(sent.find(m => m.kind === 'complete')).toBeUndefined();
+  });
+
+  it('does NOT retry a terminal SDK-wrapped error (e.g. max turns)', async () => {
+    let callCount = 0;
+    mockQuery.mockImplementation(() => {
+      callCount++;
+      return makeThrowingStream('Claude Code returned an error result: Reached maximum number of turns (20)');
+    });
+
+    const { ws, sent } = makeWs();
+    await expect(
+      queryClaudeSDK('do something', { sessionId: FAKE_SESSION, cwd: '/tmp' }, ws)
+    ).rejects.toThrow(/maximum number of turns/);
+
+    expect(callCount).toBe(1);
+    expect(sent.filter(m => m.kind === 'error')).toHaveLength(1);
+  });
+});

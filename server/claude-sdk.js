@@ -442,6 +442,21 @@ function extractTokenBudget(resultMessage) {
 }
 
 /**
+ * Builds a user-facing message from an SDK error result.
+ * @param {Object} resultMessage - SDK result message with an error subtype
+ * @returns {string}
+ */
+function describeResultError(resultMessage) {
+  if (Array.isArray(resultMessage.errors) && resultMessage.errors.length > 0) {
+    return resultMessage.errors.join('; ');
+  }
+  if (typeof resultMessage.result === 'string' && resultMessage.result.trim()) {
+    return resultMessage.result;
+  }
+  return `The agent stopped early (${resultMessage.subtype}).`;
+}
+
+/**
  * Handles image processing for SDK queries
  * Saves base64 images to temporary files and returns modified prompt with file paths
  * @param {string} command - Original user prompt
@@ -745,6 +760,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
     while (true) {
       let hasContextMgmtError = false;
       let hasApiStreamError = false;
+      let lastResult = null;
       const abortController = new AbortController();
       const queryEnv = {
         ...sdkOptions.env,
@@ -957,6 +973,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
       // Extract and send token budget updates from result messages
       if (message.type === 'result') {
+        lastResult = message;
         const models = Object.keys(message.modelUsage || {});
         if (models.length > 0) {
           // Model info available in result message
@@ -980,10 +997,22 @@ async function queryClaudeSDK(command, options = {}, ws) {
         if (isUserAbort) userAborted = true;
         const isStall = forAwaitError.name === 'AbortError' && !isUserAbort;
 
-        if (isStall && stallRetryCount < MAX_STALL_RETRIES) {
+        // The SDK replaces a CLI process/stream failure with
+        // `Claude Code returned an error result: <text>` (text = the last error-result message).
+        // Only the transient stream/API flavours are worth retrying; terminal ones
+        // (max turns, auth) must not spin. Shares the stall retry budget.
+        const sdkErrMessage = typeof forAwaitError.message === 'string' ? forAwaitError.message : '';
+        const isSdkStreamError = !isUserAbort
+          && sdkErrMessage.startsWith('Claude Code returned an error result:')
+          && /stream error|error decoding response body|overloaded|connection error|econnreset|socket hang up|premature close|stream closed/i.test(sdkErrMessage);
+
+        if ((isStall || isSdkStreamError) && stallRetryCount < MAX_STALL_RETRIES) {
           stallRetryCount++;
-          console.warn(`[STALL-RETRY] Session ${capturedSessionId} stalled (no stream activity for ${STALL_TIMEOUT_MS}ms), retry ${stallRetryCount}/${MAX_STALL_RETRIES}`);
-          ws.send(createNormalizedMessage({ kind: 'status', text: 'stall_retry', retryCount: stallRetryCount, maxRetries: MAX_STALL_RETRIES, errorMessage: `Stream stalled for ${STALL_TIMEOUT_MS / 1000}s`, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+          const reason = isStall
+            ? `Stream stalled for ${STALL_TIMEOUT_MS / 1000}s`
+            : `SDK stream error: ${sdkErrMessage.slice('Claude Code returned an error result: '.length)}`;
+          console.warn(`[STALL-RETRY] Session ${capturedSessionId} ${isStall ? 'stalled' : 'hit SDK stream error'}, retry ${stallRetryCount}/${MAX_STALL_RETRIES}`);
+          ws.send(createNormalizedMessage({ kind: 'status', text: 'stall_retry', retryCount: stallRetryCount, maxRetries: MAX_STALL_RETRIES, errorMessage: reason, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
           continue; // retry with resume
         }
 
@@ -1034,6 +1063,33 @@ async function queryClaudeSDK(command, options = {}, ws) {
       } else if (hasApiStreamError) {
         retryExhausted = true;
         ws.send(createNormalizedMessage({ kind: 'error', content: 'Stream idle timeout after retries. Please try again.', sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+      }
+
+      // The SDK contract is "exactly one result message per turn" — that result is the
+      // turn-complete signal, not the iterator draining. A stream that ends with no result
+      // at all, or with a result carrying an error subtype, is a failed run even though
+      // `for await` completed cleanly (see claude-agent-sdk-typescript#427 and #339).
+      if (!retryExhausted) {
+        if (!lastResult) {
+          retryExhausted = true;
+          console.warn(`[RESULT-MISSING] Session ${capturedSessionId} stream ended without a result message — treating as failure`);
+          ws.send(createNormalizedMessage({
+            kind: 'error',
+            content: 'The agent stopped without reporting a result (it may have hit a turn limit). Please try again.',
+            sessionId: capturedSessionId || sessionId || null,
+            provider: 'claude',
+          }));
+        } else if (lastResult.subtype !== 'success' || lastResult.is_error) {
+          retryExhausted = true;
+          const detail = describeResultError(lastResult);
+          console.warn(`[RESULT-ERROR] Session ${capturedSessionId} ended with ${lastResult.subtype}${lastResult.terminal_reason ? ` (terminal_reason=${lastResult.terminal_reason})` : ''}: ${detail}`);
+          ws.send(createNormalizedMessage({
+            kind: 'error',
+            content: detail,
+            sessionId: capturedSessionId || sessionId || null,
+            provider: 'claude',
+          }));
+        }
       }
 
       // for await completed normally — exit retry loop
