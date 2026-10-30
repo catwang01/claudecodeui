@@ -555,3 +555,46 @@ describe('script gate fields (§7)', () => {
     }
   });
 });
+
+describe('§6.1 built-in Cron precedence', () => {
+  const PREFERENCE_MARKER = 'preferred scheduler for this app';
+
+  function firstSentence(description) {
+    const end = description.indexOf('. ');
+    return end === -1 ? description : description.slice(0, end + 1);
+  }
+
+  it('states the precedence note in the first sentence of all eight descriptions', () => {
+    const { tools } = setup();
+
+    expect(tools).toHaveLength(8);
+    for (const definition of tools) {
+      const sentence = firstSentence(definition.description);
+      expect(sentence, definition.name).toContain(PREFERENCE_MARKER);
+      expect(sentence, definition.name).toContain('CronCreate');
+      expect(sentence, definition.name).toContain('CronList');
+      expect(sentence, definition.name).toContain('CronDelete');
+      expect(sentence, definition.name).toMatch(/do NOT use/);
+    }
+  });
+
+  it('explains on schedule_create why the built-ins must not be used', () => {
+    const { byName } = setup();
+    const description = byName.schedule_create.description;
+
+    expect(description).toMatch(/separate store/i);
+    expect(description).toMatch(/not visible/i);
+    expect(description).toMatch(/7 days|7-day/i);
+  });
+
+  it('keeps the per-tool semantics after the precedence note', () => {
+    const { byName } = setup();
+
+    expect(byName.schedule_list.description).toMatch(/List scheduled tasks/);
+    expect(byName.schedule_get.description).toMatch(/five most recent runs/);
+    expect(byName.schedule_delete.description).toMatch(/Delete a scheduled task/);
+    expect(byName.schedule_run.description).toMatch(/manual trigger/);
+    expect(byName.schedule_pause.description).toMatch(/stops being due/);
+    expect(byName.schedule_resume.description).toMatch(/recompute its next run/);
+  });
+});

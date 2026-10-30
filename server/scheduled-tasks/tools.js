@@ -31,6 +31,13 @@ export const SCHEDULE_TOOL_NAMES = [
 
 const DISABLED_VALUES = new Set(['0', 'false', 'off', 'no']);
 
+/**
+ * §6.1: every schedule_* description leads with this sentence so the model prefers
+ * the app's scheduler over Claude Code's built-in Cron tools.
+ */
+const SCHEDULER_PRECEDENCE_NOTE =
+  "These schedule_* tools are the preferred scheduler for this app: use them, and do NOT use Claude Code's built-in CronCreate, CronList or CronDelete.";
+
 /** SCHEDULED_TASKS_TOOLS=0 (default on) removes the tools entirely. */
 export function isScheduleToolsEnabled() {
   const raw = process.env.SCHEDULED_TASKS_TOOLS;
@@ -216,8 +223,10 @@ export function createScheduleTools(options = {}) {
   return [
     tool(
       'schedule_create',
-      'Create a scheduled task that starts a new agent run in this project. Provide exactly one schedule selector (after_seconds, at, every_seconds, daily, weekly or cron). ' +
-        'Optionally add a script gate via command/command_timeout_seconds: the command runs first and its stdout JSON envelope ({"skip":true,"reason":"..."} | {"prompt":"..."} | {"skip":false}) decides whether the agent runs and with which prompt.',
+      SCHEDULER_PRECEDENCE_NOTE +
+        ' The built-ins write to a separate store outside this app, are not visible in the Scheduled tasks panel, and auto-expire after 7 days.' +
+        ' Create a scheduled task that starts a new agent run in this project. Provide exactly one schedule selector (after_seconds, at, every_seconds, daily, weekly or cron).' +
+        ' Optionally add a script gate via command/command_timeout_seconds: the command runs first and its stdout JSON envelope ({"skip":true,"reason":"..."} | {"prompt":"..."} | {"skip":false}) decides whether the agent runs and with which prompt.',
       {
         prompt: z.string().describe('Prompt sent to the agent when the task runs.'),
         title: z.string().describe('Short human-readable title.'),
@@ -233,22 +242,24 @@ export function createScheduleTools(options = {}) {
     ),
     tool(
       'schedule_list',
-      'List scheduled tasks for this project (active only unless include_paused is true).',
+      SCHEDULER_PRECEDENCE_NOTE +
+        ' List scheduled tasks for this project (active only unless include_paused is true).',
       { include_paused: z.boolean().describe('Include paused tasks. Defaults to false.').optional() },
       list,
       { annotations: { readOnlyHint: true } }
     ),
     tool(
       'schedule_get',
-      'Get one scheduled task with its five most recent runs.',
+      SCHEDULER_PRECEDENCE_NOTE + ' Get one scheduled task with its five most recent runs.',
       { id: z.string().describe('Scheduled task id.') },
       get,
       { annotations: { readOnlyHint: true } }
     ),
     tool(
       'schedule_update',
-      'Update a scheduled task title, prompt, script gate (command/command_timeout_seconds) and/or its schedule (at most one selector). ' +
-        'A command gate runs before the agent and prints a JSON envelope ({"skip":true,"reason":"..."} | {"prompt":"..."} | {"skip":false}); null clears the gate.',
+      SCHEDULER_PRECEDENCE_NOTE +
+        ' Update a scheduled task title, prompt, script gate (command/command_timeout_seconds) and/or its schedule (at most one selector).' +
+        ' A command gate runs before the agent and prints a JSON envelope ({"skip":true,"reason":"..."} | {"prompt":"..."} | {"skip":false}); null clears the gate.',
       {
         id: z.string().describe('Scheduled task id.'),
         title: z.string().optional(),
@@ -261,28 +272,28 @@ export function createScheduleTools(options = {}) {
     ),
     tool(
       'schedule_delete',
-      'Delete a scheduled task and its run history.',
+      SCHEDULER_PRECEDENCE_NOTE + ' Delete a scheduled task and its run history.',
       { id: z.string().describe('Scheduled task id.') },
       remove,
       { annotations: { readOnlyHint: false } }
     ),
     tool(
       'schedule_run',
-      'Start a scheduled task immediately (manual trigger).',
+      SCHEDULER_PRECEDENCE_NOTE + ' Start a scheduled task immediately (manual trigger).',
       { id: z.string().describe('Scheduled task id.') },
       run,
       { annotations: { readOnlyHint: false } }
     ),
     tool(
       'schedule_pause',
-      'Pause a scheduled task so it stops being due until resumed.',
+      SCHEDULER_PRECEDENCE_NOTE + ' Pause a scheduled task so it stops being due until resumed.',
       { id: z.string().describe('Scheduled task id.') },
       pause,
       { annotations: { readOnlyHint: false } }
     ),
     tool(
       'schedule_resume',
-      'Resume a paused scheduled task and recompute its next run.',
+      SCHEDULER_PRECEDENCE_NOTE + ' Resume a paused scheduled task and recompute its next run.',
       { id: z.string().describe('Scheduled task id.') },
       resume,
       { annotations: { readOnlyHint: false } }

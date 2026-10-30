@@ -254,6 +254,38 @@ function matchesToolPermission(entry, toolName, input) {
   return false;
 }
 
+/** §6.1: the built-in Claude Code Cron tools we shadow by default. */
+const BUILTIN_CRON_TOOLS = ['CronCreate', 'CronList', 'CronDelete'];
+
+function isEnvFlagOn(raw) {
+  if (raw === undefined || raw === null) return false;
+  const value = String(raw).toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes' || value === 'on';
+}
+
+/**
+ * §6.1: deny Claude Code's built-in CronCreate/CronList/CronDelete unless the user
+ * opted out (SCHEDULED_TASKS_KEEP_BUILTIN_CRON=1) or our own tools are disabled
+ * (SCHEDULED_TASKS_TOOLS=0 — then the built-ins are left alone so the agent still
+ * has a scheduler).
+ */
+function shouldSuppressBuiltinCron() {
+  if (isEnvFlagOn(process.env.SCHEDULED_TASKS_KEEP_BUILTIN_CRON)) return false;
+  if (!isScheduleToolsEnabled()) return false;
+  return true;
+}
+
+/** Merge (never replace) the configured deny list, de-duplicating. */
+function mergeDisallowedTools(configured) {
+  const list = Array.isArray(configured) ? [...configured] : [];
+  if (shouldSuppressBuiltinCron()) {
+    for (const name of BUILTIN_CRON_TOOLS) {
+      if (!list.includes(name)) list.push(name);
+    }
+  }
+  return list;
+}
+
 /**
  * Maps CLI options to SDK-compatible options format
  * @param {Object} options - CLI options
@@ -321,7 +353,9 @@ export function mapCliOptionsToSDK(options = {}) {
   // but being explicit ensures forward compatibility and clarity.
   sdkOptions.tools = { type: 'preset', preset: 'claude_code' };
 
-  sdkOptions.disallowedTools = settings.disallowedTools || [];
+  // §6.1: shadow Claude Code's built-in Cron tools by default (merged with the
+  // user's configured deny list); SCHEDULED_TASKS_KEEP_BUILTIN_CRON=1 opts out.
+  sdkOptions.disallowedTools = mergeDisallowedTools(settings.disallowedTools);
 
   // Map model (default to claude-sonnet-4.6)
   // Valid models: claude-opus-4.7, claude-opus-4.6, claude-sonnet-4.6, claude-sonnet-4.5, claude-haiku-4.5

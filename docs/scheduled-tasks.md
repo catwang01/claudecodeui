@@ -238,3 +238,25 @@ Existing databases get the columns through `addColumnIfMissing`; existing rows k
 - Web UI: optional "Script gate" section in the task editor (command + timeout + contract
   hint), a marker on cards whose task has a command, a `Skipped` status pill, and script
   output / effective prompt in the run history.
+
+### §6.1 Precedence over Claude Code's built-in Cron tools (added in the fourth iteration)
+
+The `claude_code` tool preset that claudecodeui passes to the SDK also ships Claude Code's
+own **`CronCreate` / `CronList` / `CronDelete`**. Those persist to
+`<project>/.claude/scheduled_tasks.json`, are invisible in the app's Scheduled tasks panel
+and auto-expire after 7 days, so an agent that picks them produces a task the user cannot see.
+The app's own `schedule_*` tools are the authoritative scheduler and must win by default.
+
+Two mechanisms, both required:
+
+1. **Tool descriptions (stated in the MCP schemas).** Every `schedule_*` tool description
+   says, in its first sentence, that these tools are the preferred scheduler for this app and
+   that the built-in `CronCreate` / `CronList` / `CronDelete` must not be used. The
+   `schedule_create` description additionally explains why (separate store, not visible in
+   the UI, 7-day expiry).
+2. **Default enforcement.** `mapCliOptionsToSDK` appends `CronCreate`, `CronList` and
+   `CronDelete` to `sdkOptions.disallowedTools` (merging with, never replacing, the user's
+   configured list and de-duplicating) so the model cannot reach them. Exceptions:
+   - `SCHEDULED_TASKS_KEEP_BUILTIN_CRON=1` restores the built-in tools (escape hatch);
+   - when `SCHEDULED_TASKS_TOOLS=0` (our tools are absent) the built-ins are left alone, so
+     the agent is never left without any scheduler.
