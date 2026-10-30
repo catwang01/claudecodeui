@@ -78,7 +78,7 @@ export default defineConfig(({ mode }) => {
     server: {
       host,
       port: parseInt(env.VITE_PORT) || 5173,
-      allowedHosts: ['claude-test.catwang.top'],
+      allowedHosts: ['claude-test.catwang.top', 'claude-mac.catwang.top', 'edwards-macbook-air.local'],
       warmup: {
         clientFiles: ['./src/main.jsx', './src/**/*.tsx', './src/**/*.ts'],
       },
