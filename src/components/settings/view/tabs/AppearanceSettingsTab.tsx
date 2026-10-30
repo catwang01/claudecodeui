@@ -125,7 +125,7 @@ export default function AppearanceSettingsTab({
           <div className="space-y-4">
             <div>
               <p className="text-sm text-muted-foreground mb-3">
-                Hide projects matching these regex patterns from the sidebar. Patterns are matched against project name, display name, and path.
+                Hide projects matching these regex patterns from the sidebar. Patterns are matched case-insensitively against the project path and its directory name, so an anchored pattern like ^agent.* matches directories named agent-xx.
               </p>
               <div className="flex gap-2">
                 <input

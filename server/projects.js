@@ -70,6 +70,7 @@ import sessionManager from './sessionManager.js';
 import { applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, applyLastAutoDocAt, filterHiddenAutoDocSessions, applyReadState, applyForkParent, appConfigDb, sessionDb, sessionFileCache, userDb, userSettingsDb } from './database/db.js';
 import { projectsDb, sessionsDb } from './modules/database/index.js';
 import { claudeSessionSynchronizer } from './modules/providers/list/claude/claude-session-synchronizer.provider.js';
+import { matchesExcludePattern } from '../shared/excludePatterns.js';
 
 /**
  * Reads project exclude patterns from the first user's settings (server-side).
@@ -88,16 +89,6 @@ function getServerExcludePatterns() {
   } catch {
     return [];
   }
-}
-
-/**
- * Returns true if projectPath matches any of the given exclude patterns.
- */
-function matchesExcludePattern(projectPath, patterns) {
-  if (!patterns.length) return false;
-  return patterns.some(p => {
-    try { return new RegExp(p, 'i').test(projectPath); } catch { return false; }
-  });
 }
 
 async function getProjectGitBranch(projectPath) {
@@ -2865,11 +2856,9 @@ async function searchConversations(query, limit = 50, onProjectResult = null, si
       const projectDir = path.join(claudeDir, projectName);
       const actualDir = await extractProjectDirectory(projectName).catch(() => null);
 
-      if (actualDir && allExcludePatterns.length > 0) {
-        const isExcluded = allExcludePatterns.some((pattern) => {
-          try { return new RegExp(pattern, 'i').test(actualDir); } catch { return false; }
-        });
-        if (isExcluded) { scannedProjects++; continue; }
+      if (actualDir && matchesExcludePattern(actualDir, allExcludePatterns)) {
+        scannedProjects++;
+        continue;
       }
 
       const displayName = (actualDir && projectsDb.getProjectPath(actualDir)?.custom_project_name)
@@ -3486,5 +3475,6 @@ export {
   dedupeCopilotSessionAliases,
   paginateRecentSessionRows,
   paginateForkTrees,
-  invalidateExcludedSessionIdsCache
+  invalidateExcludedSessionIdsCache,
+  matchesExcludePattern
 };

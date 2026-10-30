@@ -7,6 +7,9 @@ import type {
   SessionViewModel,
   SessionWithProvider,
 } from '../types/types';
+import { matchesExcludePattern } from '../../../../shared/excludePatterns';
+
+export { matchesExcludePattern };
 
 export const readProjectSortOrder = (): ProjectSortOrder => {
   try {
@@ -266,28 +269,9 @@ export const filterProjects = (
   // Apply exclude patterns first
   let filtered = projects;
   if (excludePatterns && excludePatterns.length > 0) {
-    filtered = projects.filter((project) => {
-      const displayName = project.displayName || project.name;
-      const projectName = project.name;
-      const projectPath = project.path || project.fullPath || '';
-
-      // Check if project matches any exclude pattern (only match against path)
-      for (const pattern of excludePatterns) {
-        if (!pattern || !pattern.trim()) continue;
-
-        try {
-          const regex = new RegExp(pattern, 'i');
-          if (regex.test(projectPath)) {
-            return false; // Exclude this project
-          }
-        } catch (e) {
-          // Invalid regex pattern, skip it
-          console.warn(`Invalid exclude pattern: ${pattern}`, e);
-        }
-      }
-
-      return true; // Keep this project
-    });
+    filtered = projects.filter(
+      (project) => !matchesExcludePattern(project.path || project.fullPath || '', excludePatterns),
+    );
   }
 
   // Apply search filter
