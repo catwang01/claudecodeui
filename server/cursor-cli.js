@@ -256,7 +256,12 @@ async function spawnCursor(command, options = {}, ws) {
         console.log(`Cursor CLI process exited with code ${code}`);
 
         const finalSessionId = capturedSessionId || sessionId || processKey;
+        // Delete BOTH keys: after a workspace-trust retry the live entry is
+        // re-registered under the spawn-time processKey while finalSessionId
+        // resolves to capturedSessionId, so deleting only finalSessionId would
+        // leave a phantom "active" entry behind. Both deletes are idempotent.
         activeCursorProcesses.delete(finalSessionId);
+        activeCursorProcesses.delete(processKey);
 
         // Flush any final unterminated stdout line before completion handling.
         if (stdoutLineBuffer.trim()) {
@@ -290,9 +295,10 @@ async function spawnCursor(command, options = {}, ws) {
       cursorProcess.on('error', (error) => {
         console.error('Cursor CLI process error:', error);
 
-        // Clean up process reference on error
+        // Clean up process reference on error (both keys, same reason as 'close')
         const finalSessionId = capturedSessionId || sessionId || processKey;
         activeCursorProcesses.delete(finalSessionId);
+        activeCursorProcesses.delete(processKey);
 
         ws.send(createNormalizedMessage({ kind: 'error', content: error.message, sessionId: capturedSessionId || sessionId || null, provider: 'cursor' }));
         notifyTerminalState({ error });
