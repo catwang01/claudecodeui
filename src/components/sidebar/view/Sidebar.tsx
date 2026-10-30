@@ -28,6 +28,7 @@ function Sidebar({
   onNewSession,
   onSessionDelete,
   onProjectDelete,
+  onNavigateToSession,
   isLoading,
   loadingProgress,
   onRefresh,
@@ -92,6 +93,8 @@ function Sidebar({
     saveProjectName,
     showDeleteSessionConfirmation,
     confirmDeleteSession,
+    forkSession,
+    forkingSessionId,
     requestProjectDelete,
     confirmDeleteProject,
     loadMoreSessions,
@@ -120,6 +123,7 @@ function Sidebar({
     onSessionSelect,
     onSessionDelete,
     onProjectDelete,
+    onNavigateToSession,
     setCurrentProject,
     setSidebarVisible,
     sidebarVisible,
@@ -214,6 +218,8 @@ function Sidebar({
       handleSessionClick(session, projectName);
     },
     onDeleteSession: showDeleteSessionConfirmation,
+    onForkSession: forkSession,
+    forkingSessionId,
     onLoadMoreSessions: (project) => {
       void loadMoreSessions(project);
     },

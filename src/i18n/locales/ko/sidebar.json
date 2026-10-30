@@ -46,6 +46,7 @@
     "removeFromFavorites": "즐겨찾기에서 제거",
     "editSessionName": "세션 이름 직접 편집",
     "deleteSession": "이 세션 영구 삭제",
+    "forkSession": "이 대화 포크",
     "save": "저장",
     "cancel": "취소"
   },
@@ -101,6 +102,8 @@
     "enterProjectPath": "프로젝트 경로를 입력해주세요",
     "deleteSessionFailed": "세션 삭제 실패. 다시 시도해주세요.",
     "deleteSessionError": "세션 삭제 오류. 다시 시도해주세요.",
+    "forkSessionFailed": "대화 포크 실패. 다시 시도해주세요.",
+    "forkSessionError": "대화 포크 오류. 다시 시도해주세요.",
     "renameSessionFailed": "세션 이름 변경 실패. 다시 시도해주세요.",
     "renameSessionError": "세션 이름 변경 오류. 다시 시도해주세요.",
     "deleteProjectFailed": "프로젝트 삭제 실패. 다시 시도해주세요.",

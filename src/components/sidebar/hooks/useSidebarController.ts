@@ -75,6 +75,7 @@ type UseSidebarControllerArgs = {
   onSessionSelect: (session: ProjectSession) => void;
   onSessionDelete?: (sessionId: string) => void;
   onProjectDelete?: (projectName: string) => void;
+  onNavigateToSession?: (sessionId: string) => void;
   setCurrentProject: (project: Project) => void;
   setSidebarVisible: (visible: boolean) => void;
   sidebarVisible: boolean;
@@ -92,6 +93,7 @@ export function useSidebarController({
   onSessionSelect,
   onSessionDelete,
   onProjectDelete,
+  onNavigateToSession,
   setCurrentProject,
   setSidebarVisible,
   sidebarVisible,
@@ -112,6 +114,7 @@ export function useSidebarController({
   const [projectHasMoreOverrides, setProjectHasMoreOverrides] = useState<Record<string, boolean>>({});
   const [editingSession, setEditingSession] = useState<string | null>(null);
   const [editingSessionName, setEditingSessionName] = useState('');
+  const [forkingSessionId, setForkingSessionId] = useState<string | null>(null);
   const [searchFilter, setSearchFilter] = useState('');
   const [deletingProjects, setDeletingProjects] = useState<Set<string>>(new Set());
   const [deleteConfirmation, setDeleteConfirmation] = useState<DeleteProjectConfirmation | null>(null);
@@ -522,6 +525,27 @@ export function useSidebarController({
     }
   }, [onSessionDelete, sessionDeleteConfirmation, isDeletingSession, t]);
 
+  const forkSession = useCallback(async (projectName: string, sessionId: string, provider: SessionProvider = 'claude') => {
+    if (forkingSessionId) return; // single-flight
+    setForkingSessionId(sessionId);
+    try {
+      const result = await api.forkSession(projectName, sessionId, null, provider);
+      const newSessionId = result?.newSessionId;
+      if (!newSessionId) {
+        logger.error('[Sidebar] Failed to fork session:', result);
+        alert(t('messages.forkSessionFailed'));
+        return;
+      }
+      await onRefresh(); // so the fork shows up in the sidebar
+      onNavigateToSession?.(newSessionId);
+    } catch (error) {
+      logger.error('[Sidebar] Error forking session:', error);
+      alert(t('messages.forkSessionError'));
+    } finally {
+      setForkingSessionId(null);
+    }
+  }, [forkingSessionId, onRefresh, onNavigateToSession, t]);
+
   const requestProjectDelete = useCallback(
     (project: Project) => {
       setDeleteConfirmation({
@@ -696,6 +720,8 @@ export function useSidebarController({
     saveProjectName,
     showDeleteSessionConfirmation,
     confirmDeleteSession,
+    forkSession,
+    forkingSessionId,
     requestProjectDelete,
     confirmDeleteProject,
     loadMoreSessions,

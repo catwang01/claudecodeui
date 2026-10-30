@@ -1,5 +1,5 @@
 import { memo, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, Clock, Edit2, EyeOff, Folder, GitFork, Sparkles, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Clock, Edit2, EyeOff, Folder, GitFork, Loader2, Sparkles, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { Badge, Button } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
@@ -30,6 +30,8 @@ type DefaultProps = {
     sessionTitle: string,
     provider: SessionProvider,
   ) => void;
+  onForkSession: (projectName: string, sessionId: string, provider: SessionProvider) => void;
+  isForking?: boolean;
   // Fork-tree affordances (also available in the projects-tab session list).
   depth?: number;
   hasChildren?: boolean;
@@ -63,6 +65,8 @@ type RecentsProps = {
   ) => void;
   onProjectNavigate: (project: Project) => void;
   onRenameSession: (projectName: string, sessionId: string, summary: string, provider: SessionProvider) => void;
+  onForkSession: (projectName: string, sessionId: string, provider: SessionProvider) => void;
+  isForking?: boolean;
   isProcessing?: boolean;
   processingStartTime?: number;
   t: TFunction;
@@ -77,6 +81,7 @@ type SidebarSessionItemProps = DefaultProps | RecentsProps;
 // gets a new reference).
 function sessionItemPropsAreEqual(prev: SidebarSessionItemProps, next: SidebarSessionItemProps): boolean {
   if (prev.session !== next.session) return false;
+  if (prev.isForking !== next.isForking) return false;
   if (prev.isProcessing !== next.isProcessing) return false;
   if (prev.processingStartTime !== next.processingStartTime) return false;
   if (prev.isRead !== next.isRead) return false;
@@ -108,7 +113,7 @@ export default memo(function SidebarSessionItem(props: SidebarSessionItemProps) 
   const [renameValue, setRenameValue] = useState('');
 
   if (props.variant === 'recents') {
-    const { projectColorDot, projectDisplayName, depth = 0, hasChildren = false, isCollapsed = false, onToggleCollapse, isRead = false, onSessionSelect, onHideSession, onDeleteSession, onProjectNavigate, onRenameSession } = props;
+    const { projectColorDot, projectDisplayName, depth = 0, hasChildren = false, isCollapsed = false, onToggleCollapse, isRead = false, onSessionSelect, onHideSession, onDeleteSession, onForkSession, onProjectNavigate, onRenameSession, isForking = false } = props;
     const isFork = depth > 0;
 
     const startRenaming = (e: { stopPropagation: () => void }) => {
@@ -267,6 +272,15 @@ export default memo(function SidebarSessionItem(props: SidebarSessionItemProps) 
                   <Edit2 className="h-3 w-3" />
                 </button>
                 <button
+                  className="ml-1 hidden group-hover:flex items-center justify-center h-4 w-4 rounded text-muted-foreground/40 hover:text-sky-500 transition-colors flex-shrink-0 disabled:opacity-40"
+                  onClick={(e) => { e.stopPropagation(); onForkSession(project.name, session.id, session.__provider); }}
+                  title={t('tooltips.forkSession')}
+                  type="button"
+                  disabled={isForking}
+                >
+                  {isForking ? <Loader2 className="h-3 w-3 animate-spin" /> : <GitFork className="h-3 w-3" />}
+                </button>
+                <button
                   className="ml-1 hidden group-hover:flex items-center justify-center h-4 w-4 rounded text-muted-foreground/40 hover:text-muted-foreground transition-colors flex-shrink-0"
                   onClick={(e) => { e.stopPropagation(); onHideSession(); }}
                   title="Hide from recents"
@@ -311,7 +325,9 @@ export default memo(function SidebarSessionItem(props: SidebarSessionItemProps) 
     onProjectSelect,
     onSessionSelect,
     onDeleteSession,
+    onForkSession,
     isRead = false,
+    isForking = false,
     depth = 0,
     hasChildren = false,
     isCollapsed = false,
@@ -421,6 +437,19 @@ export default memo(function SidebarSessionItem(props: SidebarSessionItemProps) 
               )}
             </div>
 
+            <button
+              className="ml-1 flex h-5 w-5 items-center justify-center rounded-md bg-sky-50 opacity-70 transition-transform active:scale-95 disabled:opacity-40 dark:bg-sky-900/20"
+              onClick={(event) => {
+                event.stopPropagation();
+                onForkSession(project.name, session.id, session.__provider);
+              }}
+              title={t('tooltips.forkSession')}
+              disabled={isForking}
+            >
+              {isForking
+                ? <Loader2 className="h-2.5 w-2.5 animate-spin text-sky-600 dark:text-sky-400" />
+                : <GitFork className="h-2.5 w-2.5 text-sky-600 dark:text-sky-400" />}
+            </button>
             {!sessionView.isCursorSession && (
               <button
                 className="ml-1 flex h-5 w-5 items-center justify-center rounded-md bg-red-50 opacity-70 transition-transform active:scale-95 dark:bg-red-900/20"
@@ -534,6 +563,19 @@ export default memo(function SidebarSessionItem(props: SidebarSessionItemProps) 
                   title={t('tooltips.editSessionName')}
                 >
                   <Edit2 className="h-3 w-3 text-gray-600 dark:text-gray-400" />
+                </button>
+                <button
+                  className="flex h-6 w-6 items-center justify-center rounded bg-sky-50 hover:bg-sky-100 disabled:opacity-50 dark:bg-sky-900/20 dark:hover:bg-sky-900/40"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onForkSession(project.name, session.id, session.__provider);
+                  }}
+                  title={t('tooltips.forkSession')}
+                  disabled={isForking}
+                >
+                  {isForking
+                    ? <Loader2 className="h-3 w-3 animate-spin text-sky-600 dark:text-sky-400" />
+                    : <GitFork className="h-3 w-3 text-sky-600 dark:text-sky-400" />}
                 </button>
                 {!sessionView.isCursorSession && (
                   <button

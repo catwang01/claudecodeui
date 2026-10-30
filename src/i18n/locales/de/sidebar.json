@@ -46,6 +46,7 @@
     "removeFromFavorites": "Aus Favoriten entfernen",
     "editSessionName": "Sitzungsname manuell bearbeiten",
     "deleteSession": "Diese Sitzung dauerhaft löschen",
+    "forkSession": "Diese Unterhaltung forken",
     "save": "Speichern",
     "cancel": "Abbrechen",
     "clearSearch": "Suche leeren"
@@ -102,6 +103,8 @@
     "enterProjectPath": "Bitte gib einen Projektpfad ein",
     "deleteSessionFailed": "Sitzung konnte nicht gelöscht werden. Bitte erneut versuchen.",
     "deleteSessionError": "Fehler beim Löschen der Sitzung. Bitte erneut versuchen.",
+    "forkSessionFailed": "Unterhaltung konnte nicht geforkt werden. Bitte erneut versuchen.",
+    "forkSessionError": "Fehler beim Forken der Unterhaltung. Bitte erneut versuchen.",
     "renameSessionFailed": "Sitzung konnte nicht umbenannt werden. Bitte erneut versuchen.",
     "renameSessionError": "Fehler beim Umbenennen der Sitzung. Bitte erneut versuchen.",
     "deleteProjectFailed": "Projekt konnte nicht gelöscht werden. Bitte erneut versuchen.",

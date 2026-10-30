@@ -46,6 +46,7 @@
     "removeFromFavorites": "お気に入りから削除",
     "editSessionName": "セッション名を手動で編集",
     "deleteSession": "このセッションを完全に削除",
+    "forkSession": "この会話をフォーク",
     "save": "保存",
     "cancel": "キャンセル"
   },
@@ -101,6 +102,8 @@
     "enterProjectPath": "プロジェクトのパスを入力してください",
     "deleteSessionFailed": "セッションの削除に失敗しました。もう一度お試しください。",
     "deleteSessionError": "セッションの削除でエラーが発生しました。もう一度お試しください。",
+    "forkSessionFailed": "会話のフォークに失敗しました。もう一度お試しください。",
+    "forkSessionError": "会話のフォークでエラーが発生しました。もう一度お試しください。",
     "renameSessionFailed": "セッション名の変更に失敗しました。もう一度お試しください。",
     "renameSessionError": "セッション名の変更でエラーが発生しました。もう一度お試しください。",
     "deleteProjectFailed": "プロジェクトの削除に失敗しました。もう一度お試しください。",

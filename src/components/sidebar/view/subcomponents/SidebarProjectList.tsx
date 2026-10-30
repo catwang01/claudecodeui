@@ -30,6 +30,7 @@ const SidebarProjectItemMemo = memo(SidebarProjectItem, (prev, next) =>
   prev.editingSessionName === next.editingSessionName &&
   prev.processingSessions === next.processingSessions &&
   prev.readSessionIds === next.readSessionIds &&
+  prev.forkingSessionId === next.forkingSessionId &&
   prev.tasksEnabled === next.tasksEnabled,
 );
 
@@ -68,6 +69,8 @@ export type SidebarProjectListProps = {
     sessionTitle: string,
     provider: SessionProvider,
   ) => void;
+  onForkSession: (projectName: string, sessionId: string, provider: SessionProvider) => void;
+  forkingSessionId?: string | null;
   onLoadMoreSessions: (project: Project) => void;
   onNewSession: (project: Project) => void;
   onEditingSessionNameChange: (value: string) => void;
@@ -110,6 +113,8 @@ export default function SidebarProjectList({
   onDeleteProject,
   onSessionSelect,
   onDeleteSession,
+  onForkSession,
+  forkingSessionId,
   onLoadMoreSessions,
   onNewSession,
   onEditingSessionNameChange,
@@ -174,6 +179,8 @@ export default function SidebarProjectList({
               onDeleteProject={onDeleteProject}
               onSessionSelect={onSessionSelect}
               onDeleteSession={onDeleteSession}
+              onForkSession={onForkSession}
+              forkingSessionId={forkingSessionId}
               onLoadMoreSessions={onLoadMoreSessions}
               onNewSession={onNewSession}
               onEditingSessionNameChange={onEditingSessionNameChange}
