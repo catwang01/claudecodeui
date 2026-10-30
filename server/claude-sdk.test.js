@@ -488,3 +488,90 @@ describe('queryClaudeSDK — SDK-wrapped stream errors', () => {
     expect(sent.filter(m => m.kind === 'error')).toHaveLength(1);
   });
 });
+
+describe('queryClaudeSDK — idle session reaper', () => {
+  let queryClaudeSDK;
+  let isClaudeSDKSessionActive;
+  let reapIdleSessions;
+  let mockQuery;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.resetModules();
+    const sdkMod = await import('@anthropic-ai/claude-agent-sdk');
+    mockQuery = sdkMod.query;
+    const mod = await import('./claude-sdk.js');
+    queryClaudeSDK = mod.queryClaudeSDK;
+    isClaudeSDKSessionActive = mod.isClaudeSDKSessionActive;
+    reapIdleSessions = mod.reapIdleSessions;
+  });
+
+  // A stream that yields at most one message and then never settles — the
+  // wedged-CLI case the CLI-side stream watchdog cannot catch.
+  function makeWedgedStream(firstMessage = null) {
+    let delivered = false;
+    return {
+      [Symbol.asyncIterator]() { return this; },
+      next() {
+        if (firstMessage && !delivered) {
+          delivered = true;
+          return Promise.resolve({ value: firstMessage, done: false });
+        }
+        return new Promise(() => {});
+      },
+      return() { return new Promise(() => {}); },
+    };
+  }
+
+  it('force-closes a session whose stream never settles and notifies the client', async () => {
+    mockQuery.mockImplementation(() => makeWedgedStream());
+
+    const { ws, sent } = makeWs();
+    const pending = queryClaudeSDK('do something', { sessionId: FAKE_SESSION, cwd: '/tmp' }, ws);
+    pending.catch(() => {});
+
+    await vi.waitFor(() => {
+      expect(isClaudeSDKSessionActive(FAKE_SESSION)).toBe(true);
+    });
+
+    // Simulate the lease expiring (60s of silence).
+    const reaped = reapIdleSessions(Date.now() + 60_000, 60_000);
+
+    expect(reaped).toEqual([FAKE_SESSION]);
+    // isClaudeSDKSessionActive returns undefined (not false) for an unknown id.
+    expect(isClaudeSDKSessionActive(FAKE_SESSION)).toBeFalsy();
+
+    const complete = sent.find(m => m.kind === 'complete');
+    expect(complete).toBeDefined();
+    expect(complete.aborted).toBe(true);
+    expect(complete.reason).toBe('idle_timeout');
+    expect(complete.sessionId).toBe(FAKE_SESSION);
+  });
+
+  it('does not reap a session that is still producing messages', async () => {
+    mockQuery.mockImplementation(() => makeWedgedStream({
+      type: 'assistant',
+      session_id: FAKE_SESSION,
+      uuid: 'msg-1',
+      parent_tool_use_id: null,
+      message: {
+        role: 'assistant',
+        model: 'claude-sonnet-4-6',
+        content: [{ type: 'text', text: 'working' }],
+      },
+    }));
+
+    const { ws, sent } = makeWs();
+    const pending = queryClaudeSDK('do something', { sessionId: FAKE_SESSION, cwd: '/tmp' }, ws);
+    pending.catch(() => {});
+
+    await vi.waitFor(() => {
+      expect(sent.some(m => m.kind === 'text' && m.content === 'working')).toBe(true);
+    });
+
+    const reaped = reapIdleSessions(Date.now(), 60_000);
+
+    expect(reaped).toEqual([]);
+    expect(isClaudeSDKSessionActive(FAKE_SESSION)).toBe(true);
+  });
+});
