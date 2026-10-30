@@ -1,0 +1,183 @@
+# Scheduled Tasks (定时任务) — Design & Frozen Contract
+
+Status: implemented in this change. Reference: DSH `@deepseek-ai/dsh-schedule` /
+`dsh-tool-schedule` / `dsh-client-ui-schedule` (persistent reminder service with
+`once / interval / daily / weekly / cron` selectors, CRUD, delivery history).
+
+claudecodeui difference: a task's *action* is **starting a new agent run in a project**,
+not delivering a message into an existing session.
+
+## 1. Behaviour
+
+A scheduled task = `{ title, prompt, projectPath, provider, model?, rule, enabled }`.
+
+When due, the server starts a **new** headless agent session in `projectPath`, sends
+`prompt`, records a run row, then advances `nextRunAt` (or disables a one-shot task).
+Runs are also triggerable manually (`POST /:id/run`).
+
+Rule kinds (mirrors DSH selectors):
+
+| kind | payload | notes |
+|---|---|---|
+| `once` | `{ at: ISO-8601 with offset }` | must be strictly in the future at create/update time |
+| `interval` | `{ everySeconds: int >= 60 }` | anchored at creation/save time |
+| `daily` | `{ time: 'HH:mm[:ss]', timeZone: IANA }` | local wall clock |
+| `weekly` | `{ time, timeZone, weekdays: [1..7] }` | ISO weekdays, Mon=1; unique ascending |
+| `cron` | `{ expression: '5 fields', timeZone: IANA }` | Vixie subset: `*`, value, `a-b`, `*/n`, `a-b/n`, comma lists |
+
+DST rules: a missing local wall time is skipped; an ambiguous (repeated) local time uses
+the **earlier** instant. Every rule has a finite `nextRunAt` or `null` when exhausted.
+
+## 2. Files and ownership (disjoint write scopes)
+
+| Owner | Files |
+|---|---|
+| backend-db | `server/scheduled-tasks/rules.js`, `server/scheduled-tasks/rules.test.js`, `server/modules/database/repositories/scheduled-tasks.db.ts`, `server/modules/database/repositories/scheduled-tasks.db.test.ts`, `server/modules/database/schema.ts`, `server/modules/database/migrations.ts`, `server/modules/database/index.ts` |
+| backend-runtime | `server/scheduled-tasks/runner.js`, `server/scheduled-tasks/service.js`, `server/scheduled-tasks/runner.test.js`, `server/scheduled-tasks/service.test.js`, `server/routes/scheduled-tasks.js`, `server/routes/scheduled-tasks.test.js`, `server/index.js` |
+| frontend | `src/components/scheduled-tasks/**`, `src/components/sidebar/view/subcomponents/SidebarFooter.tsx`, `src/i18n/config.js`, `src/i18n/locales/en/scheduledTasks.json`, `src/i18n/locales/zh-CN/scheduledTasks.json` |
+| lead | `docs/scheduled-tasks.md`, `scripts/verify-scheduled-tasks.mjs` |
+
+## 3. Database
+
+`scheduled_tasks` (row columns, snake_case):
+`id TEXT PK` (crypto.randomUUID), `user_id INTEGER`, `title TEXT NOT NULL`,
+`prompt TEXT NOT NULL`, `project_path TEXT NOT NULL`, `provider TEXT NOT NULL DEFAULT 'claude'`,
+`model TEXT`, `kind TEXT NOT NULL`, `rule_json TEXT NOT NULL`, `next_run_at TEXT`,
+`last_run_at TEXT`, `last_status TEXT`, `last_error TEXT`, `enabled INTEGER NOT NULL DEFAULT 1`,
+`run_count INTEGER NOT NULL DEFAULT 0`, `created_at TEXT NOT NULL`, `updated_at TEXT NOT NULL`.
+
+`scheduled_task_runs`:
+`id TEXT PK`, `task_id TEXT NOT NULL REFERENCES scheduled_tasks(id) ON DELETE CASCADE`,
+`status TEXT NOT NULL` ('running'|'success'|'error'), `trigger TEXT NOT NULL` ('schedule'|'manual'),
+`scheduled_for TEXT`, `started_at TEXT NOT NULL`, `finished_at TEXT`, `session_id TEXT`,
+`output TEXT`, `error TEXT`.
+
+Indexes: `(enabled, next_run_at)` on tasks, `(task_id, started_at DESC)` on runs.
+Timestamps are ISO-8601 UTC strings.
+
+## 4. Frozen module contracts
+
+### `server/scheduled-tasks/rules.js` (pure, no I/O)
+```js
+export const RULE_KINDS = ['once', 'interval', 'daily', 'weekly', 'cron'];
+export function isValidTimeZone(tz): boolean
+export function normalizeRule(rule): NormalizedRule            // throws Error with .code
+export function validateRule(input): { ok: true, rule } | { ok: false, code, message }
+export function computeNextRun(rule, fromMs = Date.now()): number | null  // epoch ms UTC
+export function describeRule(rule): string                    // human readable, English
+```
+Error codes: `invalid_rule`, `invalid_time_zone`, `invalid_schedule_time`, `invalid_interval`,
+`invalid_weekdays`, `invalid_cron`. `validateRule` never throws.
+
+### `server/modules/database/repositories/scheduled-tasks.db.ts`
+Exports `scheduledTasksDb` with:
+```ts
+createTask(input: { id?, userId?, title, prompt, projectPath, provider?, model?, kind, ruleJson, nextRunAt, enabled? }): ScheduledTaskRow
+getTask(id): ScheduledTaskRow | undefined
+listTasks(opts?: { userId?: number|null, status?: 'active'|'paused'|'all', search?: string }): ScheduledTaskRow[]
+updateTask(id, patch: Partial<{title, prompt, projectPath, provider, model, kind, ruleJson, nextRunAt, enabled}>): ScheduledTaskRow | undefined
+deleteTask(id): boolean
+listDueTasks(nowIso: string, limit = 50): ScheduledTaskRow[]
+advanceTask(id, { nextRunAt, lastRunAt, lastStatus, lastError, runCount }): ScheduledTaskRow | undefined
+createRun(input: { taskId, status, trigger, scheduledFor?, startedAt }): ScheduledTaskRunRow
+finishRun(id, patch: { status, finishedAt, sessionId?, output?, error? }): ScheduledTaskRunRow | undefined
+listRuns(taskId, limit = 20, offset = 0): ScheduledTaskRunRow[]
+countRuns(taskId): number
+pruneRuns(taskId, keep = 50): number
+```
+Update/advance must bump `updated_at`. `listTasks` search matches title/prompt/project_path, ordered by `created_at DESC`.
+
+### `server/scheduled-tasks/runner.js`
+```js
+export function startTaskRun(task, { trigger = 'schedule', scheduledFor = null } = {}):
+  { run: ScheduledTaskRunRow, done: Promise<{ run, status, sessionId, output, error }> }
+```
+Creates the 'running' run row synchronously, then executes on the microtask queue; never
+rejects (failures come back as `status: 'error'`). MVP executes `provider === 'claude'`
+via `queryClaudeSDK` with a headless writer (`{ userId, send(){} }`), collecting
+`session_created` ids and assistant text; other providers produce an error run.
+Timeout: `SCHEDULED_TASK_TIMEOUT_MS` (default 1800000) then error + best-effort abort.
+Test seam: when `SCHEDULED_TASK_DRY_RUN=1`, skip `queryClaudeSDK` entirely and finish the run
+as `success` with `output = '[dry-run] <prompt>'` and `sessionId = null`. This keeps the
+end-to-end verification deterministic and token-free.
+
+### `server/scheduled-tasks/service.js`
+```js
+export function createScheduler(deps?): { tick(), start(), stop(), runNow(taskId), state() }
+export function startScheduledTaskService(): void
+export function stopScheduledTaskService(): void
+export async function runScheduledTaskNow(taskId): Promise<{ run } | { error: 'not_found' }>
+export function getSchedulerState(): { running, tickMs, inFlight: string[] }
+```
+Tick: `listDueTasks(now)` → for each id not already in flight: advance `nextRunAt` first
+(crash-safe, documented), then `startTaskRun`, then `advanceTask` with the result.
+One-shot tasks get `nextRunAt = null`. `SCHEDULED_TASKS_ENABLED` (default on),
+`SCHEDULED_TASKS_TICK_MS` (default 30000).
+
+### REST `/api/scheduled-tasks` (mounted with `authenticateToken`)
+| Method | Path | Body / query | Response |
+|---|---|---|---|
+| GET | `/` | `?status=active\|paused\|all&search=` | `{ tasks: Task[] }` |
+| POST | `/` | `{ title, prompt, projectPath, provider?, model?, rule }` | 201 `{ task }` / 400 `{ error, code }` |
+| GET | `/:id` | — | `{ task }` / 404 `{ error, code:'not_found' }` |
+| PATCH | `/:id` | any of `{ title, prompt, projectPath, model, enabled, rule }` | `{ task }` / 404 / 400 |
+
+PATCH semantics: `enabled: false` clears `nextRunAt` to `null`; re-enabling (`enabled: true`)
+recomputes `nextRunAt` from now; changing `rule` recomputes `nextRunAt`; a `once` task whose
+`at` is in the past is rejected with `invalid_schedule_time`.
+| DELETE | `/:id` | — | `{ id, deleted: true }` / 404 |
+| POST | `/:id/run` | — | 202 `{ run }` (status 'running') / 404 |
+| GET | `/:id/runs` | `?limit=20&offset=0` | `{ runs, total }` / 404 `{ error, code:'not_found' }` |
+
+Task JSON (camelCase):
+`{ id, title, prompt, projectPath, provider, model, kind, rule, nextRunAt, lastRunAt,
+lastStatus, lastError, enabled, runCount, createdAt, updatedAt }`
+Run JSON: `{ id, taskId, status, trigger, scheduledFor, startedAt, finishedAt, sessionId, output, error }`
+
+## 5. Frontend
+
+`ScheduledTasksLauncher` (sidebar footer button) opens `ScheduledTasksPanel` (full-screen
+overlay, portal): search + status filter, task list (title, `describeRule`-equivalent
+frequency text, next run, last status, enable toggle, run-now, edit, delete), task editor
+dialog (create/edit incl. rule editor + project picker from `GET /api/projects`), and a
+per-task run history list (`GET /:id/runs`). i18n namespace `scheduledTasks` (en + zh-CN;
+other locales fall back to en). Uses `authenticatedFetch` from `src/utils/api.js`.
+
+## 6. Agent tools (工具调用路径) — added in the second iteration
+
+Besides the manual UI form, an agent session can create and manage scheduled tasks through
+the in-process SDK MCP server (`mcp__internal__*`), mirroring DSH's
+`schedule_create / schedule_list / schedule_update / schedule_delete`.
+
+Tools are registered by `server/scheduled-tasks/tools.js` and mounted by
+`createInternalToolsServer({ projectPath })` in `server/claude-sdk.js`; the session's
+`cwd` becomes the default target project. All eight names are appended to
+`sdkOptions.allowedTools` so they never raise an approval prompt. Set
+`SCHEDULED_TASKS_TOOLS=0` to omit them.
+
+Tasks are **project-scoped**: a tool call only sees/edits tasks whose `project_path`
+equals the calling session's cwd (normalized). A task outside that scope behaves as
+`not_found`.
+
+| Tool | Args | Returns |
+|---|---|---|
+| `schedule_create` | `prompt`, `title`, optional `project_path`, and **exactly one** of `after_seconds` \| `at` \| `every_seconds` \| `daily{time,time_zone}` \| `weekly{time,time_zone,weekdays}` \| `cron{expression,time_zone}` | task view |
+| `schedule_list` | optional `include_paused` (default false) | `{ tasks: Task[] }` |
+| `schedule_get` | `id` | `{ task, recent_runs }` (last 5 runs) |
+| `schedule_update` | `id`, optional `title`, optional `prompt`, optional one selector | task view |
+| `schedule_delete` | `id` | `{ id, deleted }` |
+| `schedule_run` | `id` | `{ run }` (trigger `manual`, status `running`) |
+| `schedule_pause` | `id` | task view, `enabled: false`, `nextRunAt: null` |
+| `schedule_resume` | `id` | task view, `enabled: true`, recomputed `nextRunAt` |
+
+Selector → stored rule mapping (identical to the REST layer):
+`after_seconds` → `once` at now+N; `at` → `once`; `every_seconds` → `interval`;
+`daily`/`weekly`/`cron` → the matching rule with `time_zone` → `timeZone`.
+
+Every tool returns one JSON text block and never throws; failures are
+`{ code, message }` with the codes from §4 plus `not_found`, `in_flight`,
+`invalid_input`, `internal_error`.
+
+Shared logic lives in `server/scheduled-tasks/management.js` (task views, selector→rule
+mapping, create/update/pause/resume/delete/run), used by **both** the REST routes and the
+tools so the two paths cannot drift.

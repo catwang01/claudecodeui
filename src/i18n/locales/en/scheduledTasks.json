@@ -1,0 +1,159 @@
+{
+  "title": "Scheduled tasks",
+  "launcher": {
+    "label": "Scheduled tasks"
+  },
+  "search": {
+    "placeholder": "Search scheduled tasks…",
+    "clear": "Clear search"
+  },
+  "filters": {
+    "label": "Status",
+    "all": "All",
+    "enabled": "Enabled",
+    "paused": "Paused"
+  },
+  "actions": {
+    "newTask": "New task",
+    "refresh": "Refresh",
+    "close": "Close",
+    "cancel": "Cancel",
+    "create": "Create task",
+    "save": "Save changes",
+    "saving": "Saving…",
+    "edit": "Edit",
+    "delete": "Delete",
+    "runNow": "Run now",
+    "history": "History",
+    "hideHistory": "Hide history",
+    "loadMore": "Load more",
+    "retry": "Try again"
+  },
+  "status": {
+    "enabled": "Enabled",
+    "paused": "Paused",
+    "running": "Running",
+    "success": "Succeeded",
+    "error": "Failed"
+  },
+  "trigger": {
+    "schedule": "Scheduled",
+    "manual": "Manual"
+  },
+  "nextRun": {
+    "label": "Next run",
+    "none": "No upcoming run"
+  },
+  "lastRun": {
+    "label": "Last run",
+    "never": "Never run"
+  },
+  "card": {
+    "runCount_one": "{{count}} run",
+    "runCount_other": "{{count}} runs",
+    "model": "Model"
+  },
+  "empty": {
+    "title": "No scheduled tasks yet",
+    "description": "Create a task to start a new agent run in a project on a schedule. Use “New task” in the top-right corner to get started.",
+    "searchTitle": "No matching tasks",
+    "searchDescription": "Try a different search or status filter."
+  },
+  "loading": "Loading scheduled tasks…",
+  "loadingRuns": "Loading runs…",
+  "errors": {
+    "load": "Could not load scheduled tasks.",
+    "projects": "Could not load projects.",
+    "save": "Could not save the task.",
+    "delete": "Could not delete the task.",
+    "run": "Could not start the task.",
+    "update": "Could not update the task."
+  },
+  "confirmDelete": {
+    "title": "Delete this task?",
+    "description": "\"{{title}}\" and its run history will be permanently deleted.",
+    "confirm": "Delete task"
+  },
+  "editor": {
+    "createTitle": "New scheduled task",
+    "editTitle": "Edit scheduled task",
+    "sections": {
+      "task": "Task",
+      "schedule": "Schedule"
+    },
+    "fields": {
+      "title": "Title",
+      "titlePlaceholder": "Nightly dependency audit",
+      "prompt": "Prompt",
+      "promptPlaceholder": "Review dependencies and report anything outdated or vulnerable.",
+      "project": "Project",
+      "projectPlaceholder": "Select a project…",
+      "model": "Model (optional)",
+      "modelPlaceholder": "Leave empty for the provider default",
+      "enabled": "Enabled",
+      "enabledHint": "Paused tasks keep their schedule but do not run."
+    },
+    "errors": {
+      "title": "Enter a title.",
+      "prompt": "Enter a prompt.",
+      "project": "Choose a project.",
+      "onceRequired": "Pick a date and time.",
+      "onceFuture": "Pick a date and time in the future.",
+      "intervalRequired": "Enter an interval.",
+      "intervalMin": "The interval must be at least 60 seconds.",
+      "timeRequired": "Enter a time of day.",
+      "timeZoneRequired": "Choose a time zone.",
+      "weekdaysRequired": "Select at least one day.",
+      "cronRequired": "Enter a cron expression.",
+      "cronInvalid": "Use exactly 5 fields: minute hour day-of-month month day-of-week."
+    }
+  },
+  "rule": {
+    "label": "Frequency",
+    "kinds": {
+      "once": "Once",
+      "interval": "Interval",
+      "daily": "Daily",
+      "weekly": "Weekly",
+      "cron": "Cron"
+    },
+    "onceAt": "Run at",
+    "interval": {
+      "every": "Every",
+      "units": {
+        "seconds": "seconds",
+        "minutes": "minutes",
+        "hours": "hours",
+        "days": "days"
+      }
+    },
+    "time": "Time",
+    "timeZone": "Time zone",
+    "weekdays": "Days",
+    "cron": {
+      "expression": "Expression",
+      "placeholder": "0 9 * * 1-5",
+      "hint": "5 fields: minute hour day-of-month month day-of-week. Supports *, 5, 1-5, */15, 1-5/2 and comma lists."
+    }
+  },
+  "describe": {
+    "once": "Once at {{time}}",
+    "interval": "Every {{value}} {{unit}}",
+    "daily": "Daily at {{time}} ({{timeZone}})",
+    "weekly": "Weekly on {{days}} at {{time}} ({{timeZone}})",
+    "cron": "{{expression}} ({{timeZone}})"
+  },
+  "runs": {
+    "title": "Run history",
+    "empty": "No runs yet.",
+    "count": "{{shown}} of {{total}}",
+    "duration": "Duration",
+    "session": "Session",
+    "output": "Output",
+    "error": "Error",
+    "inProgress": "Running…"
+  },
+  "time": {
+    "unknown": "Unknown"
+  }
+}

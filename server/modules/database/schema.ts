@@ -206,3 +206,41 @@ CREATE TABLE IF NOT EXISTS session_read_state (
   read_at    DATETIME NOT NULL,
   UNIQUE(session_id, provider)
 );`;
+
+export const SCHEDULED_TASKS_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS scheduled_tasks (
+  id TEXT PRIMARY KEY,
+  user_id INTEGER,
+  title TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  project_path TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'claude',
+  model TEXT,
+  kind TEXT NOT NULL,
+  rule_json TEXT NOT NULL,
+  next_run_at TEXT,
+  last_run_at TEXT,
+  last_status TEXT,
+  last_error TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  run_count INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due ON scheduled_tasks(enabled, next_run_at);`;
+
+export const SCHEDULED_TASK_RUNS_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS scheduled_task_runs (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES scheduled_tasks(id) ON DELETE CASCADE,
+  status TEXT NOT NULL,
+  "trigger" TEXT NOT NULL,
+  scheduled_for TEXT,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  session_id TEXT,
+  output TEXT,
+  error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_task_runs_task ON scheduled_task_runs(task_id, started_at DESC);`;
+

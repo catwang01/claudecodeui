@@ -10,3 +10,4 @@ export * from '@/modules/database/repositories/push-subscriptions.js';
 export * from '@/modules/database/repositories/vapid-keys.js';
 export * from '@/modules/database/repositories/app-config.js';
 export * from '@/modules/database/repositories/scan-state.db.js';
+export * from '@/modules/database/repositories/scheduled-tasks.db.js';

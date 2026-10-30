@@ -2,6 +2,7 @@ import { Settings, ArrowUpCircle, Bug } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { IS_PLATFORM } from '../../../../constants/config';
 import type { ReleaseInfo } from '../../../../types/sharedTypes';
+import ScheduledTasksLauncher from '../../../scheduled-tasks/view/ScheduledTasksLauncher';
 
 const GITHUB_ISSUES_URL = 'https://github.com/siteboon/claudecodeui/issues/new';
 const GITHUB_REPO_URL = 'https://github.com/siteboon/claudecodeui';
@@ -89,6 +90,9 @@ export default function SidebarFooter({
 
       {/* Community + Settings */}
       <div className="nav-divider" />
+
+      {/* Scheduled tasks */}
+      <ScheduledTasksLauncher />
 
       {/* Desktop Report Issue */}
       <div className="hidden px-2 pt-1.5 md:block">

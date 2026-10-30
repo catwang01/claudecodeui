@@ -1,0 +1,451 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import express from 'express';
+import http from 'node:http';
+
+import { createScheduledTasksRouter } from './scheduled-tasks.js';
+
+const NEXT_MS = Date.parse('2026-06-01T00:00:00.000Z');
+const NEXT_ISO = new Date(NEXT_MS).toISOString();
+
+function makeRepo() {
+  const tasks = new Map();
+  const runs = new Map();
+  let idSeq = 0;
+  const stamp = () => new Date().toISOString();
+
+  return {
+    createTask(input) {
+      const id = input.id || `task-${++idSeq}`;
+      const row = {
+        id,
+        user_id: input.userId ?? null,
+        title: input.title,
+        prompt: input.prompt,
+        project_path: input.projectPath,
+        provider: input.provider ?? 'claude',
+        model: input.model ?? null,
+        kind: input.kind,
+        rule_json: input.ruleJson,
+        next_run_at: input.nextRunAt ?? null,
+        last_run_at: null,
+        last_status: null,
+        last_error: null,
+        enabled: input.enabled === false ? 0 : 1,
+        run_count: 0,
+        created_at: stamp(),
+        updated_at: stamp(),
+      };
+      tasks.set(id, row);
+      return row;
+    },
+    getTask: vi.fn((id) => tasks.get(id)),
+    listTasks: vi.fn((opts = {}) => {
+      let out = [...tasks.values()];
+      if (opts.status === 'active') out = out.filter((task) => !!task.enabled);
+      if (opts.status === 'paused') out = out.filter((task) => !task.enabled);
+      if (opts.search) {
+        const needle = String(opts.search).toLowerCase();
+        out = out.filter(
+          (task) =>
+            task.title.toLowerCase().includes(needle) ||
+            task.prompt.toLowerCase().includes(needle) ||
+            task.project_path.toLowerCase().includes(needle)
+        );
+      }
+      return out;
+    }),
+    updateTask(id, patch) {
+      const row = tasks.get(id);
+      if (!row) return undefined;
+      const columns = {
+        title: 'title',
+        prompt: 'prompt',
+        projectPath: 'project_path',
+        provider: 'provider',
+        model: 'model',
+        kind: 'kind',
+        ruleJson: 'rule_json',
+        nextRunAt: 'next_run_at',
+        enabled: 'enabled',
+      };
+      for (const [key, value] of Object.entries(patch)) {
+        const column = columns[key] || key;
+        row[column] = key === 'enabled' ? (value ? 1 : 0) : value;
+      }
+      row.updated_at = stamp();
+      return row;
+    },
+    deleteTask: vi.fn((id) => tasks.delete(id)),
+    listRuns: vi.fn((taskId, limit = 20, offset = 0) => (runs.get(taskId) || []).slice(offset, offset + limit)),
+    countRuns: vi.fn((taskId) => (runs.get(taskId) || []).length),
+    advanceTask(id, patch) {
+      const row = tasks.get(id);
+      if (!row) return undefined;
+      if ('nextRunAt' in patch) row.next_run_at = patch.nextRunAt;
+      if ('lastRunAt' in patch) row.last_run_at = patch.lastRunAt;
+      if ('lastStatus' in patch) row.last_status = patch.lastStatus;
+      if ('lastError' in patch) row.last_error = patch.lastError;
+      if ('runCount' in patch) row.run_count = patch.runCount;
+      row.updated_at = stamp();
+      return row;
+    },
+    _tasks: tasks,
+    _runs: runs,
+    _seedRun(taskId, overrides = {}) {
+      const row = {
+        id: `run-${Math.random().toString(16).slice(2, 8)}`,
+        task_id: taskId,
+        status: 'success',
+        trigger: 'schedule',
+        scheduled_for: null,
+        started_at: stamp(),
+        finished_at: stamp(),
+        session_id: 'sess-1',
+        output: 'done',
+        error: null,
+        ...overrides,
+      };
+      const list = runs.get(taskId) || [];
+      list.unshift(row);
+      runs.set(taskId, list);
+      return row;
+    },
+  };
+}
+
+function makeDeps(repo) {
+  return {
+    repo,
+    validateRule: vi.fn((rule) => {
+      if (!rule || typeof rule !== 'object') {
+        return { ok: false, code: 'invalid_rule', message: 'rule is required' };
+      }
+      if (rule.kind === 'bogus') {
+        return { ok: false, code: 'invalid_cron', message: 'bad cron expression' };
+      }
+      return { ok: true, rule };
+    }),
+    normalizeRule: vi.fn((rule) => ({ ...rule, normalized: true })),
+    computeNextRun: vi.fn(() => NEXT_MS),
+    runNow: vi.fn(async (taskId) => ({
+      run: {
+        id: 'run-1',
+        task_id: taskId,
+        status: 'running',
+        trigger: 'manual',
+        scheduled_for: null,
+        started_at: new Date().toISOString(),
+        finished_at: null,
+        session_id: null,
+        output: null,
+        error: null,
+      },
+    })),
+  };
+}
+
+let server;
+let base;
+let repo;
+let deps;
+
+beforeEach(async () => {
+  repo = makeRepo();
+  deps = makeDeps(repo);
+
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    req.user = { id: 7 };
+    next();
+  });
+  app.use('/api/scheduled-tasks', createScheduledTasksRouter(deps));
+
+  server = http.createServer(app);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  base = `http://127.0.0.1:${server.address().port}/api/scheduled-tasks`;
+});
+
+afterEach(async () => {
+  if (server) await new Promise((resolve) => server.close(resolve));
+  server = undefined;
+});
+
+async function api(method, path, body) {
+  const response = await fetch(base + path, {
+    method,
+    headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await response.text();
+  let json = null;
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch {
+    json = text;
+  }
+  return { status: response.status, body: json };
+}
+
+const validBody = {
+  title: 'Nightly docs',
+  prompt: 'update the docs',
+  projectPath: '/tmp/scheduled-project',
+  rule: { kind: 'interval', everySeconds: 60 },
+};
+
+describe('POST /api/scheduled-tasks', () => {
+  it('creates a task and returns 201 with camelCase task JSON', async () => {
+    const { status, body } = await api('POST', '/', validBody);
+
+    expect(status).toBe(201);
+    expect(body.task).toMatchObject({
+      id: expect.any(String),
+      title: 'Nightly docs',
+      prompt: 'update the docs',
+      projectPath: '/tmp/scheduled-project',
+      provider: 'claude',
+      model: null,
+      kind: 'interval',
+      nextRunAt: NEXT_ISO,
+      lastRunAt: null,
+      lastStatus: null,
+      lastError: null,
+      enabled: true,
+      runCount: 0,
+    });
+    expect(body.task.rule).toMatchObject({ kind: 'interval', everySeconds: 60, normalized: true });
+    // Interval rules are anchored at save time (docs §1).
+    expect(typeof body.task.rule.anchorMs).toBe('number');
+    expect(body.task.createdAt).toEqual(expect.any(String));
+
+    // Stored row keeps snake_case and the user id.
+    const row = repo._tasks.get(body.task.id);
+    expect(row.user_id).toBe(7);
+    expect(JSON.parse(row.rule_json)).toMatchObject({
+      kind: 'interval',
+      everySeconds: 60,
+      normalized: true,
+      anchorMs: body.task.rule.anchorMs,
+    });
+  });
+
+  it('rejects missing required fields', async () => {
+    const { status, body } = await api('POST', '/', { prompt: 'x' });
+
+    expect(status).toBe(400);
+    expect(body.code).toBe('invalid_input');
+    expect(body.error).toMatch(/title/);
+    expect(body.error).toMatch(/projectPath/);
+    expect(repo.createTask).toBeUndefined; // guard: repo untouched
+    expect(repo._tasks.size).toBe(0);
+  });
+
+  it('rejects an invalid rule with the rules-engine code', async () => {
+    const { status, body } = await api('POST', '/', { ...validBody, rule: { kind: 'bogus' } });
+
+    expect(status).toBe(400);
+    expect(body.code).toBe('invalid_cron');
+    expect(body.error).toBe('bad cron expression');
+  });
+
+  it('rejects a rule with no upcoming run', async () => {
+    deps.computeNextRun.mockReturnValue(null);
+
+    const { status, body } = await api('POST', '/', validBody);
+
+    expect(status).toBe(400);
+    expect(body.code).toBe('invalid_schedule_time');
+  });
+});
+
+describe('GET /api/scheduled-tasks', () => {
+  it('lists tasks and forwards status/search filters', async () => {
+    await api('POST', '/', validBody);
+    await api('POST', '/', { ...validBody, title: 'Other', prompt: 'other prompt' });
+
+    const all = await api('GET', '/');
+    expect(all.status).toBe(200);
+    expect(all.body.tasks).toHaveLength(2);
+    expect(repo.listTasks).toHaveBeenCalledWith({ userId: 7, status: undefined, search: undefined });
+
+    const filtered = await api('GET', '/?status=paused&search=nightly');
+    expect(filtered.status).toBe(200);
+    expect(repo.listTasks).toHaveBeenCalledWith({ userId: 7, status: 'paused', search: 'nightly' });
+  });
+
+  it('returns a single task or 404', async () => {
+    const created = await api('POST', '/', validBody);
+
+    const found = await api('GET', `/${created.body.task.id}`);
+    expect(found.status).toBe(200);
+    expect(found.body.task.id).toBe(created.body.task.id);
+
+    const missing = await api('GET', '/nope');
+    expect(missing.status).toBe(404);
+    expect(missing.body).toEqual({ error: 'Scheduled task not found', code: 'not_found' });
+  });
+});
+
+describe('PATCH /api/scheduled-tasks/:id', () => {
+  it('updates simple fields', async () => {
+    const created = await api('POST', '/', validBody);
+    const id = created.body.task.id;
+
+    const { status, body } = await api('PATCH', `/${id}`, { title: 'Renamed', model: 'claude-sonnet-4.6' });
+
+    expect(status).toBe(200);
+    expect(body.task.title).toBe('Renamed');
+    expect(body.task.model).toBe('claude-sonnet-4.6');
+  });
+
+  it('clears nextRunAt when the task is paused', async () => {
+    const created = await api('POST', '/', validBody);
+    const id = created.body.task.id;
+
+    const { status, body } = await api('PATCH', `/${id}`, { enabled: false });
+
+    expect(status).toBe(200);
+    expect(body.task.enabled).toBe(false);
+    expect(body.task.nextRunAt).toBeNull();
+    expect(repo._tasks.get(id).next_run_at).toBeNull();
+  });
+
+  it('recomputes nextRunAt from now when a paused task is resumed', async () => {
+    const created = await api('POST', '/', validBody);
+    const id = created.body.task.id;
+    await api('PATCH', `/${id}`, { enabled: false });
+    deps.computeNextRun.mockClear();
+
+    const { status, body } = await api('PATCH', `/${id}`, { enabled: true });
+
+    expect(status).toBe(200);
+    expect(body.task.enabled).toBe(true);
+    expect(deps.computeNextRun).toHaveBeenCalledTimes(1);
+    expect(body.task.nextRunAt).toBe(NEXT_ISO);
+  });
+
+  it('recomputes nextRunAt and kind when the rule changes', async () => {
+    const created = await api('POST', '/', validBody);
+    const id = created.body.task.id;
+    deps.computeNextRun.mockReturnValue(NEXT_MS + 1000);
+
+    const { status, body } = await api('PATCH', `/${id}`, {
+      rule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
+    });
+
+    expect(status).toBe(200);
+    expect(body.task.kind).toBe('daily');
+    expect(body.task.rule).toMatchObject({ kind: 'daily', time: '09:00', timeZone: 'UTC', normalized: true });
+    expect(body.task.nextRunAt).toBe(new Date(NEXT_MS + 1000).toISOString());
+  });
+
+  it('keeps a paused task paused when the rule changes', async () => {
+    const created = await api('POST', '/', validBody);
+    const id = created.body.task.id;
+    await api('PATCH', `/${id}`, { enabled: false });
+
+    const { body } = await api('PATCH', `/${id}`, {
+      rule: { kind: 'interval', everySeconds: 120 },
+      enabled: false,
+    });
+
+    expect(body.task.enabled).toBe(false);
+    expect(body.task.nextRunAt).toBeNull();
+  });
+
+  it('validates input and missing tasks', async () => {
+    const created = await api('POST', '/', validBody);
+    const id = created.body.task.id;
+
+    expect((await api('PATCH', `/${id}`, { enabled: 'yes' })).body.code).toBe('invalid_input');
+    expect((await api('PATCH', `/${id}`, { rule: { kind: 'bogus' } })).body.code).toBe('invalid_cron');
+    expect((await api('PATCH', '/missing', { title: 'x' })).status).toBe(404);
+  });
+});
+
+describe('DELETE /api/scheduled-tasks/:id', () => {
+  it('deletes a task and reports it', async () => {
+    const created = await api('POST', '/', validBody);
+    const id = created.body.task.id;
+
+    const { status, body } = await api('DELETE', `/${id}`);
+
+    expect(status).toBe(200);
+    expect(body).toEqual({ id, deleted: true });
+    expect((await api('GET', `/${id}`)).status).toBe(404);
+  });
+
+  it('returns 404 for an unknown task', async () => {
+    const { status, body } = await api('DELETE', '/missing');
+    expect(status).toBe(404);
+    expect(body.code).toBe('not_found');
+  });
+});
+
+describe('POST /api/scheduled-tasks/:id/run', () => {
+  it('returns 202 with the running run row', async () => {
+    const created = await api('POST', '/', validBody);
+    const id = created.body.task.id;
+
+    const { status, body } = await api('POST', `/${id}/run`);
+
+    expect(status).toBe(202);
+    expect(deps.runNow).toHaveBeenCalledWith(id);
+    expect(body.run).toMatchObject({ id: 'run-1', taskId: id, status: 'running', trigger: 'manual' });
+  });
+
+  it('returns 404 when the task does not exist', async () => {
+    deps.runNow.mockResolvedValue({ error: 'not_found' });
+
+    const { status, body } = await api('POST', '/missing/run');
+
+    expect(status).toBe(404);
+    expect(body.code).toBe('not_found');
+  });
+});
+
+describe('GET /api/scheduled-tasks/:id/runs', () => {
+  it('lists runs with total', async () => {
+    const created = await api('POST', '/', validBody);
+    const id = created.body.task.id;
+    repo._seedRun(id, { output: 'first' });
+    repo._seedRun(id, { output: 'second' });
+
+    const { status, body } = await api('GET', `/${id}/runs?limit=1&offset=0`);
+
+    expect(status).toBe(200);
+    expect(repo.listRuns).toHaveBeenCalledWith(id, 1, 0);
+    expect(body.total).toBe(2);
+    expect(body.runs).toHaveLength(1);
+    expect(body.runs[0]).toMatchObject({
+      taskId: id,
+      status: 'success',
+      trigger: 'schedule',
+      sessionId: 'sess-1',
+      output: 'second',
+      finishedAt: expect.any(String),
+    });
+  });
+
+  it('returns 404 for an unknown or deleted task', async () => {
+    const { status, body } = await api('GET', '/gone/runs');
+    expect(status).toBe(404);
+    expect(body).toEqual({ error: 'Scheduled task not found', code: 'not_found' });
+  });
+});
+
+describe('error handling', () => {
+  it('returns a generic 500 without leaking the stack trace', async () => {
+    repo.listTasks.mockImplementation(() => {
+      throw new Error('kaboom-secret');
+    });
+
+    const { status, body } = await api('GET', '/');
+
+    expect(status).toBe(500);
+    expect(body).toEqual({ error: 'Internal server error', code: 'internal_error' });
+    expect(JSON.stringify(body)).not.toContain('kaboom-secret');
+    expect(JSON.stringify(body)).not.toContain('at ');
+  });
+});

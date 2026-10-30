@@ -1,0 +1,519 @@
+/**
+ * Shared scheduled-task management layer.
+ *
+ * Single source of truth for task/run views, selector→rule mapping and the
+ * create/update/pause/resume/delete/run-now orchestration. Both the REST routes
+ * (server/routes/scheduled-tasks.js) and the agent tools
+ * (server/scheduled-tasks/tools.js) delegate here so the two paths cannot drift.
+ *
+ * Contract: docs/scheduled-tasks.md §1, §5, §6.
+ *
+ * Every public operation returns one of:
+ *   { ok: true, ...payload }
+ *   { ok: false, code, message, httpStatus }   // expected failure
+ * Unexpected errors (e.g. a broken repository) propagate to the caller, which
+ * maps them to 500 / internal_error.
+ */
+
+import { normalizeProjectPath } from '../shared/utils.js';
+
+const TASK_STATUSES = new Set(['active', 'paused', 'all']);
+const DEFAULT_RUNS_LIMIT = 20;
+const MAX_RUNS_LIMIT = 100;
+
+function errorMessage(err) {
+  if (err instanceof Error && err.message) return err.message;
+  if (typeof err === 'string' && err) return err;
+  try {
+    return String(err);
+  } catch {
+    return 'Unknown error';
+  }
+}
+
+function fail(code, message, httpStatus = 400) {
+  return { ok: false, code, message, httpStatus };
+}
+
+function notFound(message = 'Scheduled task not found') {
+  return { ok: false, code: 'not_found', message, httpStatus: 404 };
+}
+
+function nonEmptyString(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function hasValue(value) {
+  return value !== undefined && value !== null;
+}
+
+function toIso(ms) {
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
+
+function clampInt(value, fallback, min, max) {
+  const parsed = typeof value === 'number' ? value : parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(Math.trunc(parsed), min), max);
+}
+
+function parseJson(raw, fallback = null) {
+  if (raw === null || raw === undefined) return fallback;
+  if (typeof raw === 'object') return raw;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+
+/** DB row (snake_case) -> Task JSON (camelCase). */
+export function taskRowToJson(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    title: row.title,
+    prompt: row.prompt,
+    projectPath: row.project_path ?? row.projectPath ?? null,
+    provider: row.provider ?? 'claude',
+    model: row.model ?? null,
+    kind: row.kind,
+    rule: parseJson(row.rule_json ?? row.ruleJson),
+    nextRunAt: row.next_run_at ?? null,
+    lastRunAt: row.last_run_at ?? null,
+    lastStatus: row.last_status ?? null,
+    lastError: row.last_error ?? null,
+    enabled: row.enabled === undefined ? false : !!row.enabled,
+    runCount: row.run_count ?? 0,
+    createdAt: row.created_at ?? null,
+    updatedAt: row.updated_at ?? null,
+  };
+}
+
+/** DB row (snake_case) -> Run JSON (camelCase). */
+export function runRowToJson(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    taskId: row.task_id ?? row.taskId ?? null,
+    status: row.status,
+    trigger: row.trigger,
+    scheduledFor: row.scheduled_for ?? null,
+    startedAt: row.started_at ?? null,
+    finishedAt: row.finished_at ?? null,
+    sessionId: row.session_id ?? null,
+    output: row.output ?? null,
+    error: row.error ?? null,
+  };
+}
+
+function normalizePath(value) {
+  if (!value) return value;
+  try {
+    return normalizeProjectPath(value);
+  } catch {
+    return value;
+  }
+}
+
+export function sameProjectPath(a, b) {
+  if (!a || !b) return false;
+  const left = normalizePath(a);
+  const right = normalizePath(b);
+  if (process.platform === 'win32') return left.toLowerCase() === right.toLowerCase();
+  return left === right;
+}
+
+/**
+ * Selector args -> rule. Exactly one selector is required when required=true.
+ * @returns {{ ok: true, rule: object|null } | { ok: false, code, message, httpStatus }}
+ */
+export function ruleFromArgs(args, nowMs, { required = true } = {}) {
+  const source = args || {};
+  const present = [];
+  if (hasValue(source.after_seconds)) present.push('after_seconds');
+  if (hasValue(source.at)) present.push('at');
+  if (hasValue(source.every_seconds)) present.push('every_seconds');
+  if (hasValue(source.daily)) present.push('daily');
+  if (hasValue(source.weekly)) present.push('weekly');
+  if (hasValue(source.cron)) present.push('cron');
+
+  if (present.length === 0) {
+    if (!required) return { ok: true, rule: null };
+    return fail(
+      'invalid_input',
+      'Exactly one scheduling selector is required (after_seconds, at, every_seconds, daily, weekly or cron)'
+    );
+  }
+  if (present.length > 1) {
+    return fail('invalid_input', 'Provide exactly one selector, got: ' + present.join(', '));
+  }
+
+  const key = present[0];
+  if (key === 'after_seconds') {
+    const seconds = Number(source.after_seconds);
+    if (!Number.isFinite(seconds)) {
+      return fail('invalid_input', 'after_seconds must be a number');
+    }
+    return { ok: true, rule: { kind: 'once', at: new Date(nowMs + seconds * 1000).toISOString() } };
+  }
+  if (key === 'at') {
+    return { ok: true, rule: { kind: 'once', at: String(source.at) } };
+  }
+  if (key === 'every_seconds') {
+    return {
+      ok: true,
+      rule: { kind: 'interval', everySeconds: source.every_seconds, anchorMs: nowMs },
+    };
+  }
+  if (key === 'daily') {
+    return {
+      ok: true,
+      rule: { kind: 'daily', time: source.daily?.time, timeZone: source.daily?.time_zone },
+    };
+  }
+  if (key === 'weekly') {
+    return {
+      ok: true,
+      rule: {
+        kind: 'weekly',
+        time: source.weekly?.time,
+        timeZone: source.weekly?.time_zone,
+        weekdays: source.weekly?.weekdays,
+      },
+    };
+  }
+  return {
+    ok: true,
+    rule: {
+      kind: 'cron',
+      expression: source.cron?.expression,
+      timeZone: source.cron?.time_zone,
+    },
+  };
+}
+
+// ─── Lazy defaults (tests inject fakes) ───────────────────────────────────────
+
+async function loadDefaultRepo() {
+  const db = await import('../modules/database/index.js');
+  return db.scheduledTasksDb;
+}
+
+let cachedRules = null;
+async function loadDefaultRules() {
+  if (!cachedRules) cachedRules = await import('./rules.js');
+  return cachedRules;
+}
+
+let cachedRunNow = null;
+async function loadDefaultRunNow() {
+  if (!cachedRunNow) {
+    const service = await import('./service.js');
+    cachedRunNow = service.runScheduledTaskNow;
+  }
+  return cachedRunNow;
+}
+
+/**
+ * @param {object} [deps]
+ * @param {object} [deps.repo] scheduledTasksDb-compatible repository
+ * @param {object} [deps.rules] { validateRule, normalizeRule, computeNextRun }
+ * @param {Function} [deps.runNow] (taskId) => { run } | { error }
+ * @param {Function} [deps.now] () => epoch ms
+ */
+export function createManagement(deps = {}) {
+  const logger = deps.logger ?? console;
+  const now = deps.now ?? (() => Date.now());
+
+  let repoRef = deps.repo ?? null;
+  let rulesRef = deps.rules ?? null;
+  let runNowRef = deps.runNow ?? null;
+
+  async function getRepo() {
+    if (!repoRef) repoRef = await loadDefaultRepo();
+    return repoRef;
+  }
+
+  async function getRules() {
+    if (!rulesRef) rulesRef = await loadDefaultRules();
+    return rulesRef;
+  }
+
+  async function getRunNow() {
+    if (!runNowRef) runNowRef = await loadDefaultRunNow();
+    return runNowRef;
+  }
+
+  function validateAndNormalize(rule, rules) {
+    const check = rules.validateRule(rule);
+    if (!check || !check.ok) {
+      return fail(
+        (check && check.code) || 'invalid_rule',
+        (check && check.message) || 'Invalid rule'
+      );
+    }
+    try {
+      return { ok: true, rule: rules.normalizeRule(rule) };
+    } catch (err) {
+      return fail((err && err.code) || 'invalid_rule', (err && err.message) || 'Invalid rule');
+    }
+  }
+
+  /**
+   * Interval rules are anchored at creation/save time (docs §1). normalizeRule
+   * keeps an explicit anchor but does not create one, so default it here.
+   */
+  function withIntervalAnchor(rule, fromMs) {
+    if (
+      rule &&
+      typeof rule === 'object' &&
+      !Array.isArray(rule) &&
+      rule.kind === 'interval' &&
+      rule.anchorMs === undefined &&
+      rule.anchorAt === undefined
+    ) {
+      return { ...rule, anchorMs: fromMs };
+    }
+    return rule;
+  }
+
+  function nextRunIso(rule, rules, fromMs) {
+    if (!rule) return null;
+    try {
+      return toIso(rules.computeNextRun(rule, fromMs));
+    } catch (err) {
+      logger.warn?.('[scheduled-tasks] computeNextRun failed: ' + errorMessage(err));
+      return null;
+    }
+  }
+
+  function inScope(row, scope) {
+    if (!scope || !scope.projectPath) return true;
+    return sameProjectPath(row.project_path, scope.projectPath);
+  }
+
+  async function findTask(id, scope) {
+    const repo = await getRepo();
+    const row = repo.getTask(id);
+    if (!row || !inScope(row, scope)) return null;
+    return row;
+  }
+
+  // ─── Queries ────────────────────────────────────────────────────────────────
+
+  async function listTasks(options = {}, scope = {}) {
+    const repo = await getRepo();
+    const status =
+      typeof options.status === 'string' && TASK_STATUSES.has(options.status)
+        ? options.status
+        : undefined;
+    const search = nonEmptyString(options.search) || undefined;
+    let rows = repo.listTasks({ userId: options.userId ?? null, status, search }) || [];
+    if (scope && scope.projectPath) {
+      rows = rows.filter((row) => inScope(row, scope));
+    }
+    return { ok: true, tasks: rows.map(taskRowToJson) };
+  }
+
+  async function getTask(id, scope = {}) {
+    const row = await findTask(id, scope);
+    if (!row) return notFound();
+    return { ok: true, task: taskRowToJson(row) };
+  }
+
+  async function listRuns(id, options = {}, scope = {}) {
+    const repo = await getRepo();
+    const row = await findTask(id, scope);
+    if (!row) return notFound();
+    const limit = clampInt(options.limit, DEFAULT_RUNS_LIMIT, 1, MAX_RUNS_LIMIT);
+    const offset = clampInt(options.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+    const runs = repo.listRuns(id, limit, offset) || [];
+    const total = typeof repo.countRuns === 'function' ? repo.countRuns(id) : runs.length;
+    return { ok: true, runs: runs.map(runRowToJson), total };
+  }
+
+  async function getTaskWithRuns(id, scope = {}, limit = 5) {
+    const row = await findTask(id, scope);
+    if (!row) return notFound();
+    const repo = await getRepo();
+    const capped = clampInt(limit, 5, 1, MAX_RUNS_LIMIT);
+    const runs = repo.listRuns(id, capped, 0) || [];
+    return { ok: true, task: taskRowToJson(row), recent_runs: runs.map(runRowToJson) };
+  }
+
+  // ─── Mutations ──────────────────────────────────────────────────────────────
+
+  async function createTask(input = {}, scope = {}) {
+    const repo = await getRepo();
+    const rules = await getRules();
+
+    const title = nonEmptyString(input.title);
+    const projectPath = nonEmptyString(input.projectPath) || nonEmptyString(scope.projectPath);
+    const missing = [];
+    if (!title) missing.push('title');
+    if (typeof input.prompt !== 'string' || !input.prompt.trim()) missing.push('prompt');
+    if (!projectPath) missing.push('projectPath');
+    if (missing.length) {
+      return fail('invalid_input', 'Missing required field(s): ' + missing.join(', '));
+    }
+
+    const nowMs = now();
+    const checked = validateAndNormalize(withIntervalAnchor(input.rule, nowMs), rules);
+    if (!checked.ok) return checked;
+
+    const nextRunAt = nextRunIso(checked.rule, rules, nowMs);
+    if (!nextRunAt) {
+      return fail('invalid_schedule_time', 'Rule has no upcoming run');
+    }
+
+    const row = repo.createTask({
+      userId: input.userId ?? scope.userId ?? null,
+      title,
+      prompt: input.prompt,
+      projectPath,
+      provider: nonEmptyString(input.provider) || 'claude',
+      model: nonEmptyString(input.model),
+      kind: checked.rule.kind,
+      ruleJson: JSON.stringify(checked.rule),
+      nextRunAt,
+      enabled: input.enabled !== false,
+    });
+
+    return { ok: true, task: taskRowToJson(row) };
+  }
+
+  async function updateTask(id, patch = {}, scope = {}) {
+    const repo = await getRepo();
+    const rules = await getRules();
+
+    const row = await findTask(id, scope);
+    if (!row) return notFound();
+
+    const changes = {};
+    if (patch.title !== undefined) {
+      const title = nonEmptyString(patch.title);
+      if (!title) return fail('invalid_input', 'title must be a non-empty string');
+      changes.title = title;
+    }
+    if (patch.prompt !== undefined) {
+      if (typeof patch.prompt !== 'string' || !patch.prompt.trim()) {
+        return fail('invalid_input', 'prompt must be a non-empty string');
+      }
+      changes.prompt = patch.prompt;
+    }
+    if (patch.projectPath !== undefined) {
+      const projectPath = nonEmptyString(patch.projectPath);
+      if (!projectPath) return fail('invalid_input', 'projectPath must be a non-empty string');
+      changes.projectPath = projectPath;
+    }
+    if (patch.model !== undefined) {
+      changes.model = nonEmptyString(patch.model);
+    }
+
+    const nowMs = now();
+    let rule = null;
+    if (hasValue(patch.rule)) {
+      const checked = validateAndNormalize(withIntervalAnchor(patch.rule, nowMs), rules);
+      if (!checked.ok) return checked;
+      rule = checked.rule;
+      changes.kind = rule.kind;
+      changes.ruleJson = JSON.stringify(rule);
+    }
+
+    // undefined means "leave nextRunAt unchanged".
+    let nextRunAt;
+    if (rule) nextRunAt = nextRunIso(rule, rules, nowMs);
+
+    if (patch.enabled !== undefined) {
+      if (typeof patch.enabled !== 'boolean') {
+        return fail('invalid_input', 'enabled must be a boolean');
+      }
+      changes.enabled = patch.enabled;
+      if (!patch.enabled) {
+        // Paused tasks are never due.
+        nextRunAt = null;
+      } else if (!rule && !row.enabled) {
+        const storedRule = parseJson(row.rule_json ?? row.ruleJson);
+        if (storedRule) nextRunAt = nextRunIso(storedRule, rules, nowMs);
+      }
+    }
+
+    if (nextRunAt !== undefined) changes.nextRunAt = nextRunAt;
+
+    const updated = repo.updateTask(id, changes);
+    if (!updated) return notFound();
+    return { ok: true, task: taskRowToJson(updated) };
+  }
+
+  async function setEnabled(id, enabled, scope = {}) {
+    const repo = await getRepo();
+    const rules = await getRules();
+    const row = await findTask(id, scope);
+    if (!row) return notFound();
+
+    const changes = { enabled };
+    if (!enabled) {
+      changes.nextRunAt = null;
+    } else if (!row.enabled) {
+      const storedRule = parseJson(row.rule_json ?? row.ruleJson);
+      const nextRunAt = storedRule ? nextRunIso(storedRule, rules, now()) : null;
+      changes.nextRunAt = nextRunAt;
+    }
+
+    const updated = repo.updateTask(id, changes);
+    if (!updated) return notFound();
+    return { ok: true, task: taskRowToJson(updated) };
+  }
+
+  async function deleteTask(id, scope = {}) {
+    const repo = await getRepo();
+    const row = await findTask(id, scope);
+    if (!row) return notFound();
+    const deleted = repo.deleteTask(id);
+    if (!deleted) return notFound();
+    return { ok: true, id, deleted: true };
+  }
+
+  async function runTaskNow(id, scope = {}) {
+    const row = await findTask(id, scope);
+    if (!row) return notFound();
+
+    const runNow = await getRunNow();
+    let result;
+    try {
+      result = await runNow(id);
+    } catch (err) {
+      return fail('internal_error', errorMessage(err), 500);
+    }
+
+    if (!result || result.error === 'not_found') return notFound();
+    if (result.error === 'in_flight') {
+      return fail('in_flight', 'Scheduled task is already running', 409);
+    }
+    if (result.error || !result.run) {
+      return fail('internal_error', result.error || 'No run was created', 500);
+    }
+    return { ok: true, run: runRowToJson(result.run) };
+  }
+
+  return {
+    // views
+    taskView: taskRowToJson,
+    runView: runRowToJson,
+    // selectors
+    ruleFromArgs: (args, options) => ruleFromArgs(args, now(), options),
+    // queries
+    listTasks,
+    getTask,
+    listRuns,
+    getTaskWithRuns,
+    // mutations
+    createTask,
+    updateTask,
+    pauseTask: (id, scope) => setEnabled(id, false, scope),
+    resumeTask: (id, scope) => setEnabled(id, true, scope),
+    deleteTask,
+    runTaskNow,
+  };
+}
