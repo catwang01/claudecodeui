@@ -365,22 +365,19 @@ export function isCodexSessionActive(sessionId) {
 
 /**
  * Get all active sessions
- * @returns {Array} - Array of active session info
+ * @returns {Array<string>} - Array of active session IDs (same shape as the
+ *   other providers, e.g. getActiveClaudeSDKSessions)
  */
 export function getActiveCodexSessions() {
-  const sessions = [];
+  const sessionIds = [];
 
   for (const [id, session] of activeCodexSessions.entries()) {
     if (session.status === 'running') {
-      sessions.push({
-        id,
-        status: session.status,
-        startedAt: session.startedAt
-      });
+      sessionIds.push(id);
     }
   }
 
-  return sessions;
+  return sessionIds;
 }
 
 /**
