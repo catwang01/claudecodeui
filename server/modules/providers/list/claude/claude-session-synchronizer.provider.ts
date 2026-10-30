@@ -4,6 +4,9 @@ import { readFileTimestamps, readFirstJsonlLine, findFilesModifiedAfter } from '
 import { sessionsDb, projectsDb } from '@/modules/database/index.js';
 import { userDb, userSettingsDb } from '../../../../database/db.js';
 import type { ISessionSynchronizer } from '../../types.js';
+import { matchesExcludePattern } from '../../../../../shared/excludePatterns.js';
+
+export { matchesExcludePattern };
 
 const CLAUDE_HOME = path.join(os.homedir(), '.claude');
 
@@ -23,13 +26,6 @@ function getServerExcludePatterns(): string[] {
   } catch {
     return [];
   }
-}
-
-function matchesExcludePattern(projectPath: string, patterns: string[]): boolean {
-  if (!patterns.length) return false;
-  return patterns.some(p => {
-    try { return new RegExp(p, 'i').test(projectPath); } catch { return false; }
-  });
 }
 
 export const claudeSessionSynchronizer: ISessionSynchronizer = {

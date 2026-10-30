@@ -15,6 +15,7 @@ let paginateRecentSessionRows;
 let sessionFileCache;
 let sessionDb;
 let sessionsDb;
+let matchesExcludePattern;
 
 const tmpBase = path.join(os.homedir(), '.claude', 'projects');
 const projectName = `__test_session_cache_${Date.now()}`;
@@ -53,6 +54,7 @@ beforeEach(async () => {
   dedupeCopilotSessionAliases = mod.dedupeCopilotSessionAliases;
   paginateForkTrees = mod.paginateForkTrees;
   paginateRecentSessionRows = mod.paginateRecentSessionRows;
+  matchesExcludePattern = mod.matchesExcludePattern;
   const dbMod = await import('./database/db.js');
   sessionFileCache = dbMod.sessionFileCache;
   sessionDb = dbMod.sessionDb;
@@ -759,3 +761,47 @@ describe('deleteProject', () => {
     await expect(fs.access(claudeProjectDir)).rejects.toThrow();
   });
 });
+
+describe('matchesExcludePattern', () => {
+  it('matches an anchored pattern against the directory basename', () => {
+    expect(matchesExcludePattern('/Users/x/MyFolder/agent-xx', ['^agent.*'])).toBe(true);
+  });
+
+  it('does not match a sibling directory for an anchored basename pattern', () => {
+    expect(matchesExcludePattern('/Users/x/MyFolder/normal', ['^agent.*'])).toBe(false);
+  });
+
+  it('keeps full-path substring matching working', () => {
+    expect(matchesExcludePattern('/Users/x/MyFolder/agent-xx', ['agent-xx'])).toBe(true);
+  });
+
+  it('matches an anchored suffix pattern', () => {
+    expect(matchesExcludePattern('/Users/x/MyFolder/old-archive', ['.*-archive$'])).toBe(true);
+  });
+
+  it('ignores trailing separators when computing the basename', () => {
+    expect(matchesExcludePattern('/Users/x/MyFolder/old-archive/', ['.*-archive$'])).toBe(true);
+  });
+
+  it('matches a Windows path basename', () => {
+    expect(matchesExcludePattern('C:\\work\\agent-01', ['^agent.*'])).toBe(true);
+  });
+
+  it('matches case-insensitively', () => {
+    expect(matchesExcludePattern('/Users/x/MyFolder/AGENT-XX', ['^agent.*'])).toBe(true);
+  });
+
+  it('ignores an invalid regex without throwing', () => {
+    expect(() => matchesExcludePattern('/Users/x/MyFolder/agent-xx', ['['])).not.toThrow();
+    expect(matchesExcludePattern('/Users/x/MyFolder/agent-xx', ['['])).toBe(false);
+  });
+
+  it('ignores blank patterns', () => {
+    expect(matchesExcludePattern('/Users/x/MyFolder/agent-xx', ['', '   '])).toBe(false);
+  });
+
+  it('returns false for an empty patterns array', () => {
+    expect(matchesExcludePattern('/Users/x/MyFolder/agent-xx', [])).toBe(false);
+  });
+});
+

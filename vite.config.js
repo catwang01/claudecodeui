@@ -66,7 +66,7 @@ export default defineConfig(({ mode }) => {
       globals: true,
       environment: 'jsdom',
       setupFiles: ['./src/test-setup.ts'],
-      include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'server/**/*.test.js', 'server/**/*.test.ts'],
+      include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'server/**/*.test.js', 'server/**/*.test.ts', 'shared/**/*.test.ts'],
       environmentMatchGlobs: [
         ['server/**/*.test.js', 'node'],
         ['server/**/*.test.ts', 'node'],
