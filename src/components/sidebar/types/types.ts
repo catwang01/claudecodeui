@@ -30,6 +30,7 @@ export type SidebarProps = {
   onNewSession: (project: Project) => void;
   onSessionDelete?: (sessionId: string) => void;
   onProjectDelete?: (projectName: string) => void;
+  onNavigateToSession?: (sessionId: string) => void;
   isLoading: boolean;
   loadingProgress: LoadingProgress | null;
   onRefresh: () => Promise<void> | void;

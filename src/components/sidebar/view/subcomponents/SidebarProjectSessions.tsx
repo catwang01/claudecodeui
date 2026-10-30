@@ -30,6 +30,8 @@ type SidebarProjectSessionsProps = {
     sessionTitle: string,
     provider: SessionProvider,
   ) => void;
+  onForkSession: (projectName: string, sessionId: string, provider: SessionProvider) => void;
+  forkingSessionId?: string | null;
   onLoadMoreSessions: (project: Project) => void;
   onNewSession: (project: Project) => void;
   processingSessions?: Set<string>;
@@ -72,6 +74,8 @@ export default memo(function SidebarProjectSessions({
   onProjectSelect,
   onSessionSelect,
   onDeleteSession,
+  onForkSession,
+  forkingSessionId,
   onLoadMoreSessions,
   onNewSession,
   processingSessions,
@@ -154,6 +158,8 @@ export default memo(function SidebarProjectSessions({
             onProjectSelect={onProjectSelect}
             onSessionSelect={onSessionSelect}
             onDeleteSession={onDeleteSession}
+            onForkSession={onForkSession}
+            isForking={forkingSessionId === session.id}
             depth={depth}
             hasChildren={hasChildren}
             isCollapsed={isCollapsed}
@@ -198,5 +204,6 @@ export default memo(function SidebarProjectSessions({
   prev.readSessionIds === next.readSessionIds &&
   prev.editingSession === next.editingSession &&
   prev.editingSessionName === next.editingSessionName &&
+  prev.forkingSessionId === next.forkingSessionId &&
   prev.project.sessionMeta?.hasMore === next.project.sessionMeta?.hasMore,
 );

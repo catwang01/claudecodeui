@@ -453,6 +453,8 @@ export default function SidebarContent({
                       )
                     }
                     onDeleteSession={projectListProps.onDeleteSession}
+                    onForkSession={projectListProps.onForkSession}
+                    isForking={projectListProps.forkingSessionId === session.id}
                     onRenameSession={projectListProps.onSaveEditingSession}
                     onProjectNavigate={(proj) => {
                       setScrollTargetProject(proj.name);
