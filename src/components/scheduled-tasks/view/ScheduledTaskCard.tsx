@@ -1,6 +1,6 @@
-import { Cpu, FolderOpen, History, Loader2, Pencil, Play, Repeat, Trash2 } from 'lucide-react';
+import { Cpu, FolderOpen, History, Loader2, Pencil, Play, Repeat, Terminal, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { Button } from '../../../shared/view/ui';
+import { Button, Tooltip } from '../../../shared/view/ui';
 import { cn } from '../../../lib/utils';
 import SettingsToggle from '../../settings/view/SettingsToggle';
 import type { ScheduledTask } from '../types';
@@ -94,6 +94,16 @@ export default function ScheduledTaskCard({
                 <Cpu className="h-3 w-3" />
                 {task.model}
               </span>
+            )}
+            {task.command && (
+              <Tooltip content={t('card.scriptGate')}>
+                <span
+                  aria-label={t('card.scriptGate')}
+                  className="inline-flex items-center rounded-full bg-amber-500/15 px-1.5 py-0.5 text-amber-600 dark:text-amber-400"
+                >
+                  <Terminal className="h-3 w-3" />
+                </span>
+              </Tooltip>
             )}
             <span>{t('card.runCount', { count: task.runCount ?? 0 })}</span>
           </div>

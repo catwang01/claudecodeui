@@ -31,6 +31,9 @@ function makeRun(id: string, sessionId: string): ScheduledTaskRun {
     sessionId,
     output: null,
     error: null,
+    scriptExitCode: null,
+    scriptOutput: null,
+    promptUsed: null,
   };
 }
 
@@ -42,6 +45,8 @@ function makeTask(overrides: Partial<ScheduledTask>): ScheduledTask {
     projectPath: '/tmp/project',
     provider: 'claude',
     model: null,
+    command: null,
+    commandTimeoutSeconds: null,
     kind: 'daily',
     rule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
     nextRunAt: '2026-01-02T09:00:00.000Z',
@@ -118,5 +123,40 @@ describe('ScheduledTaskCard run history freshness', () => {
     expect(listRuns).toHaveBeenNthCalledWith(2, 'task-1', { limit: 20, offset: 0 });
     expect(screen.queryAllByText(textWith('"total":1')).length).toBe(0);
     expect(screen.getAllByText(textWith('session-2')).length).toBeGreaterThan(0);
+  });
+
+  it('marks tasks that have a script gate', async () => {
+    listRuns.mockResolvedValue({ runs: [], total: 0 });
+
+    const renderTask = (task: ScheduledTask) =>
+      render(
+        <ScheduledTaskCard
+          task={task}
+          isBusy={false}
+          isExpanded={false}
+          onToggleEnabled={noop}
+          onRunNow={noop}
+          onEdit={noop}
+          onDelete={noop}
+          onToggleHistory={noop}
+        />,
+      );
+
+    const { rerender } = renderTask(makeTask({ command: 'echo hi', commandTimeoutSeconds: 30 }));
+    expect(screen.getByLabelText('card.scriptGate')).toBeTruthy();
+
+    rerender(
+      <ScheduledTaskCard
+        task={makeTask({ command: null, commandTimeoutSeconds: null })}
+        isBusy={false}
+        isExpanded={false}
+        onToggleEnabled={noop}
+        onRunNow={noop}
+        onEdit={noop}
+        onDelete={noop}
+        onToggleHistory={noop}
+      />,
+    );
+    expect(screen.queryByLabelText('card.scriptGate')).toBeNull();
   });
 });

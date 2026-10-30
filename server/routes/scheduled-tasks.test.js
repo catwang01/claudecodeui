@@ -24,6 +24,8 @@ function makeRepo() {
         project_path: input.projectPath,
         provider: input.provider ?? 'claude',
         model: input.model ?? null,
+        command: input.command ?? null,
+        command_timeout_seconds: input.commandTimeoutSeconds ?? null,
         kind: input.kind,
         rule_json: input.ruleJson,
         next_run_at: input.nextRunAt ?? null,
@@ -63,6 +65,8 @@ function makeRepo() {
         projectPath: 'project_path',
         provider: 'provider',
         model: 'model',
+        command: 'command',
+        commandTimeoutSeconds: 'command_timeout_seconds',
         kind: 'kind',
         ruleJson: 'rule_json',
         nextRunAt: 'next_run_at',
@@ -447,5 +451,87 @@ describe('error handling', () => {
     expect(body).toEqual({ error: 'Internal server error', code: 'internal_error' });
     expect(JSON.stringify(body)).not.toContain('kaboom-secret');
     expect(JSON.stringify(body)).not.toContain('at ');
+  });
+});
+
+describe('script gate fields (§7)', () => {
+  it('accepts command and commandTimeoutSeconds on create', async () => {
+    const { status, body } = await api('POST', '/', {
+      ...validBody,
+      command: 'echo hi',
+      commandTimeoutSeconds: 120,
+    });
+
+    expect(status).toBe(201);
+    expect(body.task.command).toBe('echo hi');
+    expect(body.task.commandTimeoutSeconds).toBe(120);
+
+    const row = repo._tasks.get(body.task.id);
+    expect(row.command).toBe('echo hi');
+    expect(row.command_timeout_seconds).toBe(120);
+  });
+
+  it('defaults both gate fields to null', async () => {
+    const { body } = await api('POST', '/', validBody);
+
+    expect(body.task.command).toBeNull();
+    expect(body.task.commandTimeoutSeconds).toBeNull();
+  });
+
+  it('rejects invalid command and timeout values on create', async () => {
+    expect((await api('POST', '/', { ...validBody, command: 42 })).body.code).toBe('invalid_input');
+    expect((await api('POST', '/', { ...validBody, command: '' })).body.code).toBe('invalid_input');
+    expect((await api('POST', '/', { ...validBody, commandTimeoutSeconds: 0 })).body.code).toBe('invalid_input');
+    expect((await api('POST', '/', { ...validBody, commandTimeoutSeconds: 3601 })).body.code).toBe('invalid_input');
+    expect((await api('POST', '/', { ...validBody, commandTimeoutSeconds: 60.5 })).body.code).toBe('invalid_input');
+    expect((await api('POST', '/', { ...validBody, commandTimeoutSeconds: '60' })).body.code).toBe('invalid_input');
+  });
+
+  it('updates and explicitly clears both fields with null', async () => {
+    const created = await api('POST', '/', validBody);
+    const id = created.body.task.id;
+
+    const set = await api('PATCH', '/' + id, { command: 'echo gate', commandTimeoutSeconds: 30 });
+    expect(set.status).toBe(200);
+    expect(set.body.task.command).toBe('echo gate');
+    expect(set.body.task.commandTimeoutSeconds).toBe(30);
+
+    const cleared = await api('PATCH', '/' + id, { command: null, commandTimeoutSeconds: null });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.task.command).toBeNull();
+    expect(cleared.body.task.commandTimeoutSeconds).toBeNull();
+    expect(repo._tasks.get(id).command).toBeNull();
+    expect(repo._tasks.get(id).command_timeout_seconds).toBeNull();
+  });
+
+  it('rejects invalid gate values on PATCH', async () => {
+    const created = await api('POST', '/', validBody);
+    const id = created.body.task.id;
+
+    expect((await api('PATCH', '/' + id, { command: 42 })).body.code).toBe('invalid_input');
+    expect((await api('PATCH', '/' + id, { commandTimeoutSeconds: 0 })).body.code).toBe('invalid_input');
+    expect((await api('PATCH', '/' + id, { commandTimeoutSeconds: 3601 })).body.code).toBe('invalid_input');
+  });
+
+  it('exposes the script gate fields on runs, including skipped', async () => {
+    const created = await api('POST', '/', validBody);
+    const id = created.body.task.id;
+    repo._seedRun(id, {
+      status: 'skipped',
+      output: 'nothing to do',
+      script_exit_code: 0,
+      script_output: '{"skip":true}',
+      prompt_used: null,
+    });
+
+    const { body } = await api('GET', '/' + id + '/runs');
+
+    expect(body.runs[0]).toMatchObject({
+      status: 'skipped',
+      output: 'nothing to do',
+      scriptExitCode: 0,
+      scriptOutput: '{"skip":true}',
+      promptUsed: null,
+    });
   });
 });

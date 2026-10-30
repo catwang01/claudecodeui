@@ -19,6 +19,8 @@ export type ScheduledTaskRow = {
   run_count: number;
   created_at: string;
   updated_at: string;
+  command: string | null;
+  command_timeout_seconds: number | null;
 };
 
 export type ScheduledTaskRunRow = {
@@ -32,8 +34,13 @@ export type ScheduledTaskRunRow = {
   session_id: string | null;
   output: string | null;
   error: string | null;
+  script_exit_code: number | null;
+  script_output: string | null;
+  prompt_used: string | null;
 };
 
+// Inputs are camelCase, rows are snake_case (docs §7). The snake_case spellings
+// are accepted as aliases so callers that already hold a row can spread it in.
 export type CreateScheduledTaskInput = {
   id?: string;
   userId?: number | null;
@@ -46,6 +53,9 @@ export type CreateScheduledTaskInput = {
   ruleJson: string;
   nextRunAt?: string | null;
   enabled?: boolean | number;
+  command?: string | null;
+  commandTimeoutSeconds?: number | null;
+  command_timeout_seconds?: number | null;
 };
 
 export type ScheduledTaskUpdatePatch = Partial<{
@@ -58,6 +68,9 @@ export type ScheduledTaskUpdatePatch = Partial<{
   ruleJson: string;
   nextRunAt: string | null;
   enabled: boolean | number;
+  command: string | null;
+  commandTimeoutSeconds: number | null;
+  command_timeout_seconds: number | null;
 }>;
 
 export type ScheduledTaskAdvancePatch = Partial<{
@@ -74,6 +87,12 @@ export type CreateScheduledTaskRunInput = {
   trigger: string;
   scheduledFor?: string | null;
   startedAt?: string;
+  scriptExitCode?: number | null;
+  scriptOutput?: string | null;
+  promptUsed?: string | null;
+  script_exit_code?: number | null;
+  script_output?: string | null;
+  prompt_used?: string | null;
 };
 
 export type FinishScheduledTaskRunPatch = {
@@ -82,6 +101,12 @@ export type FinishScheduledTaskRunPatch = {
   sessionId?: string | null;
   output?: string | null;
   error?: string | null;
+  scriptExitCode?: number | null;
+  scriptOutput?: string | null;
+  promptUsed?: string | null;
+  script_exit_code?: number | null;
+  script_output?: string | null;
+  prompt_used?: string | null;
 };
 
 export type ListScheduledTasksOptions = {
@@ -97,6 +122,9 @@ const currentIso = (): string => new Date().toISOString();
 const toEnabled = (value: boolean | number | undefined): number => (value === undefined || value ? 1 : 0);
 
 const escapeLike = (value: string): string => value.replace(/[\\%_]/g, (char) => '\\' + char);
+
+// First value that was actually supplied (undefined means "not supplied", null means "clear").
+const pick = <T>(...values: (T | undefined)[]): T | undefined => values.find((value) => value !== undefined);
 
 function pushAssignment(assignments: string[], values: ColumnValue[], column: string, value: ColumnValue | undefined): void {
   if (value === undefined) return;
@@ -114,12 +142,13 @@ function selectRun(id: string): ScheduledTaskRunRow | undefined {
 
 const INSERT_TASK_SQL =
   'INSERT INTO scheduled_tasks (id, user_id, title, prompt, project_path, provider, model, kind, rule_json, ' +
-  'next_run_at, last_run_at, last_status, last_error, enabled, run_count, created_at, updated_at) ' +
-  'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, 0, ?, ?)';
+  'next_run_at, last_run_at, last_status, last_error, enabled, run_count, created_at, updated_at, ' +
+  'command, command_timeout_seconds) ' +
+  'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, 0, ?, ?, ?, ?)';
 
 const INSERT_RUN_SQL =
-  'INSERT INTO scheduled_task_runs (id, task_id, status, "trigger", scheduled_for, started_at, finished_at, session_id, output, error) ' +
-  'VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL)';
+  'INSERT INTO scheduled_task_runs (id, task_id, status, "trigger", scheduled_for, started_at, finished_at, session_id, output, error, script_exit_code, script_output, prompt_used) ' +
+  'VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?)';
 
 export const scheduledTasksDb = {
   createTask(input: CreateScheduledTaskInput): ScheduledTaskRow {
@@ -140,7 +169,9 @@ export const scheduledTasksDb = {
         input.nextRunAt ?? null,
         toEnabled(input.enabled),
         timestamp,
-        timestamp
+        timestamp,
+        input.command ?? null,
+        pick(input.commandTimeoutSeconds, input.command_timeout_seconds) ?? null
       );
     return selectTask(id) as ScheduledTaskRow;
   },
@@ -185,6 +216,8 @@ export const scheduledTasksDb = {
     pushAssignment(assignments, values, 'kind', patch.kind);
     pushAssignment(assignments, values, 'rule_json', patch.ruleJson);
     pushAssignment(assignments, values, 'next_run_at', patch.nextRunAt);
+    pushAssignment(assignments, values, 'command', patch.command);
+    pushAssignment(assignments, values, 'command_timeout_seconds', pick(patch.commandTimeoutSeconds, patch.command_timeout_seconds));
     if (patch.enabled !== undefined) pushAssignment(assignments, values, 'enabled', toEnabled(patch.enabled));
 
     assignments.push('updated_at = ?');
@@ -236,7 +269,17 @@ export const scheduledTasksDb = {
     const id = crypto.randomUUID();
     getConnection()
       .prepare(INSERT_RUN_SQL)
-      .run(id, input.taskId, input.status, input.trigger, input.scheduledFor ?? null, input.startedAt ?? currentIso());
+      .run(
+        id,
+        input.taskId,
+        input.status,
+        input.trigger,
+        input.scheduledFor ?? null,
+        input.startedAt ?? currentIso(),
+        pick(input.scriptExitCode, input.script_exit_code) ?? null,
+        pick(input.scriptOutput, input.script_output) ?? null,
+        pick(input.promptUsed, input.prompt_used) ?? null
+      );
     return selectRun(id) as ScheduledTaskRunRow;
   },
 
@@ -247,6 +290,9 @@ export const scheduledTasksDb = {
     pushAssignment(assignments, values, 'session_id', patch.sessionId);
     pushAssignment(assignments, values, 'output', patch.output);
     pushAssignment(assignments, values, 'error', patch.error);
+    pushAssignment(assignments, values, 'script_exit_code', pick(patch.scriptExitCode, patch.script_exit_code));
+    pushAssignment(assignments, values, 'script_output', pick(patch.scriptOutput, patch.script_output));
+    pushAssignment(assignments, values, 'prompt_used', pick(patch.promptUsed, patch.prompt_used));
     values.push(id);
 
     const info = getConnection()

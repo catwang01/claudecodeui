@@ -34,12 +34,50 @@ const makeTask = (overrides: Partial<TaskInput> & Pick<TaskInput, 'title'>) =>
     ...overrides,
   });
 
+// The pre-script-gate shape of the two tables (docs section 3): no command /
+// command_timeout_seconds / script_* columns. Creating this first exercises the
+// addColumnIfMissing upgrade path on a database that already holds rows.
+const LEGACY_TASKS_DDL =
+  'CREATE TABLE scheduled_tasks (' +
+  ' id TEXT PRIMARY KEY, user_id INTEGER, title TEXT NOT NULL, prompt TEXT NOT NULL,' +
+  ' project_path TEXT NOT NULL, provider TEXT NOT NULL DEFAULT ' + "'claude'" + ',' +
+  ' model TEXT, kind TEXT NOT NULL, rule_json TEXT NOT NULL, next_run_at TEXT,' +
+  ' last_run_at TEXT, last_status TEXT, last_error TEXT, enabled INTEGER NOT NULL DEFAULT 1,' +
+  ' run_count INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)';
+
+const LEGACY_RUNS_DDL =
+  'CREATE TABLE scheduled_task_runs (' +
+  ' id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES scheduled_tasks(id) ON DELETE CASCADE,' +
+  ' status TEXT NOT NULL, "trigger" TEXT NOT NULL, scheduled_for TEXT, started_at TEXT NOT NULL,' +
+  ' finished_at TEXT, session_id TEXT, output TEXT, error TEXT)';
+
+const legacyTaskId = crypto.randomUUID();
+
 beforeAll(async () => {
   // Pre-create an empty database file so the connection module does not copy the
   // real legacy auth.db into the temp location.
   await fs.writeFile(databasePath, '');
+  const db = getConnection();
+  db.exec(LEGACY_TASKS_DDL);
+  db.exec(LEGACY_RUNS_DDL);
+  db.prepare(
+    'INSERT INTO scheduled_tasks (id, user_id, title, prompt, project_path, provider, model, kind, rule_json, ' +
+      'next_run_at, last_run_at, last_status, last_error, enabled, run_count, created_at, updated_at) ' +
+      'VALUES (?, NULL, ?, ?, ?, ?, NULL, ?, ?, NULL, NULL, NULL, NULL, 1, 0, ?, ?)'
+  ).run(
+    legacyTaskId,
+    'Legacy gated task',
+    'legacy prompt',
+    '/srv/legacy',
+    'claude',
+    'daily',
+    '{}',
+    '2026-01-01T00:00:00.000Z',
+    '2026-01-01T00:00:00.000Z'
+  );
+  // runMigrations() runs on every server start: it must add the script-gate columns
+  // to the legacy schema above and stay idempotent when run again.
   runMigrations();
-  // runMigrations() runs on every server start; the scheduled-task schemas must be idempotent.
   runMigrations();
 });
 
@@ -73,6 +111,8 @@ describe('scheduledTasksDb', () => {
     expect(created.last_run_at).toBeNull();
     expect(created.last_status).toBeNull();
     expect(created.last_error).toBeNull();
+    expect(created.command).toBeNull();
+    expect(created.command_timeout_seconds).toBeNull();
     expect(created.created_at).toBe(created.updated_at);
     expect(created.created_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
 
@@ -97,6 +137,8 @@ describe('scheduledTasksDb', () => {
       ruleJson: '{}',
       nextRunAt: null,
       enabled: false,
+      command: 'node gate.js',
+      commandTimeoutSeconds: 30,
     });
 
     expect(created.id).toBe(id);
@@ -105,6 +147,8 @@ describe('scheduledTasksDb', () => {
     expect(created.model).toBe('gpt');
     expect(created.enabled).toBe(0);
     expect(created.next_run_at).toBeNull();
+    expect(created.command).toBe('node gate.js');
+    expect(created.command_timeout_seconds).toBe(30);
   });
 
   it('lists tasks with status, user and search filters in created_at DESC order', () => {
@@ -338,5 +382,115 @@ describe('scheduledTasksDb', () => {
 
     expect(scheduledTasksDb.pruneRuns(other.id, 0)).toBe(1);
     expect(scheduledTasksDb.countRuns(other.id)).toBe(0);
+  });
+
+  it('upgrades a pre-script-gate database in place and keeps legacy rows working', () => {
+    const legacy = must(scheduledTasksDb.getTask(legacyTaskId));
+    expect(legacy.title).toBe('Legacy gated task');
+    expect(legacy.command).toBeNull();
+    expect(legacy.command_timeout_seconds).toBeNull();
+
+    const legacyRun = scheduledTasksDb.createRun({ taskId: legacyTaskId, status: 'running', trigger: 'manual' });
+    expect(legacyRun.script_exit_code).toBeNull();
+    expect(legacyRun.script_output).toBeNull();
+    expect(legacyRun.prompt_used).toBeNull();
+
+    const upgraded = must(scheduledTasksDb.updateTask(legacyTaskId, { command: 'echo hi', commandTimeoutSeconds: 90 }));
+    expect(upgraded.command).toBe('echo hi');
+    expect(upgraded.command_timeout_seconds).toBe(90);
+
+    // runMigrations() must stay idempotent after the in-place upgrade.
+    const columnsBefore = (getConnection().prepare('PRAGMA table_info(scheduled_tasks)').all() as { name: string }[]).map(
+      (row) => row.name
+    );
+    runMigrations();
+    const columnsAfter = (getConnection().prepare('PRAGMA table_info(scheduled_tasks)').all() as { name: string }[]).map(
+      (row) => row.name
+    );
+    expect(columnsAfter).toEqual(columnsBefore);
+    expect(columnsAfter).toContain('command');
+    expect(columnsAfter).toContain('command_timeout_seconds');
+  });
+
+  it('round-trips the script gate on tasks and clears it with explicit nulls', () => {
+    const created = makeTask({ title: 'Gated task', command: 'node gate.js', commandTimeoutSeconds: 120 });
+    expect(created.command).toBe('node gate.js');
+    expect(created.command_timeout_seconds).toBe(120);
+    expect(must(scheduledTasksDb.getTask(created.id)).command).toBe('node gate.js');
+
+    const updated = must(
+      scheduledTasksDb.updateTask(created.id, { command: 'node other.js', commandTimeoutSeconds: 300 })
+    );
+    expect(updated.command).toBe('node other.js');
+    expect(updated.command_timeout_seconds).toBe(300);
+
+    // snake_case aliases for callers that already hold a row.
+    const aliased = must(scheduledTasksDb.updateTask(created.id, { command_timeout_seconds: 45 }));
+    expect(aliased.command_timeout_seconds).toBe(45);
+    expect(aliased.command).toBe('node other.js');
+
+    const cleared = must(scheduledTasksDb.updateTask(created.id, { command: null, commandTimeoutSeconds: null }));
+    expect(cleared.command).toBeNull();
+    expect(cleared.command_timeout_seconds).toBeNull();
+    expect(must(scheduledTasksDb.getTask(created.id)).command).toBeNull();
+
+    const aliasedCreate = makeTask({ title: 'Alias task', command_timeout_seconds: 75 });
+    expect(aliasedCreate.command).toBeNull();
+    expect(aliasedCreate.command_timeout_seconds).toBe(75);
+  });
+
+  it('stores script fields on runs and accepts the skipped status', () => {
+    const task = makeTask({ title: 'Script gate task', command: 'node gate.js' });
+
+    const running = scheduledTasksDb.createRun({
+      taskId: task.id,
+      status: 'running',
+      trigger: 'schedule',
+      startedAt: '2026-07-01T00:00:00.000Z',
+      promptUsed: 'effective prompt',
+    });
+    expect(running.script_exit_code).toBeNull();
+    expect(running.script_output).toBeNull();
+    expect(running.prompt_used).toBe('effective prompt');
+
+    const skipped = must(
+      scheduledTasksDb.finishRun(running.id, {
+        status: 'skipped',
+        finishedAt: '2026-07-01T00:00:02.000Z',
+        output: 'nothing to do',
+        scriptExitCode: 0,
+        scriptOutput: '{"skip":true,"reason":"nothing to do"}',
+        promptUsed: null,
+      })
+    );
+    expect(skipped.status).toBe('skipped');
+    expect(skipped.output).toBe('nothing to do');
+    expect(skipped.script_exit_code).toBe(0);
+    expect(skipped.script_output).toBe('{"skip":true,"reason":"nothing to do"}');
+    expect(skipped.prompt_used).toBeNull();
+    expect(skipped.finished_at).toBe('2026-07-01T00:00:02.000Z');
+
+    // A failing gate finishes as error with the exit code preserved.
+    const failed = scheduledTasksDb.createRun({ taskId: task.id, status: 'running', trigger: 'manual' });
+    const errored = must(
+      scheduledTasksDb.finishRun(failed.id, {
+        status: 'error',
+        error: 'script_exit_3',
+        scriptExitCode: 3,
+        scriptOutput: 'boom',
+        script_exit_code: 3,
+        script_output: 'boom',
+      })
+    );
+    expect(errored.status).toBe('error');
+    expect(errored.error).toBe('script_exit_3');
+    expect(errored.script_exit_code).toBe(3);
+    expect(errored.script_output).toBe('boom');
+    expect(errored.prompt_used).toBeNull();
+
+    // The run history surfaces the new columns.
+    const runs = scheduledTasksDb.listRuns(task.id, 10);
+    expect(runs.map((row) => row.status)).toEqual(['error', 'skipped']);
+    expect(runs[1].script_output).toBe('{"skip":true,"reason":"nothing to do"}');
   });
 });

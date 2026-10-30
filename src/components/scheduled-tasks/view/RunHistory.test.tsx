@@ -31,6 +31,9 @@ function makeRun(id: string, sessionId: string): ScheduledTaskRun {
     sessionId,
     output: null,
     error: null,
+    scriptExitCode: null,
+    scriptOutput: null,
+    promptUsed: null,
   };
 }
 
@@ -67,6 +70,37 @@ describe('RunHistory', () => {
     await waitFor(() => expect(screen.getAllByText(textWith('session-2')).length).toBeGreaterThan(0));
     expect(screen.getAllByText(textWith('"total":2')).length).toBeGreaterThan(0);
     expect(screen.queryAllByText(textWith('"total":1')).length).toBe(0);
+  });
+
+  it('renders a skipped run with its reason, effective prompt and script output', async () => {
+    listRuns.mockResolvedValueOnce({
+      runs: [
+        {
+          ...makeRun('run-skip', 'session-skip'),
+          status: 'skipped',
+          output: 'nothing to do',
+          promptUsed: 'Summarize the diff',
+          scriptExitCode: 0,
+          scriptOutput: '{"skip": true}',
+        },
+      ],
+      total: 1,
+    });
+
+    render(<RunHistory taskId="task-1" refreshToken="1|x|y" />);
+
+    await waitFor(() => expect(screen.getByText('status.skipped')).toBeTruthy());
+    const body = document.body.textContent ?? '';
+    expect(body).toContain('runs.skipReason');
+    expect(body).toContain('nothing to do');
+    expect(body).toContain('runs.effectivePrompt');
+    expect(body).toContain('Summarize the diff');
+    expect(body).toContain('runs.scriptOutput');
+    expect(body).toContain('runs.exitCode: 0');
+    expect(body).toContain('{"skip": true}');
+    // A skipped run must not be presented as a generic output/error run.
+    expect(body).not.toContain('runs.output');
+    expect(body).not.toContain('runs.error');
   });
 
   it('does not re-fetch while the refresh token is unchanged', async () => {

@@ -3,6 +3,7 @@ import type { FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { X } from 'lucide-react';
 import { Button } from '../../../shared/view/ui';
+import { cn } from '../../../lib/utils';
 import SettingsToggle from '../../settings/view/SettingsToggle';
 import { scheduledTasksApi } from '../api';
 import type { ProjectOption, RuleDraft, ScheduledTask, TaskRule } from '../types';
@@ -15,6 +16,10 @@ export type TaskEditorValues = {
   prompt: string;
   projectPath: string;
   model: string | null;
+  /** Script gate command; null clears it. */
+  command: string | null;
+  /** Script gate timeout in seconds; null when there is no command. */
+  commandTimeoutSeconds: number | null;
   enabled: boolean;
   rule: TaskRule;
 };
@@ -31,6 +36,10 @@ function initialDraft(task: ScheduledTask | null): RuleDraft {
   return ruleToDraft(toTaskRule(kind, task.rule));
 }
 
+const COMMAND_TIMEOUT_MIN = 1;
+const COMMAND_TIMEOUT_MAX = 3600;
+const COMMAND_TIMEOUT_DEFAULT = 60;
+
 export default function TaskEditorDialog({ task, onClose, onSubmit }: TaskEditorDialogProps) {
   const { t } = useTranslation('scheduledTasks');
   const isEdit = Boolean(task);
@@ -39,6 +48,10 @@ export default function TaskEditorDialog({ task, onClose, onSubmit }: TaskEditor
   const [prompt, setPrompt] = useState(task?.prompt ?? '');
   const [projectPath, setProjectPath] = useState(task?.projectPath ?? '');
   const [model, setModel] = useState(task?.model ?? '');
+  const [command, setCommand] = useState(task?.command ?? '');
+  const [commandTimeout, setCommandTimeout] = useState(
+    String(task?.commandTimeoutSeconds ?? COMMAND_TIMEOUT_DEFAULT),
+  );
   const [enabled, setEnabled] = useState(task?.enabled ?? true);
   const [draft, setDraft] = useState<RuleDraft>(() => initialDraft(task));
   const [projectOptions, setProjectOptions] = useState<ProjectOption[]>([]);
@@ -88,6 +101,21 @@ export default function TaskEditorDialog({ task, onClose, onSubmit }: TaskEditor
       return;
     }
 
+    const trimmedCommand = command.trim();
+    let commandTimeoutSeconds: number | null = null;
+    if (trimmedCommand) {
+      const parsedTimeout = Number.parseInt(commandTimeout, 10);
+      if (
+        !Number.isFinite(parsedTimeout) ||
+        parsedTimeout < COMMAND_TIMEOUT_MIN ||
+        parsedTimeout > COMMAND_TIMEOUT_MAX
+      ) {
+        setValidationKey('editor.errors.commandTimeout');
+        return;
+      }
+      commandTimeoutSeconds = parsedTimeout;
+    }
+
     const validation = draftToRule(draft);
     if (!validation.ok) {
       setValidationKey(validation.errorKey);
@@ -101,6 +129,8 @@ export default function TaskEditorDialog({ task, onClose, onSubmit }: TaskEditor
         prompt: prompt.trim(),
         projectPath: projectPath.trim(),
         model: model.trim() ? model.trim() : null,
+        command: trimmedCommand ? trimmedCommand : null,
+        commandTimeoutSeconds,
         enabled,
         rule: validation.rule,
       });
@@ -186,6 +216,37 @@ export default function TaskEditorDialog({ task, onClose, onSubmit }: TaskEditor
               onChange={(event) => setModel(event.target.value)}
             />
           </FormField>
+
+          <div className="h-px bg-border" />
+
+          <div className="space-y-3">
+            <div className="text-sm font-medium text-foreground">{t('editor.fields.scriptGate')}</div>
+            <FormField
+              label={t('editor.fields.command')}
+              htmlFor="scheduled-task-command"
+              hint={t('editor.fields.commandHint')}
+            >
+              <textarea
+                id="scheduled-task-command"
+                className={cn(textAreaClassName, 'min-h-[72px] font-mono text-xs')}
+                placeholder={t('editor.fields.commandPlaceholder')}
+                value={command}
+                onChange={(event) => setCommand(event.target.value)}
+              />
+            </FormField>
+            <FormField label={t('editor.fields.commandTimeout')} htmlFor="scheduled-task-command-timeout">
+              <input
+                id="scheduled-task-command-timeout"
+                type="number"
+                min={COMMAND_TIMEOUT_MIN}
+                max={COMMAND_TIMEOUT_MAX}
+                step={1}
+                className={cn(controlClassName, 'w-28')}
+                value={commandTimeout}
+                onChange={(event) => setCommandTimeout(event.target.value)}
+              />
+            </FormField>
+          </div>
 
           <div className="h-px bg-border" />
 

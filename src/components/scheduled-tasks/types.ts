@@ -69,7 +69,7 @@ export interface RuleDraft {
   cronExpression: string;
 }
 
-export type RunStatus = 'running' | 'success' | 'error';
+export type RunStatus = 'running' | 'success' | 'error' | 'skipped';
 export type RunTrigger = 'schedule' | 'manual';
 
 export interface ScheduledTaskRun {
@@ -83,6 +83,12 @@ export interface ScheduledTaskRun {
   sessionId: string | null;
   output: string | null;
   error: string | null;
+  /** Exit code of the script gate, when one ran (section 7). */
+  scriptExitCode: number | null;
+  /** Truncated stdout of the script gate, when one ran. */
+  scriptOutput: string | null;
+  /** Effective prompt handed to the agent (static prompt or the script's). */
+  promptUsed: string | null;
 }
 
 export interface ScheduledTask {
@@ -92,6 +98,10 @@ export interface ScheduledTask {
   projectPath: string;
   provider: string;
   model: string | null;
+  /** Optional shell command run before the agent (script gate, section 7). */
+  command: string | null;
+  /** Script gate timeout in seconds (1..3600), null when no command is set. */
+  commandTimeoutSeconds: number | null;
   kind: RuleKind;
   rule: RulePayload;
   nextRunAt: string | null;
@@ -113,6 +123,8 @@ export interface ScheduledTaskInput {
   projectPath: string;
   provider: string;
   model: string | null;
+  command: string | null;
+  commandTimeoutSeconds: number | null;
   rule: TaskRule;
 }
 
@@ -123,6 +135,9 @@ export interface ScheduledTaskPatch {
   model?: string | null;
   enabled?: boolean;
   rule?: TaskRule;
+  /** Explicit null clears the stored command (and its timeout). */
+  command?: string | null;
+  commandTimeoutSeconds?: number | null;
 }
 
 export interface ProjectOption {

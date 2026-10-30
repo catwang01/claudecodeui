@@ -141,6 +141,14 @@ export function runMigrations(): void {
     WHERE provider_session_id IS NOT NULL
   `);
 
+  // Script gate columns (docs section 7). Databases created before the feature keep
+  // their rows untouched: the new columns default to NULL and behave as before.
+  addColumnIfMissing(db, 'scheduled_tasks', 'command', 'TEXT');
+  addColumnIfMissing(db, 'scheduled_tasks', 'command_timeout_seconds', 'INTEGER');
+  addColumnIfMissing(db, 'scheduled_task_runs', 'script_exit_code', 'INTEGER');
+  addColumnIfMissing(db, 'scheduled_task_runs', 'script_output', 'TEXT');
+  addColumnIfMissing(db, 'scheduled_task_runs', 'prompt_used', 'TEXT');
+
   // Data migrations
   migrateLegacySessionNames(db);
 

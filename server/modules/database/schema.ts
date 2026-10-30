@@ -225,7 +225,10 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
   enabled INTEGER NOT NULL DEFAULT 1,
   run_count INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  -- Script gate (docs section 7)
+  command TEXT,
+  command_timeout_seconds INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due ON scheduled_tasks(enabled, next_run_at);`;
 
@@ -233,6 +236,7 @@ export const SCHEDULED_TASK_RUNS_TABLE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS scheduled_task_runs (
   id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL REFERENCES scheduled_tasks(id) ON DELETE CASCADE,
+  -- status: 'running' | 'success' | 'error' | 'skipped' (docs section 7)
   status TEXT NOT NULL,
   "trigger" TEXT NOT NULL,
   scheduled_for TEXT,
@@ -240,7 +244,11 @@ CREATE TABLE IF NOT EXISTS scheduled_task_runs (
   finished_at TEXT,
   session_id TEXT,
   output TEXT,
-  error TEXT
+  error TEXT,
+  -- Script gate (docs section 7)
+  script_exit_code INTEGER,
+  script_output TEXT,
+  prompt_used TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_scheduled_task_runs_task ON scheduled_task_runs(task_id, started_at DESC);`;
 

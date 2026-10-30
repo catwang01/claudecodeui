@@ -34,7 +34,8 @@
     "paused": "Paused",
     "running": "Running",
     "success": "Succeeded",
-    "error": "Failed"
+    "error": "Failed",
+    "skipped": "Skipped"
   },
   "trigger": {
     "schedule": "Scheduled",
@@ -51,7 +52,8 @@
   "card": {
     "runCount_one": "{{count}} run",
     "runCount_other": "{{count}} runs",
-    "model": "Model"
+    "model": "Model",
+    "scriptGate": "Runs a script gate before the agent"
   },
   "empty": {
     "title": "No scheduled tasks yet",
@@ -91,7 +93,12 @@
       "model": "Model (optional)",
       "modelPlaceholder": "Leave empty for the provider default",
       "enabled": "Enabled",
-      "enabledHint": "Paused tasks keep their schedule but do not run."
+      "enabledHint": "Paused tasks keep their schedule but do not run.",
+      "scriptGate": "Script gate (optional)",
+      "command": "Shell command",
+      "commandPlaceholder": "./scripts/should-run.sh",
+      "commandTimeout": "Script timeout (seconds)",
+      "commandHint": "The command runs with sh -c in the project directory before the agent. Its stdout must be JSON: {\"prompt\": \"...\"} runs the agent with that prompt, {\"skip\": true, \"reason\": \"...\"} skips the run, {\"skip\": false} keeps the task prompt. A non-zero exit or invalid JSON fails the run without calling the agent. Leave empty to run the agent directly."
     },
     "errors": {
       "title": "Enter a title.",
@@ -105,7 +112,8 @@
       "timeZoneRequired": "Choose a time zone.",
       "weekdaysRequired": "Select at least one day.",
       "cronRequired": "Enter a cron expression.",
-      "cronInvalid": "Use exactly 5 fields: minute hour day-of-month month day-of-week."
+      "cronInvalid": "Use exactly 5 fields: minute hour day-of-month month day-of-week.",
+      "commandTimeout": "The script timeout must be between 1 and 3600 seconds."
     }
   },
   "rule": {
@@ -151,7 +159,12 @@
     "session": "Session",
     "output": "Output",
     "error": "Error",
-    "inProgress": "Running…"
+    "inProgress": "Running…",
+    "skipReason": "Skip reason",
+    "noReason": "No reason provided",
+    "effectivePrompt": "Effective prompt",
+    "scriptOutput": "Script output",
+    "exitCode": "Exit code"
   },
   "time": {
     "unknown": "Unknown"

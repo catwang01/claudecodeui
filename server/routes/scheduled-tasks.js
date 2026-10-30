@@ -110,6 +110,8 @@ export function createScheduledTasksRouter(overrides = {}) {
         projectPath: body.projectPath,
         provider: body.provider,
         model: body.model,
+        command: body.command,
+        commandTimeoutSeconds: body.commandTimeoutSeconds,
         rule: body.rule,
       });
       if (!result.ok) return sendError(res, result);
@@ -137,6 +139,8 @@ export function createScheduledTasksRouter(overrides = {}) {
         prompt: body.prompt,
         projectPath: body.projectPath,
         model: body.model,
+        command: body.command,
+        commandTimeoutSeconds: body.commandTimeoutSeconds,
         enabled: body.enabled,
         rule: body.rule,
       });

@@ -30,6 +30,15 @@ function RunRow({ run, locale }: { run: ScheduledTaskRun; locale: string }) {
         </p>
       )}
 
+      {run.status === 'skipped' && (
+        <div className="mt-2 rounded border border-amber-500/30 bg-amber-500/5 p-2">
+          <p className="text-[11px] font-medium text-amber-600 dark:text-amber-400">{t('runs.skipReason')}</p>
+          <p className="mt-0.5 line-clamp-3 whitespace-pre-wrap break-words text-xs text-foreground/80">
+            {truncate(run.output, 400) || t('runs.noReason')}
+          </p>
+        </div>
+      )}
+
       {run.error && (
         <div className="mt-2 rounded border border-destructive/30 bg-destructive/5 p-2">
           <p className="text-[11px] font-medium text-destructive">{t('runs.error')}</p>
@@ -39,13 +48,42 @@ function RunRow({ run, locale }: { run: ScheduledTaskRun; locale: string }) {
         </div>
       )}
 
-      {!run.error && run.output && (
+      {run.status !== 'skipped' && !run.error && run.output && (
         <div className="mt-2 rounded border border-border/60 bg-muted/30 p-2">
           <p className="text-[11px] font-medium text-muted-foreground">{t('runs.output')}</p>
           <p className="mt-0.5 line-clamp-3 whitespace-pre-wrap break-words text-xs text-foreground/80">
             {truncate(run.output, 400)}
           </p>
         </div>
+      )}
+
+      {run.promptUsed && (
+        <details className="mt-2 rounded border border-border/60 bg-muted/30 p-2">
+          <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">
+            {t('runs.effectivePrompt')}
+          </summary>
+          <p className="mt-1 line-clamp-4 whitespace-pre-wrap break-words text-xs text-foreground/80">
+            {truncate(run.promptUsed, 600)}
+          </p>
+        </details>
+      )}
+
+      {(run.scriptOutput || typeof run.scriptExitCode === 'number') && (
+        <details className="mt-2 rounded border border-border/60 bg-muted/30 p-2">
+          <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">
+            {t('runs.scriptOutput')}
+            {typeof run.scriptExitCode === 'number' && (
+              <span className="ml-2 text-muted-foreground/80">
+                {t('runs.exitCode')}: {run.scriptExitCode}
+              </span>
+            )}
+          </summary>
+          {run.scriptOutput && (
+            <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] text-foreground/80">
+              {truncate(run.scriptOutput, 4000)}
+            </pre>
+          )}
+        </details>
       )}
     </li>
   );
