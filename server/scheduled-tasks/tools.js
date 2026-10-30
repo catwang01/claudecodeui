@@ -96,6 +96,27 @@ const selectorFields = {
     .optional(),
 };
 
+// §7 script gate. The command must print a JSON envelope on stdout so a
+// "nothing to do" check never reaches the model.
+const gateFields = {
+  command: z
+    .string()
+    .nullable()
+    .describe(
+      'Optional shell command executed with sh -c in the project before the agent runs. ' +
+        'Its stdout must be a JSON envelope: {"skip":true,"reason":"..."} skips the run (no agent call, run status skipped); ' +
+        '{"prompt":"<text>"} runs the agent with that prompt; {"skip":false} runs it with the task prompt. ' +
+        'A non-zero exit, a timeout, unparsable output or an unknown shape fails the run without calling the agent. ' +
+        'Pass null to clear an existing command.'
+    )
+    .optional(),
+  command_timeout_seconds: z
+    .number()
+    .nullable()
+    .describe('Seconds allowed for the command (default 60, allowed 1..3600). Pass null to reset to the default.')
+    .optional(),
+};
+
 /**
  * @param {object} [options]
  * @param {string|null} [options.projectPath] calling session cwd (default target project)
@@ -116,6 +137,8 @@ export function createScheduleTools(options = {}) {
       prompt: args.prompt,
       projectPath: args.project_path || projectPath,
       provider: 'claude',
+      command: args.command,
+      commandTimeoutSeconds: args.command_timeout_seconds,
       rule: selector.rule,
       userId: null,
     });
@@ -146,11 +169,22 @@ export function createScheduleTools(options = {}) {
     if (!selector.ok) return selector;
     if (selector.rule) patch.rule = selector.rule;
 
-    if (patch.title === undefined && patch.prompt === undefined && !patch.rule) {
+    if (args.command !== undefined) patch.command = args.command;
+    if (args.command_timeout_seconds !== undefined) {
+      patch.commandTimeoutSeconds = args.command_timeout_seconds;
+    }
+
+    if (
+      patch.title === undefined &&
+      patch.prompt === undefined &&
+      patch.command === undefined &&
+      patch.commandTimeoutSeconds === undefined &&
+      !patch.rule
+    ) {
       return {
         ok: false,
         code: 'invalid_input',
-        message: 'Nothing to update: provide title, prompt or one selector',
+        message: 'Nothing to update: provide title, prompt, command, command timeout or one selector',
       };
     }
     const result = await management.updateTask(args.id, patch, scope);
@@ -182,7 +216,8 @@ export function createScheduleTools(options = {}) {
   return [
     tool(
       'schedule_create',
-      'Create a scheduled task that starts a new agent run in this project. Provide exactly one schedule selector (after_seconds, at, every_seconds, daily, weekly or cron).',
+      'Create a scheduled task that starts a new agent run in this project. Provide exactly one schedule selector (after_seconds, at, every_seconds, daily, weekly or cron). ' +
+        'Optionally add a script gate via command/command_timeout_seconds: the command runs first and its stdout JSON envelope ({"skip":true,"reason":"..."} | {"prompt":"..."} | {"skip":false}) decides whether the agent runs and with which prompt.',
       {
         prompt: z.string().describe('Prompt sent to the agent when the task runs.'),
         title: z.string().describe('Short human-readable title.'),
@@ -191,6 +226,7 @@ export function createScheduleTools(options = {}) {
           .describe('Target project path; defaults to the current session project.')
           .optional(),
         ...selectorFields,
+        ...gateFields,
       },
       create,
       { annotations: { readOnlyHint: false } }
@@ -211,12 +247,14 @@ export function createScheduleTools(options = {}) {
     ),
     tool(
       'schedule_update',
-      'Update a scheduled task title, prompt and/or its schedule (at most one selector).',
+      'Update a scheduled task title, prompt, script gate (command/command_timeout_seconds) and/or its schedule (at most one selector). ' +
+        'A command gate runs before the agent and prints a JSON envelope ({"skip":true,"reason":"..."} | {"prompt":"..."} | {"skip":false}); null clears the gate.',
       {
         id: z.string().describe('Scheduled task id.'),
         title: z.string().optional(),
         prompt: z.string().optional(),
         ...selectorFields,
+        ...gateFields,
       },
       update,
       { annotations: { readOnlyHint: false } }

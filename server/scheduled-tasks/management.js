@@ -43,6 +43,29 @@ function nonEmptyString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+const MAX_COMMAND_TIMEOUT_SECONDS = 3600;
+
+/** §7: command is an optional shell string; explicit null clears it. */
+function checkCommand(value) {
+  if (value === null) return { ok: true, value: null };
+  if (typeof value !== 'string' || !value.trim()) {
+    return fail('invalid_input', 'command must be a non-empty string or null');
+  }
+  return { ok: true, value };
+}
+
+/** §7: commandTimeoutSeconds is an optional int in 1..3600; null clears it. */
+function checkCommandTimeout(value) {
+  if (value === null) return { ok: true, value: null };
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > MAX_COMMAND_TIMEOUT_SECONDS) {
+    return fail(
+      'invalid_input',
+      `commandTimeoutSeconds must be an integer between 1 and ${MAX_COMMAND_TIMEOUT_SECONDS}, or null`
+    );
+  }
+  return { ok: true, value };
+}
+
 function hasValue(value) {
   return value !== undefined && value !== null;
 }
@@ -77,6 +100,8 @@ export function taskRowToJson(row) {
     projectPath: row.project_path ?? row.projectPath ?? null,
     provider: row.provider ?? 'claude',
     model: row.model ?? null,
+    command: row.command ?? null,
+    commandTimeoutSeconds: row.command_timeout_seconds ?? null,
     kind: row.kind,
     rule: parseJson(row.rule_json ?? row.ruleJson),
     nextRunAt: row.next_run_at ?? null,
@@ -104,6 +129,9 @@ export function runRowToJson(row) {
     sessionId: row.session_id ?? null,
     output: row.output ?? null,
     error: row.error ?? null,
+    scriptExitCode: row.script_exit_code ?? null,
+    scriptOutput: row.script_output ?? null,
+    promptUsed: row.prompt_used ?? null,
   };
 }
 
@@ -358,6 +386,12 @@ export function createManagement(deps = {}) {
       return fail('invalid_input', 'Missing required field(s): ' + missing.join(', '));
     }
 
+    const command = input.command === undefined ? undefined : checkCommand(input.command);
+    if (command && !command.ok) return command;
+    const commandTimeoutSeconds =
+      input.commandTimeoutSeconds === undefined ? undefined : checkCommandTimeout(input.commandTimeoutSeconds);
+    if (commandTimeoutSeconds && !commandTimeoutSeconds.ok) return commandTimeoutSeconds;
+
     const nowMs = now();
     const checked = validateAndNormalize(withIntervalAnchor(input.rule, nowMs), rules);
     if (!checked.ok) return checked;
@@ -378,6 +412,8 @@ export function createManagement(deps = {}) {
       ruleJson: JSON.stringify(checked.rule),
       nextRunAt,
       enabled: input.enabled !== false,
+      command: command ? command.value : undefined,
+      commandTimeoutSeconds: commandTimeoutSeconds ? commandTimeoutSeconds.value : undefined,
     });
 
     return { ok: true, task: taskRowToJson(row) };
@@ -409,6 +445,16 @@ export function createManagement(deps = {}) {
     }
     if (patch.model !== undefined) {
       changes.model = nonEmptyString(patch.model);
+    }
+    if (patch.command !== undefined) {
+      const checked = checkCommand(patch.command);
+      if (!checked.ok) return checked;
+      changes.command = checked.value;
+    }
+    if (patch.commandTimeoutSeconds !== undefined) {
+      const checked = checkCommandTimeout(patch.commandTimeoutSeconds);
+      if (!checked.ok) return checked;
+      changes.commandTimeoutSeconds = checked.value;
     }
 
     const nowMs = now();

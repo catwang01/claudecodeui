@@ -34,7 +34,8 @@
     "paused": "已暂停",
     "running": "运行中",
     "success": "成功",
-    "error": "失败"
+    "error": "失败",
+    "skipped": "已跳过"
   },
   "trigger": {
     "schedule": "定时",
@@ -50,7 +51,8 @@
   },
   "card": {
     "runCount_other": "{{count}} 次运行",
-    "model": "模型"
+    "model": "模型",
+    "scriptGate": "运行智能体前会先执行脚本门控"
   },
   "empty": {
     "title": "还没有定时任务",
@@ -90,7 +92,12 @@
       "model": "模型（可选）",
       "modelPlaceholder": "留空则使用提供方默认值",
       "enabled": "启用",
-      "enabledHint": "暂停后仍保留计划，但不会运行。"
+      "enabledHint": "暂停后仍保留计划，但不会运行。",
+      "scriptGate": "脚本门控（可选）",
+      "command": "Shell 命令",
+      "commandPlaceholder": "./scripts/should-run.sh",
+      "commandTimeout": "脚本超时（秒）",
+      "commandHint": "脚本会在智能体运行前，以 sh -c 在项目目录中执行。其标准输出必须是 JSON：{\"prompt\": \"...\"} 表示用该提示词运行智能体，{\"skip\": true, \"reason\": \"...\"} 表示跳过本次运行，{\"skip\": false} 表示使用任务自身的提示词。退出码非零或 JSON 无效时任务会失败且不会调用智能体。留空则直接运行智能体。"
     },
     "errors": {
       "title": "请输入标题。",
@@ -104,7 +111,8 @@
       "timeZoneRequired": "请选择时区。",
       "weekdaysRequired": "请至少选择一天。",
       "cronRequired": "请输入 cron 表达式。",
-      "cronInvalid": "必须为 5 个字段：分 时 日 月 周。"
+      "cronInvalid": "必须为 5 个字段：分 时 日 月 周。",
+      "commandTimeout": "脚本超时必须在 1 到 3600 秒之间。"
     }
   },
   "rule": {
@@ -150,7 +158,12 @@
     "session": "会话",
     "output": "输出",
     "error": "错误",
-    "inProgress": "运行中…"
+    "inProgress": "运行中…",
+    "skipReason": "跳过原因",
+    "noReason": "未提供原因",
+    "effectivePrompt": "实际提示词",
+    "scriptOutput": "脚本输出",
+    "exitCode": "退出码"
   },
   "time": {
     "unknown": "未知"

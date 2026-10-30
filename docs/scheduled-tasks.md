@@ -181,3 +181,60 @@ Every tool returns one JSON text block and never throws; failures are
 Shared logic lives in `server/scheduled-tasks/management.js` (task views, selector→rule
 mapping, create/update/pause/resume/delete/run), used by **both** the REST routes and the
 tools so the two paths cannot drift.
+
+## 7. Script gate (脚本门控) — added in the third iteration
+
+A task may run a **shell script first**; the script's stdout is a JSON envelope that decides
+whether the agent runs at all and what prompt it receives. This is the token-saving path:
+a script that reports "nothing to do" never reaches the model.
+
+Task gains two optional fields:
+- `command` (string) — shell command executed with `sh -c` in `projectPath` before the agent.
+- `commandTimeoutSeconds` (int, default 60, 1..3600).
+
+### Run flow when `command` is set
+1. Create the run row (status `running`) as today.
+2. Execute the command with cwd = `projectPath` and env inherited plus
+   `SCHEDULED_TASK_ID`, `SCHEDULED_TASK_TITLE`, `SCHEDULED_TASK_PROJECT`.
+3. Record stdout (truncated to 20000 chars) in `script_output` and the exit code in
+   `script_exit_code`.
+4. Non-zero exit, spawn failure or timeout => run `error` (`script_exit_<code>` /
+   `script_failed` / `script_timeout`) and **no agent call**.
+5. Parse JSON: `JSON.parse(stdout.trim())`; if that fails, try the last non-empty line.
+   Still unparseable, or parsed to a non-object => run `error` `invalid_script_output`,
+   **no agent call**.
+6. Decide from the envelope (unknown keys are ignored):
+
+| envelope | outcome |
+|---|---|
+| `{ "skip": true, "reason"?: "..." }` | run `skipped`, no agent call; `output` = reason |
+| `{ "prompt": "<non-empty string>" }` | agent runs with that prompt |
+| `{ "skip": false }` (no prompt) | agent runs with the task's static `prompt` |
+| anything else (empty object, no prompt, non-boolean `skip`) | run `error` `invalid_script_output`, no agent call |
+
+7. The effective prompt is stored on the run as `prompt_used`; the agent then runs exactly as
+   in §4. Manual `schedule_run` goes through the same gate. `SCHEDULED_TASKS_COMMANDS=0`
+   makes a task that has a `command` fail with `commands_disabled` instead of executing it.
+
+The `SCHEDULED_TASK_DRY_RUN` seam from §4 covers the **agent call only**: the script gate is
+not a model call, so it must still execute in dry-run mode, and the dry-run output must echo
+the **effective** prompt (`[dry-run] <effective prompt>`). Otherwise the gate could not be
+verified without spending model tokens.
+
+### Schema additions
+- `scheduled_tasks.command TEXT`, `scheduled_tasks.command_timeout_seconds INTEGER`
+- `scheduled_task_runs.status` additionally accepts `skipped`
+- `scheduled_task_runs.script_exit_code INTEGER`, `script_output TEXT`, `prompt_used TEXT`
+
+Existing databases get the columns through `addColumnIfMissing`; existing rows keep
+`command = NULL` and behave exactly as before.
+
+### Surface
+- Task JSON: `command`, `commandTimeoutSeconds`.
+- Run JSON: `status` may be `skipped`; adds `scriptExitCode`, `scriptOutput`, `promptUsed`.
+- REST POST/PATCH accept `command` / `commandTimeoutSeconds` (explicit `null` clears them).
+- `schedule_create` / `schedule_update` accept `command` and `command_timeout_seconds`;
+  their descriptions document the envelope so an agent can author gated tasks.
+- Web UI: optional "Script gate" section in the task editor (command + timeout + contract
+  hint), a marker on cards whose task has a command, a `Skipped` status pill, and script
+  output / effective prompt in the run history.

@@ -94,6 +94,8 @@ export default function ScheduledTasksPanel({ onClose }: ScheduledTasksPanelProp
         prompt: values.prompt,
         projectPath: values.projectPath,
         model: values.model,
+        command: values.command,
+        commandTimeoutSeconds: values.commandTimeoutSeconds,
         enabled: values.enabled,
         rule: values.rule,
       });
@@ -104,6 +106,8 @@ export default function ScheduledTasksPanel({ onClose }: ScheduledTasksPanelProp
         projectPath: values.projectPath,
         provider: 'claude',
         model: values.model,
+        command: values.command,
+        commandTimeoutSeconds: values.commandTimeoutSeconds,
         rule: values.rule,
       };
       await createTask(input);

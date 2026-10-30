@@ -23,6 +23,8 @@ function makeTaskRow(input, id) {
     project_path: input.projectPath,
     provider: input.provider ?? 'claude',
     model: input.model ?? null,
+    command: input.command ?? null,
+    command_timeout_seconds: input.commandTimeoutSeconds ?? null,
     kind: input.kind,
     rule_json: input.ruleJson,
     next_run_at: input.nextRunAt ?? null,
@@ -80,6 +82,8 @@ function makeRepo() {
         projectPath: 'project_path',
         provider: 'provider',
         model: 'model',
+        command: 'command',
+        commandTimeoutSeconds: 'command_timeout_seconds',
         kind: 'kind',
         ruleJson: 'rule_json',
         nextRunAt: 'next_run_at',
@@ -453,5 +457,101 @@ describe('handler safety', () => {
     const result = await call('schedule_create', { title: 'a', prompt: 'p', every_seconds: 60 });
     expect(result.code).toBe('internal_error');
     expect(result.message).toMatch(/disk full/);
+  });
+});
+
+describe('script gate fields (§7)', () => {
+  it('creates a gated task with command and command_timeout_seconds', async () => {
+    const { call, repo } = setup();
+
+    const task = await call('schedule_create', {
+      title: 'gated',
+      prompt: 'fallback prompt',
+      every_seconds: 60,
+      command: 'node scripts/check.mjs',
+      command_timeout_seconds: 120,
+    });
+
+    expect(task.command).toBe('node scripts/check.mjs');
+    expect(task.commandTimeoutSeconds).toBe(120);
+    expect(repo._tasks.get(task.id).command).toBe('node scripts/check.mjs');
+    expect(repo._tasks.get(task.id).command_timeout_seconds).toBe(120);
+  });
+
+  it('defaults the gate fields to null', async () => {
+    const { call } = setup();
+
+    const task = await call('schedule_create', { title: 'a', prompt: 'p', every_seconds: 60 });
+
+    expect(task.command).toBeNull();
+    expect(task.commandTimeoutSeconds).toBeNull();
+  });
+
+  it('rejects invalid gate values on create', async () => {
+    const { call } = setup();
+    const base = { title: 'a', prompt: 'p', every_seconds: 60 };
+
+    expect((await call('schedule_create', { ...base, command: 42 })).code).toBe('invalid_input');
+    expect((await call('schedule_create', { ...base, command: '' })).code).toBe('invalid_input');
+    expect((await call('schedule_create', { ...base, command_timeout_seconds: 0 })).code).toBe('invalid_input');
+    expect((await call('schedule_create', { ...base, command_timeout_seconds: 3601 })).code).toBe('invalid_input');
+    expect((await call('schedule_create', { ...base, command_timeout_seconds: 60.5 })).code).toBe('invalid_input');
+    expect((await call('schedule_create', { ...base, command_timeout_seconds: '60' })).code).toBe('invalid_input');
+  });
+
+  it('updates the gate without touching the schedule', async () => {
+    const { call } = setup();
+    const created = await call('schedule_create', { title: 'a', prompt: 'p', every_seconds: 60 });
+
+    const updated = await call('schedule_update', {
+      id: created.id,
+      command: 'node gate.mjs',
+      command_timeout_seconds: 30,
+    });
+
+    expect(updated.command).toBe('node gate.mjs');
+    expect(updated.commandTimeoutSeconds).toBe(30);
+    expect(updated.nextRunAt).toBe(created.nextRunAt);
+  });
+
+  it('clears the gate with explicit nulls', async () => {
+    const { call } = setup();
+    const created = await call('schedule_create', {
+      title: 'a',
+      prompt: 'p',
+      every_seconds: 60,
+      command: 'gate.sh',
+      command_timeout_seconds: 30,
+    });
+
+    const cleared = await call('schedule_update', {
+      id: created.id,
+      command: null,
+      command_timeout_seconds: null,
+    });
+
+    expect(cleared.command).toBeNull();
+    expect(cleared.commandTimeoutSeconds).toBeNull();
+  });
+
+  it('rejects invalid gate values on update', async () => {
+    const { call } = setup();
+    const created = await call('schedule_create', { title: 'a', prompt: 'p', every_seconds: 60 });
+
+    expect((await call('schedule_update', { id: created.id, command: 42 })).code).toBe('invalid_input');
+    expect((await call('schedule_update', { id: created.id, command_timeout_seconds: 0 })).code).toBe(
+      'invalid_input'
+    );
+  });
+
+  it('documents the envelope in the tool descriptions', async () => {
+    const { byName } = setup();
+
+    for (const name of ['schedule_create', 'schedule_update']) {
+      const description = byName[name].description;
+      expect(description).toMatch(/command/);
+      expect(description).toMatch(/skip/);
+      expect(description).toMatch(/prompt/);
+    }
   });
 });
