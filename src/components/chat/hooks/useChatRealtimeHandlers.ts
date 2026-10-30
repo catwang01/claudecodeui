@@ -192,6 +192,23 @@ export function useChatRealtimeHandlers({
           return;
         }
 
+        case 'error': {
+          // Legacy error frame without `kind` — server/index.js:2162 sends
+          // { type: 'error', error } when the WS handler throws. Mirror the
+          // normalized 'error' branch so the UI is not left spinning.
+          const isCurrentSession = !msg.sessionId || msg.sessionId === activeViewSessionId;
+          if (isCurrentSession) {
+            setIsLoading(false);
+            setCanAbortSession(false);
+            setClaudeStatus(null);
+          }
+          const clearId = msg.sessionId || activeViewSessionId || null;
+          onSessionInactive?.(clearId);
+          if (clearId) clearSession(clearId);
+          onSessionNotProcessing?.(clearId);
+          return;
+        }
+
         case 'projects_updated': {
           return;
         }
@@ -319,9 +336,16 @@ export function useChatRealtimeHandlers({
           setClaudeStatus(null);
           setPendingPermissionRequests([]);
         }
-        onSessionInactive?.(sid);
-        if (sid) clearSession(sid);
-        onSessionNotProcessing?.(sid);
+        // The server normalizes a missing sessionId to '' (server/providers/types.js:123),
+        // so `sid` can be null even when this complete belongs to the viewed session.
+        // Fall back to the active view session for the clear calls — otherwise the null
+        // guard in useSessionProtection.ts:102-105 turns them into no-ops and the
+        // useChatSessionState.ts:748 ratchet re-latches isLoading to true.
+        // Store/fetch logic below still uses the real `sid`.
+        const clearId = msg.sessionId || activeViewSessionId || null;
+        onSessionInactive?.(clearId);
+        if (clearId) clearSession(clearId);
+        onSessionNotProcessing?.(clearId);
 
         // Handle aborted case
         if (msg.aborted) {
@@ -378,9 +402,11 @@ export function useChatRealtimeHandlers({
           setClaudeStatus(null);
           onSessionCreationError?.(msg.error || 'Session creation failed');
         }
-        onSessionInactive?.(sid);
-        if (sid) clearSession(sid);
-        onSessionNotProcessing?.(sid);
+        // Same ''-normalized sessionId fallback as the 'complete' branch above.
+        const clearId = msg.sessionId || activeViewSessionId || null;
+        onSessionInactive?.(clearId);
+        if (clearId) clearSession(clearId);
+        onSessionNotProcessing?.(clearId);
         break;
       }
 

@@ -225,6 +225,12 @@ export function useChatSessionState({
       if (sessionCreationTimeoutRef.current) clearTimeout(sessionCreationTimeoutRef.current);
       sessionCreationTimeoutRef.current = setTimeout(() => {
         setSessionCreationError('Session creation timed out. Please try again.');
+        // Last-resort fallback for a brand-new session: it is never registered in
+        // processingSessionsMap (useChatComposerState.ts:655-657), so the
+        // AppContent.tsx:183 5s poll never starts. Without this the local spinner
+        // stays latched forever when the server never sends complete/error.
+        setIsLoading(false);
+        setCanAbortSession(false);
       }, 60000);
       return;
     }
@@ -233,7 +239,7 @@ export function useChatSessionState({
     if (normalized) {
       sessionStore.appendWsMessage(activeSessionId, normalized);
     }
-  }, [activeSessionId, sessionStore]);
+  }, [activeSessionId, sessionStore, setIsLoading]);
 
   const clearMessages = useCallback(() => {
     if (!activeSessionId) return;
