@@ -112,6 +112,57 @@ async function main() {
     return 'server instance created with ' + tools.length + ' tools';
   });
 
+  await check('every schedule_* description states precedence over built-in Cron tools', () => {
+    const missing = tools.filter((t) => !/CronCreate/.test(t.description || '')).map((t) => t.name);
+    assert(missing.length === 0, 'descriptions without the precedence note: ' + missing.join(','));
+    const create = byName.get('schedule_create');
+    assert(/preferred|authoritative|instead of/i.test(create.description), 'schedule_create does not state it is preferred');
+    return EXPECTED_TOOLS.length + ' descriptions carry the note';
+  });
+
+  await check('built-in Cron tools are disallowed by default', () => {
+    const mapped = sdk.mapCliOptionsToSDK({ cwd: PROJECT, permissionMode: 'default' });
+    for (const n of ['CronCreate', 'CronList', 'CronDelete']) {
+      assert(mapped.disallowedTools.includes(n), 'disallowedTools misses ' + n + ': ' + JSON.stringify(mapped.disallowedTools));
+    }
+    return 'Cron* disallowed';
+  });
+
+  await check('user disallowedTools are preserved and not duplicated', () => {
+    const mapped = sdk.mapCliOptionsToSDK({
+      cwd: PROJECT,
+      permissionMode: 'default',
+      toolsSettings: { allowedTools: [], disallowedTools: ['CronCreate', 'SomethingElse'], skipPermissions: false },
+    });
+    assert(mapped.disallowedTools.includes('SomethingElse'), 'user entry was dropped');
+    const dupes = mapped.disallowedTools.filter((n) => n === 'CronCreate');
+    assert(dupes.length === 1, 'CronCreate duplicated: ' + JSON.stringify(mapped.disallowedTools));
+    assert(mapped.disallowedTools.length === new Set(mapped.disallowedTools).size, 'duplicates present');
+    return JSON.stringify(mapped.disallowedTools);
+  });
+
+  await check('SCHEDULED_TASKS_KEEP_BUILTIN_CRON=1 leaves the built-ins alone', () => {
+    process.env.SCHEDULED_TASKS_KEEP_BUILTIN_CRON = '1';
+    try {
+      const mapped = sdk.mapCliOptionsToSDK({ cwd: PROJECT, permissionMode: 'default' });
+      assert(!mapped.disallowedTools.some((n) => n.startsWith('Cron')), 'Cron* still disallowed: ' + JSON.stringify(mapped.disallowedTools));
+      return 'escape hatch works';
+    } finally {
+      delete process.env.SCHEDULED_TASKS_KEEP_BUILTIN_CRON;
+    }
+  });
+
+  await check('SCHEDULED_TASKS_TOOLS=0 also leaves the built-ins alone', () => {
+    process.env.SCHEDULED_TASKS_TOOLS = '0';
+    try {
+      const mapped = sdk.mapCliOptionsToSDK({ cwd: PROJECT, permissionMode: 'default' });
+      assert(!mapped.disallowedTools.some((n) => n.startsWith('Cron')), 'built-ins removed while ours are absent');
+      return 'no scheduler left behind';
+    } finally {
+      process.env.SCHEDULED_TASKS_TOOLS = '1';
+    }
+  });
+
   await check('SCHEDULED_TASKS_TOOLS=0 removes the tools from both places', () => {
     process.env.SCHEDULED_TASKS_TOOLS = '0';
     const names = sdk.getInternalToolNames({ projectPath: PROJECT });
