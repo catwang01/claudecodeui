@@ -14,6 +14,7 @@
 
 import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod/v4';
+import { createScheduleTools, isScheduleToolsEnabled, SCHEDULE_TOOL_NAMES } from './scheduled-tasks/tools.js';
 import { getTapSession } from './tap.js';
 import crypto from 'crypto';
 import { promises as fs } from 'fs';
@@ -33,6 +34,20 @@ import { appConfigDb } from './modules/database/index.js';
 
 const activeSessions = new Map();
 const pendingToolApprovals = new Map();
+
+// Idle lease for active sessions. A hung CLI/SDK produces no stream messages, so
+// the CLI-side stream watchdog (CLAUDE_STREAM_WATCHDOG) never fires and the
+// session would otherwise be reported as isProcessing=true forever. A session
+// that has produced neither an SDK message nor an approval request for this long
+// is considered dead and force-closed. CLAUDE_SESSION_IDLE_LEASE_MS=0 disables it.
+const SESSION_IDLE_LEASE_MS = (() => {
+  const raw = parseInt(process.env.CLAUDE_SESSION_IDLE_LEASE_MS, 10);
+  return Number.isFinite(raw) ? raw : 45 * 60 * 1000;
+})();
+const SESSION_REAP_INTERVAL_MS = (() => {
+  const raw = parseInt(process.env.CLAUDE_SESSION_REAP_INTERVAL_MS, 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 30 * 1000;
+})();
 
 const downloadTool = tool(
   'download',
@@ -90,11 +105,48 @@ const imageTool = tool(
   { annotations: { readOnlyHint: true } }
 );
 
-function createInternalToolsServer() {
-  return createSdkMcpServer({ name: 'internal', version: '1.0.0', tools: [downloadTool, imageTool] });
+const BASE_INTERNAL_TOOLS = {
+  download: downloadTool,
+  image: imageTool,
+};
+
+/**
+ * Names of the built-in MCP tools registered on the 'internal' server.
+ * Single source of truth for createInternalToolsServer(); the eight
+ * schedule_* tools are omitted when SCHEDULED_TASKS_TOOLS=0.
+ * @returns {string[]}
+ */
+export function getInternalToolNames() {
+  const names = Object.keys(BASE_INTERNAL_TOOLS);
+  if (isScheduleToolsEnabled()) names.push(...SCHEDULE_TOOL_NAMES);
+  return names;
+}
+
+function createInternalToolsServer({ projectPath } = {}) {
+  const names = getInternalToolNames();
+  const scheduleNames = names.filter((name) => SCHEDULE_TOOL_NAMES.includes(name));
+  const scheduleTools = scheduleNames.length ? createScheduleTools({ projectPath }) : [];
+  const tools = names
+    .map((name) => {
+      if (BASE_INTERNAL_TOOLS[name]) return BASE_INTERNAL_TOOLS[name];
+      const index = SCHEDULE_TOOL_NAMES.indexOf(name);
+      return index === -1 ? null : scheduleTools[index];
+    })
+    .filter(Boolean);
+  return createSdkMcpServer({ name: 'internal', version: '1.0.0', tools });
 }
 
 const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 55000;
+
+// Interactive tools (AskUserQuestion) used to wait forever: if the user closed
+// the tab or walked away the run stayed blocked and the server kept reporting
+// isProcessing=true. Bound the wait instead — on timeout the tool is denied and
+// the turn unwinds normally, which also removes the session entry.
+// CLAUDE_INTERACTIVE_APPROVAL_TIMEOUT_MS=0 restores the old infinite wait.
+const INTERACTIVE_TOOL_APPROVAL_TIMEOUT_MS = (() => {
+  const raw = parseInt(process.env.CLAUDE_INTERACTIVE_APPROVAL_TIMEOUT_MS, 10);
+  return Number.isFinite(raw) ? raw : 30 * 60 * 1000;
+})();
 
 const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion']);
 
@@ -207,7 +259,7 @@ function matchesToolPermission(entry, toolName, input) {
  * @param {Object} options - CLI options
  * @returns {Object} SDK-compatible options
  */
-function mapCliOptionsToSDK(options = {}) {
+export function mapCliOptionsToSDK(options = {}) {
   const { sessionId, cwd, toolsSettings, permissionMode } = options;
 
   const sdkOptions = {};
@@ -252,6 +304,16 @@ function mapCliOptionsToSDK(options = {}) {
   // Always allow the built-in UI MCP tools
   if (!sdkOptions.allowedTools.includes('mcp__internal__download')) {
     sdkOptions.allowedTools.push('mcp__internal__download');
+  }
+
+  // Scheduled-task tools are registered on the internal server; pre-allow them so
+  // an unattended agent never stalls on an approval prompt.
+  for (const name of getInternalToolNames()) {
+    if (!SCHEDULE_TOOL_NAMES.includes(name)) continue;
+    const allowedName = 'mcp__internal__' + name;
+    if (!sdkOptions.allowedTools.includes(allowedName)) {
+      sdkOptions.allowedTools.push(allowedName);
+    }
   }
 
   // Use the tools preset to make all default built-in tools available (including AskUserQuestion).
@@ -349,7 +411,19 @@ function addSession(sessionId, queryInstance, tempImagePaths = [], tempDir = nul
     tempDir,
     writer,
     abortController,
+    lastActivityAt: Date.now(),
   });
+}
+
+/**
+ * Mark a session as still alive. Called for every SDK message and every
+ * approval request so the idle reaper never closes a session that is working.
+ * @param {string|undefined|null} sessionId
+ */
+function touchSession(sessionId) {
+  if (!sessionId) return;
+  const session = activeSessions.get(sessionId);
+  if (session) session.lastActivityAt = Date.now();
 }
 
 /**
@@ -359,6 +433,86 @@ function addSession(sessionId, queryInstance, tempImagePaths = [], tempDir = nul
 function removeSession(sessionId) {
   activeSessions.delete(sessionId);
 }
+
+/**
+ * Force-close sessions that have been silent past the idle lease. Every other
+ * exit path relies on the SDK iterator settling, which never happens for a
+ * wedged CLI process (or a hung local tool), so this is the last line of
+ * defence against a permanently "processing" session.
+ * @param {number} [now]
+ * @param {number} [leaseMs]
+ * @returns {string[]} ids of the sessions that were reaped
+ */
+function reapIdleSessions(now = Date.now(), leaseMs = SESSION_IDLE_LEASE_MS) {
+  const reaped = [];
+  if (!(leaseMs > 0)) return reaped;
+
+  for (const [sessionId, session] of activeSessions) {
+    if (session.status !== 'active') continue;
+    const lastActivityAt = session.lastActivityAt ?? session.startTime ?? 0;
+    const idleMs = now - lastActivityAt;
+    if (idleMs < leaseMs) continue;
+
+    console.warn(`[SESSION-REAP] Session ${sessionId} idle for ${Math.round(idleMs / 1000)}s (lease ${Math.round(leaseMs / 1000)}s) — force-closing`);
+    session.status = 'aborted';
+    removeSession(sessionId);
+
+    // Unpark any tool approval this session is waiting on so the SDK iterator
+    // can unwind instead of leaking the awaiting promise.
+    for (const [requestId, resolver] of pendingToolApprovals.entries()) {
+      if (resolver?._sessionId !== sessionId) continue;
+      try { resolver({ cancelled: true }); } catch (_) { /* already settled */ }
+      pendingToolApprovals.delete(requestId);
+    }
+
+    try {
+      session.abortController?.abort();
+    } catch (err) {
+      console.error(`[SESSION-REAP] abort() failed for session ${sessionId}:`, err?.message || err);
+    }
+
+    // The unwinding run was aborted after its entry was removed, so it stays
+    // silent — tell the client explicitly that the turn is over.
+    try {
+      session.writer?.send?.(createNormalizedMessage({
+        kind: 'complete',
+        exitCode: 1,
+        aborted: true,
+        success: false,
+        reason: 'idle_timeout',
+        sessionId,
+        provider: 'claude',
+      }));
+    } catch (err) {
+      console.error(`[SESSION-REAP] failed to notify writer for session ${sessionId}:`, err?.message || err);
+    }
+
+    reaped.push(sessionId);
+  }
+
+  return reaped;
+}
+
+let sessionReaperTimer = null;
+
+/**
+ * Start the periodic idle-session sweep. The timer is unref'd so it never keeps
+ * the server (or a test runner) alive.
+ */
+function startSessionReaper() {
+  if (sessionReaperTimer || !(SESSION_IDLE_LEASE_MS > 0)) return sessionReaperTimer;
+  sessionReaperTimer = setInterval(() => reapIdleSessions(), SESSION_REAP_INTERVAL_MS);
+  if (typeof sessionReaperTimer.unref === 'function') sessionReaperTimer.unref();
+  return sessionReaperTimer;
+}
+
+function stopSessionReaper() {
+  if (!sessionReaperTimer) return;
+  clearInterval(sessionReaperTimer);
+  sessionReaperTimer = null;
+}
+
+startSessionReaper();
 
 /**
  * Gets a session from the active sessions map
@@ -636,13 +790,20 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
   let userAborted = false;
 
+  // Always drop the tracked entry on every exit path. Pre-registration uses
+  // `capturedSessionId || sessionId`, so release both defensively.
+  const releaseTrackedSession = () => {
+    if (capturedSessionId) removeSession(capturedSessionId);
+    if (sessionId && sessionId !== capturedSessionId) removeSession(sessionId);
+  };
+
   try {
     // Map CLI options to SDK format
     const sdkOptions = mapCliOptionsToSDK(options);
 
     // Load MCP configuration
     const mcpServers = await loadMcpConfig(options.cwd);
-    sdkOptions.mcpServers = { ...(mcpServers || {}), internal: createInternalToolsServer() };
+    sdkOptions.mcpServers = { ...(mcpServers || {}), internal: createInternalToolsServer({ projectPath: options.cwd }) };
 
     // Handle images - save to temp files and modify prompt
     const imageResult = await handleImages(command, options.images, options.cwd);
@@ -706,8 +867,9 @@ async function queryClaudeSDK(command, options = {}, ws) {
         dedupeKey: `claude:permission:${capturedSessionId || sessionId || 'none'}:${requestId}`
       }));
 
+      touchSession(capturedSessionId || sessionId);
       const decision = await waitForToolApproval(requestId, {
-        timeoutMs: requiresInteraction ? 0 : undefined,
+        timeoutMs: requiresInteraction ? INTERACTIVE_TOOL_APPROVAL_TIMEOUT_MS : undefined,
         signal: context?.signal,
         metadata: {
           _sessionId: capturedSessionId || sessionId || null,
@@ -828,6 +990,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
       try {
       for await (const message of queryInstance) {
       _msgCount++;
+      touchSession(capturedSessionId || sessionId);
       const _sid = capturedSessionId || sessionId || 'unknown';
       appendToSessionLog(_sid, `[${new Date().toISOString()}] [SDK] msg#${_msgCount} ${JSON.stringify(message, null, 2)}`);
       // Capture session ID from first message
@@ -1097,9 +1260,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
     } // end while (retry loop)
 
     // Clean up session on completion
-    if (capturedSessionId) {
-      removeSession(capturedSessionId);
-    }
+    releaseTrackedSession();
 
     // Clean up temporary image files
     await cleanupTempFiles(tempImagePaths, tempDir);
@@ -1124,9 +1285,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
     console.error('SDK query error:', error);
 
     // Clean up session on error
-    if (capturedSessionId) {
-      removeSession(capturedSessionId);
-    }
+    releaseTrackedSession();
 
     // Clean up temporary image files on error
     await cleanupTempFiles(tempImagePaths, tempDir);
@@ -1259,4 +1418,7 @@ export {
   resolveToolApproval,
   getPendingApprovalsForSession,
   reconnectSessionWriter,
+  reapIdleSessions,
+  startSessionReaper,
+  stopSessionReaper,
 };

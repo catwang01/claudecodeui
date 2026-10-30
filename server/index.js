@@ -136,11 +136,13 @@ import pluginsRoutes from './routes/plugins.js';
 import messagesRoutes from './routes/messages.js';
 import ttsRoutes from './routes/tts.js';
 import sttRoutes from './routes/stt.js';
+import scheduledTasksRoutes from './routes/scheduled-tasks.js';
 import { createNormalizedMessage } from './providers/types.js';
 import { getProvider } from './providers/registry.js';
 import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
 import { initializeDatabase, sessionNamesDb, sessionDb, sessionFileCache, sessionsDb, applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, applyLastAutoDocAt, applyReadState, appConfigDb } from './database/db.js';
 import { startAutoDocTimer } from './auto-doc.js';
+import { startScheduledTaskService, stopScheduledTaskService } from './scheduled-tasks/service.js';
 import { stopAllTapSessions, tapViewerProxyForSession } from './tap.js';
 import { sessionSynchronizerService, initializeSessionsWatcher } from './modules/providers/index.js';
 import { configureWebPush } from './services/vapid-keys.js';
@@ -675,6 +677,9 @@ app.use('/api/tts', authenticateToken, ttsRoutes);
 
 // STT API Routes (protected)
 app.use('/api/stt', authenticateToken, sttRoutes);
+
+// Scheduled Tasks API Routes (protected)
+app.use('/api/scheduled-tasks', authenticateToken, scheduledTasksRoutes);
 
 // claude-tap per-session viewer proxy (protected) — proxies to each session's viewer port
 app.use('/api/tap/sessions/:sessionId/viewer', authenticateToken, (req, res) => {
@@ -3062,6 +3067,9 @@ async function startServer() {
             // Start auto-doc background timer
             startAutoDocTimer();
 
+            // Start the scheduled-tasks tick loop (no-op when SCHEDULED_TASKS_ENABLED is off)
+            startScheduledTaskService();
+
             // Start server-side plugin processes for enabled plugins
             startEnabledPluginServers().catch(err => {
                 console.error('[Plugins] Error during startup:', err.message);
@@ -3070,6 +3078,7 @@ async function startServer() {
 
         // Clean up plugin processes and tap proxy on shutdown
         const shutdownPlugins = async () => {
+            stopScheduledTaskService();
             stopAllTapSessions();
             await stopAllPlugins();
             process.exit(0);
