@@ -1,462 +1,263 @@
-import os
-import re
+"""PII proxy v2 - local redaction gateway for the Claude Code CLI.
+
+What changed vs v1 (see docs/superpowers/specs/2026-05-16-pii-proxy-design.md):
+
+* placeholders are deterministic readable aliases (format PII_KIND_hex6) instead
+  of opaque AES blobs, and are restored by exact lookup (see pii_vault.py);
+* the response path is protocol aware: SSE frames are parsed, only the fields
+  that may carry placeholders are rewritten and frames are re-serialised with
+  json.dumps (see pii_stream.py), so a secret containing quotes or backslashes
+  can no longer corrupt the stream;
+* signed thinking blocks are never rewritten (rewriting them invalidates the
+  signature and makes the upstream reject the whole conversation);
+* detection is deterministic and tiered: T0 user-supplied literal values,
+  T1 bounded built-in regexes. The presidio/spacy NER tier is optional and off
+  by default, so the default path has no heavy ML dependency.
+"""
+
+from __future__ import annotations
+
+import asyncio
 import json
-import uuid
-import hmac
-import hashlib
-import difflib
-import base64
-import codecs
-import secrets
 import logging
+import os
 import pathlib
 import time
-import asyncio
-import threading
+import uuid
 from collections import deque
-from datetime import datetime, timezone
 from contextlib import asynccontextmanager
-from typing import List
+from datetime import datetime, timezone
+from typing import Any
 
 import httpx
-from fastapi import FastAPI, Request, Response
-from fastapi.responses import StreamingResponse
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.primitives import padding as crypto_padding
-from cryptography.hazmat.backends import default_backend
-from presidio_analyzer import AnalyzerEngine, EntityRecognizer, RecognizerResult
-from presidio_analyzer.nlp_engine import NlpArtifacts, NlpEngineProvider
+from fastapi import FastAPI, Request
+from fastapi.responses import Response, StreamingResponse
 
-# detect-secrets: 检测结构化密钥（JWT、AWS key、Basic Auth、PEM 私钥、带引号的关键词）
-try:
-    from detect_secrets.settings import transient_settings as _ds_transient
-    from detect_secrets.core.scan import scan_line as _ds_scan_line
-    _DS_AVAILABLE = True
-except ImportError:
-    _DS_AVAILABLE = False
-
-_DS_CONFIG = {
-    "plugins_used": [
-        {"name": "KeywordDetector"},       # password = "value"（引号值）
-        {"name": "PrivateKeyDetector"},    # -----BEGIN * PRIVATE KEY-----
-        {"name": "JwtTokenDetector"},      # eyJ... JWT tokens
-        {"name": "BasicAuthDetector"},     # https://user:pass@host
-        {"name": "AWSKeyDetector"},        # AKIA...
-    ]
-}
-
-_DS_TYPE_MAP = {
-    "Secret Keyword":          "SECRET_KEYWORD",
-    "Private Key":             "PRIVATE_KEY",
-    "JSON Web Token":          "JWT_TOKEN",
-    "Basic Auth Credentials":  "BASIC_AUTH",
-    "AWS Access Key":          "AWS_KEY",
-}
+from pii_detect import Detector, DetectorConfig, PatternSpec
+from pii_stream import SSERestorer
+from pii_vault import Vault
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("pii-proxy")
 
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- #
 # Config
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- #
+
+MESSAGES_PATHS = {"v1/messages", "v1/messages/count_tokens"}
+# Fields that must stay byte-identical: Anthropic signs them and rejects any
+# later replay whose text no longer matches the signature.
+SIGNED_KEYS = ("thinking", "signature", "redacted_thinking", "encrypted_content")
+# Upper bound used by the streaming hold-back window (longest possible alias).
+RESTORE_MAX_LEN = 48
+# Never rewrite binary payloads (images / documents); report them instead.
+BINARY_KEYS = ("data", "base64", "image_url")
+
 
 def _resolve_upstream_url() -> str:
-    """Mirror tap.js resolveAnthropicBaseUrl: env var → settings.json → default."""
-    # 1. Explicit override
     url = os.getenv("PII_PROXY_UPSTREAM_URL")
     if url:
         return url.rstrip("/")
-    # 2. ~/.claude/settings.json → env.ANTHROPIC_BASE_URL (same as tap.js)
     try:
-        settings_path = pathlib.Path.home() / ".claude" / "settings.json"
-        settings = json.loads(settings_path.read_text())
+        settings = json.loads((pathlib.Path.home() / ".claude" / "settings.json").read_text("utf-8"))
         url = settings.get("env", {}).get("ANTHROPIC_BASE_URL")
         if url:
             return url.rstrip("/")
     except Exception:
         pass
-    # 3. Default
     return "https://api.anthropic.com"
 
+
 UPSTREAM_URL = _resolve_upstream_url()
-logger.info("PII proxy upstream: %s", UPSTREAM_URL)
-ENTITY_TYPES = [
-    e.strip()
-    for e in os.getenv(
-        "PII_PROXY_ENTITIES",
-        "PASSWORD",
-    ).split(",")
+SECRETS_FILE = os.getenv("PII_PROXY_SECRETS_FILE", "~/.pii-proxy/secrets.json")
+VAULT_FILE = os.getenv("PII_PROXY_VAULT_FILE", "~/.pii-proxy/vault.json")
+
+# T1: bounded built-in patterns. Every max_len is an upper bound, which is what
+# lets the streaming layer hold back a bounded tail instead of guessing.
+BUILTIN_PATTERNS: list[PatternSpec] = [
+    PatternSpec("EMAIL_ADDRESS", r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,24}", 128, False),
+    PatternSpec("AWS_KEY", r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b", 64, True),
+    PatternSpec("JWT_TOKEN", r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b", 4096, True),
+    PatternSpec("PRIVATE_KEY", r"-----BEGIN [A-Z ]{0,40}PRIVATE KEY-----[\s\S]{0,4096}?-----END [A-Z ]{0,40}PRIVATE KEY-----", 4096, True),
+    PatternSpec("BASIC_AUTH_URL", r"\b[a-z][a-z0-9+.\-]{1,20}://[^\s:/@]{1,64}:[^\s:/@]{4,128}@", 256, False),
+    PatternSpec("GITHUB_TOKEN", r"\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})\b", 128, True),
+    PatternSpec("SECRET_KEYWORD", r"(?i)\b(?:password|passwd|pwd|passphrase|secret|api[_\-]?key|auth[_\-]?token|access[_\-]?token|private[_\-]?key|db[_\-]?pass(?:word)?|密码|口令)\b\s*[=:：]\s*[\"']?([^\s\"',;\[\]{}()<>]{4,256})", 300, False),
+    PatternSpec("IPV4", r"\b(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}\b", 32, True),
+    PatternSpec("CN_MOBILE", r"\b(?:\+?86[- ]?)?1[3-9]\d{9}\b", 32, True),
+    PatternSpec("CN_ID", r"\b[1-9]\d{5}(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[0-9Xx]\b", 32, True),
 ]
 
-# AES-256 key stored as 64-char hex; auto-generate if absent
-_key_hex = os.getenv("PII_PROXY_AES_KEY", "")
-if len(_key_hex) == 64:
-    try:
-        AES_KEY = bytes.fromhex(_key_hex)
-    except ValueError:
-        logger.warning("PII_PROXY_AES_KEY contains invalid hex; generating new key")
-        AES_KEY = secrets.token_bytes(32)
-        logger.info("Generated AES key (set PII_PROXY_AES_KEY=%s to persist)", AES_KEY.hex())
-else:
-    AES_KEY = secrets.token_bytes(32)
-    logger.info("Generated AES key (set PII_PROXY_AES_KEY=%s to persist)", AES_KEY.hex())
 
-# ---------------------------------------------------------------------------
-# In-memory log buffer (last 200 diff entries for the debug UI)
-# ---------------------------------------------------------------------------
+def load_detector() -> Detector:
+    cfg = DetectorConfig.load(SECRETS_FILE)
+    kinds = {p.kind for p in cfg.patterns}
+    patterns = list(cfg.patterns) + [p for p in BUILTIN_PATTERNS if p.kind not in kinds]
+    merged = DetectorConfig(
+        literals=cfg.literals,
+        patterns=patterns,
+        case_sensitive=cfg.case_sensitive,
+        min_literal_len=cfg.min_literal_len,
+    )
+    for issue in merged.lint():
+        logger.warning("pii config: %s", issue)
+    return Detector(merged)
+
+
+DETECTOR = load_detector()
+VAULT = Vault(VAULT_FILE)
+
+# --------------------------------------------------------------------------- #
+# Observability (shapes kept compatible with the settings UI)
+# --------------------------------------------------------------------------- #
 
 _log_buffer: deque = deque(maxlen=200)
-
-# ---------------------------------------------------------------------------
-# PII groups: keyed by deterministic encrypted token, tracks all occurrences
-# ---------------------------------------------------------------------------
-
-_pii_groups: dict = {}  # token_key → {entity_type, masked, hits: deque}
-_MAX_PII_GROUPS = 200
-_pii_groups_lock = threading.Lock()
-_ds_lock = threading.Lock()
-
-_TAG_EXTRACT_RE = re.compile(r"<PII:([A-Z_]+)>([^<]+)</PII>")
+_pii_groups: dict = {}
+_stats = {
+    "requests": 0,
+    "anonymized_values": 0,
+    "restored_values": 0,
+    "uncovered_binary": 0,
+    "signed_blocks_skipped": 0,
+}
 
 
-def _mask_value(s: str) -> str:
-    if len(s) <= 2:
-        return "****"
-    if len(s) <= 6:
-        return s[0] + "***" + s[-1]
-    return s[:2] + "****" + s[-2:]
+def _aliases_of(text: str) -> list[str]:
+    from pii_vault import ALIAS_RX
 
+    return [m.group(0) for m in ALIAS_RX.finditer(text)]
 
-def _record_pii_hits(after: str, req_id: str, ts: str, label: str) -> None:
-    for m in _TAG_EXTRACT_RE.finditer(after):
-        entity_type = m.group(1)
-        encrypted = m.group(2)
-        token_key = encrypted  # deterministic: same plaintext → same ciphertext
-        with _pii_groups_lock:
-            if token_key not in _pii_groups:
-                if len(_pii_groups) >= _MAX_PII_GROUPS:
-                    oldest = next(iter(_pii_groups))
-                    del _pii_groups[oldest]
-                try:
-                    original = _decrypt(encrypted)
-                    masked = _mask_value(original)
-                except Exception:
-                    masked = "****"
-                _pii_groups[token_key] = {
-                    "entity_type": entity_type,
-                    "masked": masked,
-                    "hits": deque(maxlen=200),
-                }
-            _pii_groups[token_key]["hits"].appendleft({"req_id": req_id, "ts": ts, "label": label})
-
-# ---------------------------------------------------------------------------
-# Diff logging helper
-# ---------------------------------------------------------------------------
 
 def _log_diff(req_id: str, label: str, before: str, after: str) -> None:
+    import difflib
+
     if before == after:
         return
     ts = datetime.now(timezone.utc).isoformat()
-    _record_pii_hits(after, req_id, ts, label)
-    diff = list(difflib.unified_diff(
-        before.splitlines(keepends=True),
-        after.splitlines(keepends=True),
-        fromfile=f"a/{label}",
-        tofile=f"b/{label}",
-        lineterm="",
-    ))
+    for alias in _aliases_of(after):
+        kind = alias.split("_")[1]
+        entry = _pii_groups.setdefault(alias, {"entity_type": kind, "hits": deque(maxlen=200)})
+        entry["hits"].appendleft({"req_id": req_id, "ts": ts, "label": label})
+    diff = "\n".join(
+        difflib.unified_diff(before.splitlines(True), after.splitlines(True),
+                             fromfile="a/" + label, tofile="b/" + label, lineterm="")
+    )
     if diff:
-        diff_text = "\n".join(diff)
-        logger.info("[%s] %s\n%s", req_id, label, diff_text)
-        _log_buffer.append({
-            "id": req_id,
-            "ts": ts,
-            "label": label,
-            "diff": diff_text,
-        })
-
-# ---------------------------------------------------------------------------
-# AES-CBC helpers
-# ---------------------------------------------------------------------------
-
-def _encrypt(plaintext: str) -> str:
-    # Deterministic IV: HMAC-SHA256(key, plaintext)[:16]，相同内容产生相同密文
-    iv = hmac.new(AES_KEY, plaintext.encode(), hashlib.sha256).digest()[:16]
-    padder = crypto_padding.PKCS7(128).padder()
-    padded = padder.update(plaintext.encode()) + padder.finalize()
-    cipher = Cipher(algorithms.AES(AES_KEY), modes.CBC(iv), backend=default_backend())
-    enc = cipher.encryptor()
-    ct = enc.update(padded) + enc.finalize()
-    return base64.b64encode(iv + ct).decode()
+        _log_buffer.append({"id": req_id, "ts": ts, "label": label, "diff": diff})
 
 
-def _decrypt(b64data: str) -> str:
-    raw = base64.b64decode(b64data)
-    iv, ct = raw[:16], raw[16:]
-    cipher = Cipher(algorithms.AES(AES_KEY), modes.CBC(iv), backend=default_backend())
-    dec = cipher.decryptor()
-    padded = dec.update(ct) + dec.finalize()
-    unpadder = crypto_padding.PKCS7(128).unpadder()
-    return (unpadder.update(padded) + unpadder.finalize()).decode()
+# --------------------------------------------------------------------------- #
+# Request anonymization
+# --------------------------------------------------------------------------- #
 
-# ---------------------------------------------------------------------------
-# PII anonymize / deanonymize
-# ---------------------------------------------------------------------------
-
-_TAG_RE = re.compile(r"<PII:[A-Z_]+>[^<]+</PII>")
-
-
-class PasswordValueRecognizer(EntityRecognizer):
-    """Detects password values in structured and natural-language text.
-
-    Returns the span of the VALUE only (not the keyword), so JSON keys like
-    "password" survive intact after anonymization.
-
-    Covered patterns:
-      - Structured:  password=secret  /  "password": "secret"  /  PASSWORD=secret
-      - Natural (EN): my password is secret / password is: secret
-      - Natural (ZH): 密码是 secret / 口令为 secret
-    """
-
-    SUPPORTED_ENTITIES = ["PASSWORD"]
-
-    # keyword → optional closing quote → separator → VALUE (group 1/2/3)
-    _STRUCTURED = re.compile(
-        r"""(?ix)
-        (?:password|passwd|pwd|pass|secret|
-           api[_\-]?key|auth[_\-]?token|access[_\-]?token|
-           private[_\-]?key|db[_\-]?pass(?:word)?|
-           密码|口令|暗语)
-        \s*["']?\s*[=:]\s*
-        (?:"([^"]{4,})"|'([^']{4,})'|([^\s,;\[\]{}()"'<>\n]{4,}))
-        """
-    )
-
-    _NATURAL_EN = re.compile(
-        r"""(?ix)
-        (?:my\s+)?(?:password|passwd|secret)\s+(?:is[:\s]|:)\s*
-        (?:"([^"]{4,})"|'([^']{4,})'|(\S{4,}))
-        """
-    )
-
-    _NATURAL_ZH = re.compile(
-        r"(?:密码|口令|暗语|密语)\s*(?:是|为|：|:)\s*(\S{4,})"
-    )
-
-    def __init__(self):
-        super().__init__(
-            supported_entities=self.SUPPORTED_ENTITIES,
-            supported_language="en",
-            name="PasswordValueRecognizer",
-        )
-
-    def load(self): pass
-
-    def analyze(self, text: str, entities, nlp_artifacts: NlpArtifacts = None):
-        results = []
-        for pattern in (self._STRUCTURED, self._NATURAL_EN, self._NATURAL_ZH):
-            for m in pattern.finditer(text):
-                group_idx = next(
-                    (i for i in range(1, (m.lastindex or 0) + 1) if m.group(i)),
-                    None,
-                )
-                if group_idx:
-                    start, end = m.span(group_idx)
-                    results.append(RecognizerResult("PASSWORD", start, end, score=0.85))
-        return results
-
-
-_nlp_engine = NlpEngineProvider(nlp_configuration={
-    "nlp_engine_name": "spacy",
-    "models": [{"lang_code": "en", "model_name": "en_core_web_sm"}],
-}).create_engine()
-_analyzer = AnalyzerEngine(nlp_engine=_nlp_engine)
-_analyzer.registry.add_recognizer(PasswordValueRecognizer())
-
-# ---------------------------------------------------------------------------
-# Disk cache for anonymize_text (persistent across restarts, no size eviction)
-# ---------------------------------------------------------------------------
-import diskcache as dc
-_CACHE_DIR = pathlib.Path.home() / ".cache" / "pii-proxy" / "anonymize"
-_disk_cache = dc.Cache(str(_CACHE_DIR), size_limit=int(2e9))  # 2 GB limit
-
-
-def _scan_secrets(text: str) -> List[RecognizerResult]:
-    """用 detect-secrets 扫描文本，逐行定位 secret 偏移量后返回 RecognizerResult 列表。"""
-    if not _DS_AVAILABLE or not text:
-        return []
-    results = []
-    offset = 0
-    with _ds_lock, _ds_transient(_DS_CONFIG):
-        for line in text.splitlines(keepends=True):
-            for secret in _ds_scan_line(line):
-                val = secret.secret_value
-                if not val or len(val) < 6:
-                    continue
-                pos = line.find(val)
-                if pos < 0:
-                    continue
-                start = offset + pos
-                end = start + len(val)
-                entity = _DS_TYPE_MAP.get(secret.type, "SECRET")
-                results.append(RecognizerResult(entity, start, end, score=0.9))
-            offset += len(line)
-    return results
-
-
-_PASSWORD_HINT_RE = re.compile(
-    r"password|passwd|pwd|pass|secret|api[_\-]?key|auth[_\-]?token|access[_\-]?token|"
-    r"private[_\-]?key|db[_\-]?pass|密码|口令|暗语",
-    re.IGNORECASE,
-)
-
-@_disk_cache.memoize()
-def anonymize_text(text: str) -> str:
-    if not text or not text.strip():
+def _anonymize_text(text: str, req_id: str, label: str) -> str:
+    matches = DETECTOR.scan(text)
+    if not matches:
         return text
-    # detect-secrets runs unconditionally (JWT/AWS key/PEM have no password keywords)
-    results = _scan_secrets(text)
-    # presidio NLP: skip if no password-related keywords present
-    if _PASSWORD_HINT_RE.search(text):
-        results += _analyzer.analyze(text=text, language="en", entities=ENTITY_TYPES)
-    if not results:
-        return text
-    # 去除重叠 span（同起点保留高分，不同起点跳过被覆盖的）
-    results.sort(key=lambda r: (r.start, -r.score))
-    deduped, last_end = [], -1
-    for r in results:
-        if r.start >= last_end:
-            deduped.append(r)
-            last_end = r.end
-    # 从右到左替换，保证偏移量正确
-    deduped.sort(key=lambda r: r.start, reverse=True)
-    chars = list(text)
-    for r in deduped:
-        encrypted = _encrypt(text[r.start : r.end])
-        tag = f"<PII:{r.entity_type}>{encrypted}</PII>"
-        chars[r.start : r.end] = list(tag)
-    return "".join(chars)
+    out = text
+    for match in sorted(matches, key=lambda m: m.start, reverse=True):
+        alias = VAULT.alias_for(match.kind, match.value)
+        out = out[: match.start] + alias + out[match.end:]
+        _stats["anonymized_values"] += 1
+    _log_diff(req_id, label, text, out)
+    return out
 
 
-def deanonymize_text(text: str, req_id: str = "", label: str = "") -> str:
-    original = text
-
-    def _replace(m: re.Match) -> str:
-        inner = m.group(0)
-        # Extract base64 payload between > and </PII>
-        payload = inner.split(">", 1)[1].rsplit("</PII>", 1)[0]
-        try:
-            return _decrypt(payload)
-        except Exception as exc:
-            logger.warning("Failed to decrypt PII tag: %s", exc)
-            return inner
-
-    result = _TAG_RE.sub(_replace, text)
-    if req_id:
-        _log_diff(req_id, label or "response", original, result)
-    return result
-
-
-def _anonymize_messages(messages: list, req_id: str = "") -> tuple:
-    out = []
-    modified = False
-    for i, msg in enumerate(messages):
-        msg = dict(msg)
-        role = msg.get("role", "?")
-        label = f"msg[{i}]({role})"
-        content = msg.get("content")
-        if isinstance(content, str):
-            before = content
-            msg["content"] = anonymize_text(content)
-            if msg["content"] != before:
-                modified = True
-                if req_id:
-                    _log_diff(req_id, label, before, msg["content"])
-        elif isinstance(content, list):
-            new_blocks = []
-            for j, block in enumerate(content):
-                block = dict(block)
-                if block.get("type") == "text" and isinstance(block.get("text"), str):
-                    before = block["text"]
-                    block["text"] = anonymize_text(block["text"])
-                    if block["text"] != before:
-                        modified = True
-                        if req_id:
-                            _log_diff(req_id, f"{label}/text[{j}]", before, block["text"])
-                elif block.get("type") == "tool_result":
-                    tr_content = block.get("content")
-                    if isinstance(tr_content, str):
-                        before = tr_content
-                        block["content"] = anonymize_text(tr_content)
-                        if block["content"] != before:
-                            modified = True
-                            if req_id:
-                                _log_diff(req_id, f"{label}/tool_result[{j}]", before, block["content"])
-                    elif isinstance(tr_content, list):
-                        new_content = []
-                        for k, b in enumerate(tr_content):
-                            b = dict(b)
-                            if b.get("type") == "text" and isinstance(b.get("text"), str):
-                                before = b["text"]
-                                b["text"] = anonymize_text(b["text"])
-                                if b["text"] != before:
-                                    modified = True
-                                    if req_id:
-                                        _log_diff(req_id, f"{label}/tool_result[{j}]/text[{k}]", before, b["text"])
-                            new_content.append(b)
-                        block["content"] = new_content
-                elif block.get("type") == "tool_use" and isinstance(block.get("input"), dict):
-                    new_input = {}
-                    for k, v in block["input"].items():
-                        if isinstance(v, str):
-                            before = v
-                            new_input[k] = anonymize_text(v)
-                            if new_input[k] != before:
-                                modified = True
-                                if req_id:
-                                    _log_diff(req_id, f"{label}/tool_use[{j}].input.{k}", before, new_input[k])
-                        else:
-                            new_input[k] = v
-                    block["input"] = new_input
-                new_blocks.append(block)
-            msg["content"] = new_blocks
-        out.append(msg)
-    return out, modified
-
-
-def _deanonymize_obj(obj, req_id: str = "", path: str = "response"):
+def _walk_anonymize(obj: Any, path: str, req_id: str) -> Any:
+    """Recursively anonymize every string, skipping signed and binary payloads."""
     if isinstance(obj, str):
-        return deanonymize_text(obj, req_id=req_id, label=path)
-    if isinstance(obj, dict):
-        return {k: _deanonymize_obj(v, req_id=req_id, path=f"{path}.{k}") for k, v in obj.items()}
+        return _anonymize_text(obj, req_id, path)
     if isinstance(obj, list):
-        return [_deanonymize_obj(item, req_id=req_id, path=f"{path}[{i}]") for i, item in enumerate(obj)]
+        return [_walk_anonymize(item, path + "[" + str(i) + "]", req_id) for i, item in enumerate(obj)]
+    if isinstance(obj, dict):
+        block_type = obj.get("type")
+        if isinstance(block_type, str) and block_type.lower() in SIGNED_KEYS:
+            _stats["signed_blocks_skipped"] += 1
+            return obj
+        out: dict = {}
+        for key, value in obj.items():
+            if isinstance(key, str) and key.lower() in SIGNED_KEYS:
+                _stats["signed_blocks_skipped"] += 1
+                out[key] = value
+                continue
+            if isinstance(key, str) and key.lower() in BINARY_KEYS and isinstance(value, str) and len(value) > 256:
+                _stats["uncovered_binary"] += 1
+                out[key] = value
+                continue
+            out[key] = _walk_anonymize(value, path + "." + key, req_id)
+        return out
     return obj
 
-# ---------------------------------------------------------------------------
+
+def anonymize_request(data: Any, req_id: str) -> tuple[Any, bool]:
+    before = json.dumps(data, sort_keys=True)
+    out = _walk_anonymize(data, "request", req_id)
+    return out, json.dumps(out, sort_keys=True) != before
+
+
+# --------------------------------------------------------------------------- #
+# Response restoration
+# --------------------------------------------------------------------------- #
+
+def _count_aliases(node: Any) -> int:
+    from pii_vault import ALIAS_RX
+
+    found = 0
+    if isinstance(node, str):
+        found += sum(1 for m in ALIAS_RX.finditer(node) if VAULT.reveal(m.group(0)))
+    elif isinstance(node, dict):
+        for value in node.values():
+            found += _count_aliases(value)
+    elif isinstance(node, list):
+        for item in node:
+            found += _count_aliases(item)
+    return found
+
+
+def restore_json_payload(body: bytes, req_id: str) -> bytes:
+    try:
+        data = json.loads(body)
+    except Exception:
+        return body
+    restored = VAULT.restore_obj(data, skip_keys=SIGNED_KEYS)
+    count = _count_aliases(data)
+    if count:
+        _stats["restored_values"] += count
+    return json.dumps(restored, ensure_ascii=False).encode("utf-8")
+
+
+# --------------------------------------------------------------------------- #
 # FastAPI app
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- #
 
 _client = httpx.AsyncClient(
     timeout=httpx.Timeout(connect=30.0, read=None, write=None, pool=None),
     follow_redirects=True,
-    trust_env=False,  # bypass system proxy; pii-proxy should connect directly to upstream
+    trust_env=False,
 )
 
 _HOP_BY_HOP = {"host", "content-length", "transfer-encoding", "connection", "keep-alive", "content-encoding"}
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(_app: FastAPI):
     yield
+    VAULT.save()
     await _client.aclose()
+
 
 app = FastAPI(title="PII Proxy", lifespan=lifespan)
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "upstream": UPSTREAM_URL}
+    return {
+        "status": "ok",
+        "upstream": UPSTREAM_URL,
+        "mode": "v2-aliases",
+        "detector": DETECTOR.health(),
+        "vault": VAULT.stats(),
+        "stats": dict(_stats),
+    }
 
 
 @app.get("/logs")
@@ -473,19 +274,19 @@ async def clear_logs():
 
 @app.get("/pii-groups")
 async def get_pii_groups():
-    result = []
-    for token_key, v in _pii_groups.items():
-        hits = list(v["hits"])
-        result.append({
-            "token_key": token_key[:16],
-            "entity_type": v["entity_type"],
-            "masked": v["masked"],
+    groups = []
+    for alias, value in _pii_groups.items():
+        hits = list(value["hits"])
+        groups.append({
+            "token_key": alias,
+            "entity_type": value["entity_type"],
+            "masked": VAULT.mask(alias),
             "count": len(hits),
             "last_seen": hits[0]["ts"] if hits else "",
             "occurrences": hits,
         })
-    result.sort(key=lambda x: x["last_seen"], reverse=True)
-    return {"groups": result}
+    groups.sort(key=lambda g: g["last_seen"], reverse=True)
+    return {"groups": groups}
 
 
 @app.delete("/pii-groups")
@@ -496,110 +297,68 @@ async def clear_pii_groups():
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 async def proxy(request: Request, path: str):
-    _t0 = time.monotonic()
+    t0 = time.monotonic()
     body = await request.body()
     req_id = uuid.uuid4().hex[:8]
+    _stats["requests"] += 1
 
-    # Anonymize PII in POST /v1/messages
-    _t_anon = time.monotonic()
-    if request.method == "POST" and path == "v1/messages":
+    if request.method == "POST" and path in MESSAGES_PATHS and body:
         try:
             data = json.loads(body)
-            modified = False
-            loop = asyncio.get_running_loop()
-            if "messages" in data:
-                data["messages"], msg_modified = await loop.run_in_executor(
-                    None, _anonymize_messages, data["messages"], req_id
-                )
-                modified = modified or msg_modified
-            if isinstance(data.get("system"), str):
-                before = data["system"]
-                data["system"] = await loop.run_in_executor(None, anonymize_text, before)
-                if data["system"] != before:
-                    _log_diff(req_id, "system", before, data["system"])
-                    modified = True
+            data, modified = anonymize_request(data, req_id)
             if modified:
-                body = json.dumps(data).encode()
-        except Exception as exc:
-            logger.warning("Failed to anonymize request: %s", exc)
-    _anon_ms = (time.monotonic() - _t_anon) * 1000
+                body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        except Exception as exc:  # fail-open: never block a request because of us
+            logger.warning("[%s] failed to anonymize request: %s", req_id, exc)
 
-    fwd_headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP}
-    upstream_url = f"{UPSTREAM_URL}/{path}"
+    headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP}
+    upstream_url = UPSTREAM_URL + "/" + path
     if request.url.query:
-        upstream_url += f"?{request.url.query}"
+        upstream_url += "?" + request.url.query
 
-    last_exc = None
+    last_exc: Exception | None = None
+    upstream = None
     for attempt in range(4):
         if attempt:
-            wait = 2 ** (attempt - 1)  # 1s, 2s, 4s
-            logger.warning("[%s] retry %d/3 after %.0fs (reason: %s)", req_id, attempt, wait, last_exc)
-            await asyncio.sleep(wait)
-        req = _client.build_request(
-            method=request.method,
-            url=upstream_url,
-            headers=fwd_headers,
-            content=body,
-        )
+            await asyncio.sleep(2 ** (attempt - 1))
         try:
-            upstream_resp = await _client.send(req, stream=True)
+            upstream = await _client.send(
+                _client.build_request(request.method, upstream_url, headers=headers, content=body),
+                stream=True,
+            )
             break
         except httpx.TransportError as exc:
             last_exc = exc
-    else:
-        raise last_exc
+    if upstream is None:
+        raise last_exc  # type: ignore[misc]
 
-    content_type = upstream_resp.headers.get("content-type", "")
-    resp_headers = {k: v for k, v in upstream_resp.headers.items() if k.lower() not in _HOP_BY_HOP}
+    content_type = upstream.headers.get("content-type", "")
+    resp_headers = {k: v for k, v in upstream.headers.items() if k.lower() not in _HOP_BY_HOP}
 
-    # SSE: stream with deanonymize, buffering across chunk boundaries
     if "text/event-stream" in content_type:
-        _ttfb = time.monotonic() - _t0
-        logger.info("[%s] %s %s → %d (SSE) anon=%.0fms ttfb=%.3fs", req_id, request.method, path, upstream_resp.status_code, _anon_ms, _ttfb)
-        async def _stream():
-            raw_buf = bytearray()
-            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-            text_buf = ""
-            try:
-                async for chunk in upstream_resp.aiter_bytes():
-                    raw_buf += chunk
-                    # Decode only complete UTF-8 sequences; incomplete tail stays in raw_buf
-                    decoded = decoder.decode(chunk, final=False)
-                    text_buf += decoded
-                    last_open = text_buf.rfind("<PII:")
-                    if last_open != -1 and "</PII>" not in text_buf[last_open:]:
-                        # Incomplete PII tag — hold it back
-                        safe, text_buf = text_buf[:last_open], text_buf[last_open:]
-                    else:
-                        safe, text_buf = text_buf, ""
-                    if safe:
-                        yield deanonymize_text(safe).encode("utf-8")
-            finally:
-                # Flush remaining with final=True to emit any replacement chars
-                tail = decoder.decode(b"", final=True)
-                text_buf += tail
-                if text_buf:
-                    yield deanonymize_text(text_buf).encode("utf-8")
-                await upstream_resp.aclose()
-        return StreamingResponse(_stream(), status_code=upstream_resp.status_code, headers=resp_headers)
+        restorer = SSERestorer(VAULT.restore_text, RESTORE_MAX_LEN)
 
-    # Non-streaming: load full response then deanonymize
-    try:
-        await upstream_resp.aread()
-        resp_body = upstream_resp.content
-        if "application/json" in content_type:
+        async def _stream():
             try:
-                resp_data = json.loads(resp_body)
-                resp_data = _deanonymize_obj(resp_data, req_id=req_id)
-                resp_body = json.dumps(resp_data).encode()
-            except Exception as exc:
-                logger.warning("Failed to deanonymize response: %s", exc)
+                async for chunk in upstream.aiter_bytes():
+                    for frame in restorer.feed(chunk):
+                        yield frame
+                for frame in restorer.flush():
+                    yield frame
+            finally:
+                _stats["restored_values"] += restorer.stats.get("restored", 0)
+                await upstream.aclose()
+
+        logger.info("[%s] %s %s -> %d (SSE) %.1fms", req_id, request.method, path, upstream.status_code, (time.monotonic() - t0) * 1000)
+        return StreamingResponse(_stream(), status_code=upstream.status_code, headers=resp_headers)
+
+    try:
+        await upstream.aread()
+        resp_body = upstream.content
+        if "application/json" in content_type:
+            resp_body = restore_json_payload(resp_body, req_id)
     finally:
-        await upstream_resp.aclose()
-    logger.info("[%s] %s %s → %d anon=%.0fms total=%.3fs", req_id, request.method, path, upstream_resp.status_code, _anon_ms, time.monotonic() - _t0)
+        await upstream.aclose()
+    logger.info("[%s] %s %s -> %d %.1fms", req_id, request.method, path, upstream.status_code, (time.monotonic() - t0) * 1000)
     resp_headers["content-length"] = str(len(resp_body))
-    return Response(
-        content=resp_body,
-        status_code=upstream_resp.status_code,
-        headers=resp_headers,
-    )
+    return Response(content=resp_body, status_code=upstream.status_code, headers=resp_headers)

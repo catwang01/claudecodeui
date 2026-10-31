@@ -1,0 +1,43 @@
+{
+  "literals": 50,
+  "patterns": 5,
+  "corpus_bytes": 377506,
+  "scan": [
+    {
+      "chunk_bytes": 1024,
+      "naive_prefix_bytes": 65536,
+      "naive_ms_extrapolated": 11505.9,
+      "incr_ms": 752.35,
+      "incr_ms_per_mb": 2089.77
+    },
+    {
+      "chunk_bytes": 4096,
+      "naive_prefix_bytes": 262144,
+      "naive_ms_extrapolated": 6342.9,
+      "incr_ms": 218.39,
+      "incr_ms_per_mb": 606.6
+    },
+    {
+      "chunk_bytes": 16384,
+      "naive_prefix_bytes": 377506,
+      "naive_ms_extrapolated": 1610.5,
+      "incr_ms": 98.47,
+      "incr_ms_per_mb": 273.52
+    }
+  ],
+  "sse": [
+    {
+      "chunk_bytes": 4096,
+      "payload_bytes": 283044,
+      "total_ms": 27.94,
+      "mb_per_s": 9.7,
+      "chunk_ms_p50": 0.439,
+      "chunk_ms_p95": 1.229
+    }
+  ],
+  "split_fuzz": {
+    "cut_points": 123,
+    "mismatches": 0,
+    "restored_ok": true
+  }
+}
