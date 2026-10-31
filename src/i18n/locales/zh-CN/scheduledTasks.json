@@ -8,6 +8,7 @@
   "tabs": {
     "label": "面板分栏",
     "tasks": "任务",
+    "calendar": "日历",
     "presets": "预设包"
   },
   "presets": {
@@ -130,6 +131,7 @@
     "edit": "编辑",
     "delete": "删除",
     "runNow": "立即运行",
+    "preview": "试运行脚本门控",
     "copy": "复制任务",
     "export": "导出任务",
     "import": "导入任务",
@@ -179,6 +181,7 @@
     "delete": "无法删除任务。",
     "run": "无法启动任务。",
     "update": "无法更新任务。",
+    "preview": "无法试运行该任务。",
     "copy": "无法复制任务。",
     "runQueued": "任务已在运行，本次触发已排队。",
     "export": "无法导出任务。",
@@ -209,6 +212,9 @@
       "enabledHint": "暂停后仍保留计划，但不会运行。",
       "conflictPolicy": "运行中再次到点时",
       "conflictPolicyHint": "当上一次运行还在进行、本次又到点时的处理方式。排队只保留一个待运行触发；替换会中止当前运行再启动新的。",
+      "tags": "标签",
+      "tagsHint": "用逗号分隔的标签，用于分组和筛选。",
+      "tagsPlaceholder": "运维, 文档",
       "scriptGate": "脚本门控（可选）",
       "command": "Shell 命令",
       "commandPlaceholder": "./scripts/should-run.sh",
@@ -371,6 +377,25 @@
       "title": "请输入标题。",
       "project": "请选择项目。"
     }
+  },
+  "tagFilter": {
+    "placeholder": "按标签筛选"
+  },
+  "previewDialog": {
+    "title": "试运行 {{title}}",
+    "running": "正在执行脚本门控…",
+    "decision": "判定",
+    "reason": "原因",
+    "decisionValue": {
+      "run": "运行智能体",
+      "skip": "跳过",
+      "error": "错误"
+    }
+  },
+  "calendar": {
+    "next7Days": "未来 7 天",
+    "emptyTitle": "暂无安排",
+    "emptyDescription": "未来 7 天内没有启用中的任务会运行。"
   },
   "time": {
     "unknown": "未知"

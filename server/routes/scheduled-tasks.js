@@ -97,6 +97,7 @@ export function createScheduledTasksRouter(overrides = {}) {
         userId: req.user?.id ?? null,
         status: req.query.status,
         search: req.query.search,
+        tag: req.query.tag,
       });
       res.json({ tasks: result.tasks });
     })
@@ -118,6 +119,7 @@ export function createScheduledTasksRouter(overrides = {}) {
         commandTimeoutSeconds: body.commandTimeoutSeconds,
         params: body.params,
         conflictPolicy: body.conflictPolicy,
+        tags: body.tags,
         rule: body.rule,
       });
       if (!result.ok) return sendError(res, result);
@@ -288,6 +290,21 @@ export function createScheduledTasksRouter(overrides = {}) {
     })
   );
 
+  // GET /upcoming — the next occurrences of active tasks (?days=7&limit=200),
+  // registered before /:id so the literal "upcoming" is never read as a task id.
+  router.get(
+    '/upcoming',
+    handler(async (req, res) => {
+      const result = await (await getManagement()).listUpcoming({
+        userId: req.user?.id ?? null,
+        days: req.query.days,
+        limit: req.query.limit,
+      });
+      if (!result.ok) return sendError(res, result);
+      res.json({ upcoming: result.upcoming });
+    })
+  );
+
   // GET /:id/export — the portable single-task envelope (docs §16).
   router.get(
     '/:id/export',
@@ -319,6 +336,17 @@ export function createScheduledTasksRouter(overrides = {}) {
     })
   );
 
+  // POST /:id/preview — run the script gate only (docs §20); body { params }.
+  router.post(
+    '/:id/preview',
+    handler(async (req, res) => {
+      const body = req.body || {};
+      const result = await (await getManagement()).previewTask(req.params.id, { params: body.params });
+      if (!result.ok) return sendError(res, result);
+      res.json({ preview: result.preview });
+    })
+  );
+
   // GET /:id
   router.get(
     '/:id',
@@ -343,6 +371,7 @@ export function createScheduledTasksRouter(overrides = {}) {
         commandTimeoutSeconds: body.commandTimeoutSeconds,
         params: body.params,
         conflictPolicy: body.conflictPolicy,
+        tags: body.tags,
         enabled: body.enabled,
         rule: body.rule,
       });

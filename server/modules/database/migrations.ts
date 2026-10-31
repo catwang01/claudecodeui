@@ -179,6 +179,9 @@ export function runMigrations(): void {
   // existing task reads as 'skip', exactly the pre-§17 behaviour.
   addColumnIfMissing(db, 'scheduled_tasks', 'conflict_policy', "TEXT NOT NULL DEFAULT 'skip'");
 
+  // Tags (docs section 19). Additive: existing rows keep NULL, which reads as [].
+  addColumnIfMissing(db, 'scheduled_tasks', 'tags_json', 'TEXT');
+
   // Data migrations
   migrateLegacySessionNames(db);
 

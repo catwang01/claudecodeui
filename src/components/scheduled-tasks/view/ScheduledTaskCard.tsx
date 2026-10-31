@@ -1,4 +1,4 @@
-import { Copy, Cpu, Download, FolderOpen, History, Loader2, Pencil, Play, Repeat, Terminal, Trash2 } from 'lucide-react';
+import { Copy, Cpu, Download, Eye, FolderOpen, History, Loader2, Pencil, Play, Repeat, Terminal, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button, Tooltip } from '../../../shared/view/ui';
 import { cn } from '../../../lib/utils';
@@ -19,6 +19,8 @@ type ScheduledTaskCardProps = {
   onEdit: (task: ScheduledTask) => void;
   onCopy: (task: ScheduledTask) => void;
   onExport?: (task: ScheduledTask) => void;
+  /** docs §20: preview the script-gate decision. */
+  onPreview?: (task: ScheduledTask) => void;
   onDelete: (task: ScheduledTask) => void;
   onToggleHistory: (task: ScheduledTask) => void;
   onOpenSession?: (sessionId: string) => void;
@@ -47,6 +49,7 @@ export default function ScheduledTaskCard({
   onEdit,
   onCopy,
   onExport,
+  onPreview,
   onDelete,
   onToggleHistory,
   onOpenSession,
@@ -120,6 +123,19 @@ export default function ScheduledTaskCard({
           {/* Declared parameters with their env var tooltips (section 12.7). */}
           <ParamChips params={params} />
 
+          {task.tags && task.tags.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1">
+              {task.tags.map((tag) => (
+                <span
+                  key={tag}
+                  className="inline-flex items-center rounded-full bg-sky-500/10 px-2 py-0.5 text-[11px] text-sky-600 dark:text-sky-400"
+                >
+                  #{tag}
+                </span>
+              ))}
+            </div>
+          )}
+
           <div className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
             <span>
               {t('nextRun.label')}: <span className="text-foreground/80">{nextRunText}</span>
@@ -167,6 +183,18 @@ export default function ScheduledTaskCard({
               onClick={() => onEdit(task)}
             >
               <Pencil className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
+              aria-label={t('actions.preview')}
+              title={t('actions.preview')}
+              disabled={isBusy}
+              onClick={() => onPreview?.(task)}
+            >
+              <Eye className="h-3.5 w-3.5" />
             </Button>
             <Button
               type="button"

@@ -135,6 +135,18 @@ describe('scheduledTasksDb', () => {
     // The legacy row predates the column; the migration default makes it 'skip'.
     expect(must(scheduledTasksDb.getTask(legacyTaskId)).conflict_policy).toBe('skip');
   });
+  it('stores and clears tags; legacy rows read NULL', () => {
+    const created = makeTask({ title: 'Tagged', tagsJson: JSON.stringify(['ops', 'docs']) });
+    expect(created.tags_json).toBe('["ops","docs"]');
+
+    const plain = makeTask({ title: 'Untagged' });
+    expect(plain.tags_json).toBeNull();
+
+    const updated = must(scheduledTasksDb.updateTask(created.id, { tagsJson: null }));
+    expect(updated.tags_json).toBeNull();
+
+    expect(must(scheduledTasksDb.getTask(legacyTaskId)).tags_json).toBeNull();
+  });
 
   it('honours explicit id, user, provider, model, enabled and null next run', () => {
     const id = crypto.randomUUID();

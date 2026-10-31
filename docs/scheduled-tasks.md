@@ -1291,3 +1291,67 @@ ALTER TABLE scheduled_tasks ADD COLUMN conflict_policy TEXT NOT NULL DEFAULT 'sk
 - `tools.test.js` / routes：`conflict_policy` 往返、`{queued:true}` 响应。
 - `scheduled-tasks.db.test.ts`：建任务/更新写入 `conflict_policy`，旧行读作 `skip`。
 - 全量 `npx vitest run`（Node 22）、`npm run typecheck`、`npm run lint`。
+
+## 19. Tags（第十五轮）
+
+每条任务可带一组标签，用于分组与筛选。
+
+### 19.1 Model
+
+- 标签是短字符串：去空白、忽略大小写去重，每个任务最多 20 个、每个最多 32 字符。
+- 全量替换语义：`tags: []`（或 null）清空。
+- Task JSON 增加 `tags: string[]`；旧行读作 `[]`。
+
+### 19.2 Database（additive）
+
+```sql
+ALTER TABLE scheduled_tasks ADD COLUMN tags_json TEXT;
+```
+
+`addColumnIfMissing`；`schema.ts` 同步补列。
+
+### 19.3 REST / tools
+
+- `POST /`、`PATCH /:id` 接受 `tags`；非法输入 400 `invalid_input`。
+- `GET /?tag=<tag>` 只返回带该标签（忽略大小写）的任务。
+- `schedule_create` / `schedule_update` 接受 `tags`；`schedule_list` 接受 `tag`。
+- `copy` 继承标签；export 信封含 `tags`，import 会带上。
+
+### 19.4 Frontend
+
+任务编辑器新增逗号分隔的标签输入；任务卡片显示 `#tag` 徽标；面板工具栏新增按标签筛选输入。
+i18n：`editor.fields.tags*`、`tagFilter.placeholder`。
+
+## 20. Dry-run preview（第十五轮）
+
+`POST /api/scheduled-tasks/:id/preview`（body 可选 `{ params }`）只执行脚本门控（§7），**不创建 run 行、不调用智能体**，
+返回下一次真实运行会做的判定：
+
+```json
+{ "preview": { "decision": "run|skip|error", "effectivePrompt": "...", "reason": null, "error": null, "gate": true, "scriptExitCode": 0, "scriptOutput": "..." } }
+```
+
+- 无 `command` 的任务：`decision: "run"`，`effectivePrompt` = 任务静态 prompt。
+- 门控 `{"skip":true}` → `decision: "skip"` + `reason`；非零退出/超时/坏 JSON → `decision: "error"` + 错误码。
+- 预览用合成的 run id 提供与真实运行相同的预定义变量环境；不写任何工作区文件。
+- Agent tool `schedule_preview`（`id` + 可选 `params`）。
+- 前端：任务卡片「试运行」按钮 + `PreviewDialog` 展示判定/实际提示词/脚本输出；i18n `previewDialog.*`、`actions.preview`。
+
+## 21. Upcoming / calendar（第十五轮）
+
+`GET /api/scheduled-tasks/upcoming?days=7&limit=200` 返回**启用中**任务在时间窗内的后续运行点，按时间升序：
+
+```json
+{ "upcoming": [{ "taskId": "...", "title": "...", "projectPath": "/abs", "tags": [], "at": "<ISO-8601>" }] }
+```
+
+- 每个任务用 `computeNextRun` 迭代展开，每个任务最多 50 次、整体 `limit` 封顶；`days` 1..31。
+- 路由注册在 `GET /:id` 之前，字面量 `upcoming` 不会被当成任务 id。
+- 前端：面板新增 **Calendar** 标签页，按本地日期分组展示未来 7 天；i18n `tabs.calendar`、`calendar.*`。
+
+### 21.1 Acceptance（第十五轮）
+
+- `management.test.js`：标签归一化/存储/更新/筛选、copy 与导入导出携带标签、`previewTask` 转发与 not_found、`listUpcoming` 时间窗。
+- `tools.test.js` / routes：`tags` 往返与 `?tag=` 过滤、`schedule_preview`、`GET /upcoming`。
+- `scheduled-tasks.db.test.ts`：`tags_json` 建/清/旧行 NULL；`conflict_policy` 沿用。
+- 全量 `npx vitest run`（Node 22）、`npm run typecheck`、`npm run lint`。

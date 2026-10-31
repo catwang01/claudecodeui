@@ -40,6 +40,7 @@ function makeRepo() {
         preset_id: input.presetId ?? null,
         preset_task_id: input.presetTaskId ?? null,
         conflict_policy: input.conflictPolicy ?? 'skip',
+        tags_json: input.tagsJson ?? null,
         created_at: stamp(),
         updated_at: stamp(),
       };
@@ -67,6 +68,7 @@ function makeRepo() {
         presetId: 'preset_id',
         presetTaskId: 'preset_task_id',
         conflictPolicy: 'conflict_policy',
+        tagsJson: 'tags_json',
       };
       for (const [key, value] of Object.entries(patch)) {
         row[columns[key] || key] = key === 'enabled' ? (value ? 1 : 0) : value;
@@ -470,6 +472,63 @@ describe('conflict policy (§17)', () => {
 
     expect(result).toEqual({ ok: true, queued: true, run: null });
     expect(runNow).toHaveBeenCalledWith(created.task.id);
+  });
+});
+describe('tags (§19)', () => {
+  it('normalizes, stores, updates and filters tags', async () => {
+    const { management } = setup();
+    const created = await management.createTask({ ...baseTask, tags: ['Ops', 'docs', 'ops'] });
+    expect(created.task.tags).toEqual(['Ops', 'docs']);
+
+    expect(await management.createTask({ ...baseTask, tags: [''] })).toMatchObject({
+      ok: false,
+      code: 'invalid_input',
+    });
+
+    const updated = await management.updateTask(created.task.id, { tags: [] });
+    expect(updated.task.tags).toEqual([]);
+
+    const tagged = await management.createTask({ ...baseTask, tags: ['ops'] });
+    const filtered = await management.listTasks({ tag: 'OPS' }, {});
+    expect(filtered.tasks.map((task) => task.id)).toEqual([tagged.task.id]);
+  });
+
+  it('carries tags through copy and export/import', async () => {
+    const { management } = setup();
+    const created = await management.createTask({ ...baseTask, tags: ['ops'] });
+
+    expect((await management.copyTask(created.task.id)).task.tags).toEqual(['ops']);
+    const exported = await management.exportTask(created.task.id);
+    expect(exported.task.tags).toEqual(['ops']);
+    expect((await management.importTask(exported)).task.tags).toEqual(['ops']);
+  });
+});
+
+describe('preview and upcoming (§20, §21)', () => {
+  it('forwards preview to the runner and rejects unknown tasks', async () => {
+    const previewTask = vi.fn(async () => ({ decision: 'skip', reason: 'nothing to do' }));
+    const { management } = setup({ deps: { previewTask } });
+    const created = await management.createTask(baseTask);
+
+    const result = await management.previewTask(created.task.id);
+
+    expect(result).toEqual({ ok: true, preview: { decision: 'skip', reason: 'nothing to do' } });
+    expect(previewTask).toHaveBeenCalledWith(expect.objectContaining({ id: created.task.id }), {
+      params: undefined,
+    });
+    expect(await management.previewTask('nope')).toMatchObject({ ok: false, code: 'not_found' });
+  });
+
+  it('lists upcoming occurrences inside the horizon', async () => {
+    const { management } = setup();
+    await management.createTask({ ...baseTask, rule: { kind: 'daily', time: '09:00', timeZone: 'UTC' } });
+
+    const result = await management.listUpcoming({ days: 2 }, {});
+
+    expect(result.ok).toBe(true);
+    expect(result.upcoming.length).toBeGreaterThan(0);
+    expect(result.upcoming[0]).toMatchObject({ title: 'a', projectPath: PROJECT });
+    expect(result.upcoming[0].at).toBe('2030-06-04T09:00:00.000Z');
   });
 });
 

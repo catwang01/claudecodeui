@@ -635,7 +635,65 @@ export function createTaskRunner(deps = {}) {
     }
   }
 
-  return { startTaskRun, abortTaskRun };
+  /**
+   * §20: run the script gate only — no run row, no agent call. Returns the
+   * decision the next real run would take, so an author can test a gate cheaply.
+   */
+  async function previewTask(task, { params: overrides } = {}) {
+    const resolution = resolveParams(taskParamDefs(task), overrides);
+    if (!resolution.ok) {
+      return { decision: 'error', error: resolution.code, scriptExitCode: null, scriptOutput: null };
+    }
+    const projectPath = task.project_path ?? task.projectPath ?? null;
+    if (typeof task.command !== 'string' || !task.command.trim()) {
+      return {
+        decision: 'run',
+        effectivePrompt: task.prompt,
+        gate: false,
+        scriptExitCode: null,
+        scriptOutput: null,
+      };
+    }
+    if (!commandsEnabled()) {
+      return { decision: 'error', error: 'commands_disabled', scriptExitCode: null, scriptOutput: null };
+    }
+    // A synthetic run id gives the gate the same env shape as a real run without
+    // creating any run state.
+    const previewRunId = `preview-${Date.now().toString(36)}`;
+    const workspaceVars = workspaceEnv(task, { runId: previewRunId });
+    const predefinedVars = predefinedVarsEnv(task, {
+      cwd: projectPath || process.cwd(),
+      workspaceVars,
+    });
+    const gate = await runScriptGate(task, projectPath, predefinedVars, resolution.env);
+    if (!gate.ok) {
+      return {
+        decision: 'error',
+        error: gate.code,
+        scriptExitCode: gate.scriptExitCode ?? null,
+        scriptOutput: gate.scriptOutput ?? null,
+      };
+    }
+    if (gate.skip) {
+      return {
+        decision: 'skip',
+        reason: gate.reason ?? null,
+        effectivePrompt: null,
+        gate: true,
+        scriptExitCode: gate.scriptExitCode ?? null,
+        scriptOutput: gate.scriptOutput ?? null,
+      };
+    }
+    return {
+      decision: 'run',
+      effectivePrompt: gate.prompt,
+      gate: true,
+      scriptExitCode: gate.scriptExitCode ?? null,
+      scriptOutput: gate.scriptOutput ?? null,
+    };
+  }
+
+  return { startTaskRun, abortTaskRun, previewTask };
 }
 
 const defaultRunner = createTaskRunner();
@@ -658,4 +716,14 @@ export function startTaskRun(task, options = {}) {
  */
 export function abortTaskRun(taskId) {
   return defaultRunner.abortTaskRun(taskId);
+}
+
+/**
+ * §20: preview the script-gate decision of a task without creating a run or
+ * calling the agent.
+ * @param {object} task scheduled task row
+ * @param {{ params?: Record<string, unknown> }} [options]
+ */
+export function previewTask(task, options = {}) {
+  return defaultRunner.previewTask(task, options);
 }

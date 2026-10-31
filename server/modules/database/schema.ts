@@ -239,7 +239,9 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
   params_json TEXT,
   -- Conflict policy (docs section 17): what to do when the task is due while its
   -- previous run is still in flight. 'skip' (default) | 'queue' | 'replace'.
-  conflict_policy TEXT NOT NULL DEFAULT 'skip'
+  conflict_policy TEXT NOT NULL DEFAULT 'skip',
+  -- Tags (docs section 19): JSON string[]; NULL/'' => no tags.
+  tags_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due ON scheduled_tasks(enabled, next_run_at);`;
 

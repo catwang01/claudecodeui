@@ -36,6 +36,7 @@ function makeTaskRow(input, id) {
     enabled: input.enabled === false ? 0 : 1,
     run_count: 0,
     conflict_policy: input.conflictPolicy ?? 'skip',
+    tags_json: input.tagsJson ?? null,
     created_at: stamp,
     updated_at: stamp,
   };
@@ -93,6 +94,7 @@ function makeRepo() {
         enabled: 'enabled',
         paramsJson: 'params_json',
         conflictPolicy: 'conflict_policy',
+        tagsJson: 'tags_json',
       };
       for (const [key, value] of Object.entries(patch)) {
         row[columns[key] || key] = key === 'enabled' ? (value ? 1 : 0) : value;
@@ -143,10 +145,10 @@ beforeEach(() => {
 });
 
 describe('tool registration', () => {
-  it('registers the sixteen schedule_* tools in contract order', () => {
+  it('registers the seventeen schedule_* tools in contract order', () => {
     const { tools } = setup();
     expect(tools.map((definition) => definition.name)).toEqual(SCHEDULE_TOOL_NAMES);
-    expect(SCHEDULE_TOOL_NAMES).toHaveLength(16);
+    expect(SCHEDULE_TOOL_NAMES).toHaveLength(17);
     for (const definition of tools) {
       expect(typeof definition.handler).toBe('function');
       expect(definition.description).toBeTruthy();
@@ -590,10 +592,10 @@ describe('§6.1 built-in Cron precedence', () => {
     return end === -1 ? description : description.slice(0, end + 1);
   }
 
-  it('states the precedence note in the first sentence of all sixteen descriptions', () => {
+  it('states the precedence note in the first sentence of all seventeen descriptions', () => {
     const { tools } = setup();
 
-    expect(tools).toHaveLength(16);
+    expect(tools).toHaveLength(17);
     for (const definition of tools) {
       const sentence = firstSentence(definition.description);
       expect(sentence, definition.name).toContain(PREFERENCE_MARKER);
@@ -850,11 +852,11 @@ describe('params (§12)', () => {
     expect(byName.schedule_update.description).toMatch(/parameter/i);
   });
 
-  it('lists every §13 predefined variable and the id clarification on all sixteen tools', () => {
+  it('lists every §13 predefined variable and the id clarification on all seventeen tools', () => {
     const { byName } = setup();
 
     expect(PREDEFINED_ENV_NAMES).toHaveLength(7);
-    expect(Object.keys(byName)).toHaveLength(16);
+    expect(Object.keys(byName)).toHaveLength(17);
 
     for (const name of Object.keys(byName)) {
       const description = byName[name].description;
@@ -959,5 +961,35 @@ describe('conflict policy (§17)', () => {
     const result = await call('schedule_run', { id: created.id });
 
     expect(result).toEqual({ queued: true });
+  });
+});
+describe('tags / preview (§19, §20)', () => {
+  it('schedule_create/update/list handle tags', async () => {
+    const { call } = setup();
+    const created = await call('schedule_create', {
+      title: 'A',
+      prompt: 'p',
+      every_seconds: 60,
+      tags: ['ops', 'docs'],
+    });
+    expect(created.tags).toEqual(['ops', 'docs']);
+
+    const listed = await call('schedule_list', { tag: 'docs' });
+    expect(listed.tasks).toHaveLength(1);
+
+    const updated = await call('schedule_update', { id: created.id, tags: [] });
+    expect(updated.tags).toEqual([]);
+  });
+
+  it('schedule_preview returns the gate decision', async () => {
+    // Inject the preview seam so the tool test never imports the real runner/DB.
+    const previewTask = vi.fn(async () => ({ decision: 'run', effectivePrompt: 'p' }));
+    const { call } = setup({ previewTask });
+    const created = await call('schedule_create', { title: 'A', prompt: 'p', every_seconds: 60 });
+
+    const result = await call('schedule_preview', { id: created.id });
+
+    expect(result).toMatchObject({ decision: 'run', effectivePrompt: 'p' });
+    expect(previewTask).toHaveBeenCalled();
   });
 });

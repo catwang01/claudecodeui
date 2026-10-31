@@ -8,6 +8,7 @@
   "tabs": {
     "label": "Panel sections",
     "tasks": "Tasks",
+    "calendar": "Calendar",
     "presets": "Presets"
   },
   "presets": {
@@ -135,6 +136,7 @@
     "edit": "Edit",
     "delete": "Delete",
     "runNow": "Run now",
+    "preview": "Preview script gate",
     "copy": "Duplicate",
     "export": "Export task",
     "import": "Import task",
@@ -185,6 +187,7 @@
     "delete": "Could not delete the task.",
     "run": "Could not start the task.",
     "update": "Could not update the task.",
+    "preview": "Could not preview the task.",
     "copy": "Could not duplicate the task.",
     "runQueued": "The task is already running; this trigger was queued.",
     "export": "Could not export the task.",
@@ -215,6 +218,9 @@
       "enabledHint": "Paused tasks keep their schedule but do not run.",
       "conflictPolicy": "If already running",
       "conflictPolicyHint": "What to do when this task is due while its previous run is still going. Queue keeps one pending trigger; Replace aborts the current run.",
+      "tags": "Tags",
+      "tagsHint": "Comma-separated labels for grouping and filtering.",
+      "tagsPlaceholder": "ops, docs",
       "scriptGate": "Script gate (optional)",
       "command": "Shell command",
       "commandPlaceholder": "./scripts/should-run.sh",
@@ -377,6 +383,25 @@
       "title": "Enter a title.",
       "project": "Choose a project."
     }
+  },
+  "tagFilter": {
+    "placeholder": "Filter by tag"
+  },
+  "previewDialog": {
+    "title": "Preview {{title}}",
+    "running": "Running the script gate…",
+    "decision": "Decision",
+    "reason": "Reason",
+    "decisionValue": {
+      "run": "Run the agent",
+      "skip": "Skip",
+      "error": "Error"
+    }
+  },
+  "calendar": {
+    "next7Days": "Next 7 days",
+    "emptyTitle": "Nothing scheduled",
+    "emptyDescription": "No active task has an upcoming run in the next 7 days."
   },
   "time": {
     "unknown": "Unknown"

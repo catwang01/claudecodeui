@@ -36,6 +36,7 @@ function makeRepo() {
         enabled: input.enabled === false ? 0 : 1,
         run_count: 0,
         conflict_policy: input.conflictPolicy ?? 'skip',
+        tags_json: input.tagsJson ?? null,
         created_at: stamp(),
         updated_at: stamp(),
       };
@@ -75,6 +76,7 @@ function makeRepo() {
         enabled: 'enabled',
         paramsJson: 'params_json',
         conflictPolicy: 'conflict_policy',
+        tagsJson: 'tags_json',
       };
       for (const [key, value] of Object.entries(patch)) {
         const column = columns[key] || key;
@@ -859,6 +861,34 @@ describe('conflict policy (§17)', () => {
 
     expect(result.status).toBe(202);
     expect(result.body).toEqual({ queued: true });
+  });
+});
+describe('tags / preview / upcoming (§19–§21)', () => {
+  it('round-trips tags and filters by tag', async () => {
+    const created = await api('POST', '/', { ...validBody, tags: ['Ops', 'docs'] });
+    expect(created.body.task.tags).toEqual(['Ops', 'docs']);
+
+    const patched = await api('PATCH', '/' + created.body.task.id, { tags: ['docs'] });
+    expect(patched.body.task.tags).toEqual(['docs']);
+
+    const filtered = await api('GET', '/?tag=docs');
+    expect(filtered.body.tasks).toHaveLength(1);
+    const none = await api('GET', '/?tag=missing');
+    expect(none.body.tasks).toHaveLength(0);
+  });
+
+  it('POST /:id/preview returns the gate decision', async () => {
+    const created = await api('POST', '/', validBody);
+    const result = await api('POST', '/' + created.body.task.id + '/preview', {});
+    expect(result.status).toBe(200);
+    expect(result.body.preview).toMatchObject({ decision: 'run' });
+  });
+
+  it('GET /upcoming is not shadowed by GET /:id', async () => {
+    await api('POST', '/', validBody);
+    const result = await api('GET', '/upcoming');
+    expect(result.status).toBe(200);
+    expect(Array.isArray(result.body.upcoming)).toBe(true);
   });
 });
 

@@ -43,6 +43,8 @@ export const SCHEDULE_TOOL_NAMES = [
   'schedule_copy',
   'schedule_export',
   'schedule_import',
+  // §20 dry-run preview
+  'schedule_preview',
   // §10.6 presets
   'schedule_preset_list',
   'schedule_preset_install',
@@ -239,6 +241,12 @@ const conflictPolicyField = z
     "What happens when the task is due while its previous run is still running. 'skip' (default) leaves that occurrence unrun; 'queue' runs it once the current run finishes (newest queued trigger wins); 'replace' aborts the current run's agent and starts this one."
   );
 
+/** §19 tags: short labels used for grouping/filtering; deduped case-insensitively. */
+const tagsField = z
+  .array(z.string())
+  .describe('Optional tags (at most 20, each at most 32 characters). Replaces the whole list; [] clears it.')
+  .optional();
+
 /**
  * @param {object} [options]
  * @param {string|null} [options.projectPath] calling session cwd (default target project)
@@ -266,6 +274,7 @@ export function createScheduleTools(options = {}) {
       commandTimeoutSeconds: args.command_timeout_seconds,
       params: args.params,
       conflictPolicy: args.conflict_policy,
+      tags: args.tags,
       rule: selector.rule,
       userId,
     });
@@ -275,7 +284,7 @@ export function createScheduleTools(options = {}) {
 
   const list = guarded('schedule_list', async (args) => {
     const result = await management.listTasks(
-      { userId: null, status: args.include_paused ? 'all' : 'active' },
+      { userId: null, status: args.include_paused ? 'all' : 'active', tag: args.tag },
       scope
     );
     return { tasks: result.tasks };
@@ -302,6 +311,7 @@ export function createScheduleTools(options = {}) {
     }
     if (args.params !== undefined) patch.params = args.params;
     if (args.conflict_policy !== undefined) patch.conflictPolicy = args.conflict_policy;
+    if (args.tags !== undefined) patch.tags = args.tags;
 
     if (
       patch.title === undefined &&
@@ -310,13 +320,14 @@ export function createScheduleTools(options = {}) {
       patch.commandTimeoutSeconds === undefined &&
       patch.params === undefined &&
       patch.conflictPolicy === undefined &&
+      patch.tags === undefined &&
       !patch.rule
     ) {
       return {
         ok: false,
         code: 'invalid_input',
         message:
-          'Nothing to update: provide title, prompt, params, conflict policy, command, command timeout or one selector',
+          'Nothing to update: provide title, prompt, params, conflict policy, tags, command, command timeout or one selector',
       };
     }
     const result = await management.updateTask(args.id, patch, scope);
@@ -334,6 +345,12 @@ export function createScheduleTools(options = {}) {
     if (!result.ok) return result;
     if (result.queued) return { queued: true };
     return { run: result.run };
+  });
+
+  const preview = guarded('schedule_preview', async (args) => {
+    const result = await management.previewTask(args.id, { params: args.params }, scope);
+    if (!result.ok) return result;
+    return result.preview;
   });
 
   const pause = guarded('schedule_pause', async (args) => {
@@ -470,6 +487,7 @@ export function createScheduleTools(options = {}) {
           .optional(),
         params: paramsField,
         conflict_policy: conflictPolicyField.optional(),
+        tags: tagsField,
         ...selectorFields,
         ...gateFields,
       },
@@ -482,7 +500,10 @@ export function createScheduleTools(options = {}) {
         ' List scheduled tasks for this project (active only unless include_paused is true).' +
         SCHEDULER_STORAGE_NOTE +
         PREDEFINED_VARS_NOTE,
-      { include_paused: z.boolean().describe('Include paused tasks. Defaults to false.').optional() },
+      {
+        include_paused: z.boolean().describe('Include paused tasks. Defaults to false.').optional(),
+        tag: z.string().describe('Only return tasks carrying this tag (case-insensitive).').optional(),
+      },
       list,
       { annotations: { readOnlyHint: true } }
     ),
@@ -506,6 +527,7 @@ export function createScheduleTools(options = {}) {
         prompt: z.string().optional(),
         params: paramsNullableField,
         conflict_policy: conflictPolicyField.optional(),
+        tags: tagsField,
         ...selectorFields,
         ...gateFields,
       },
@@ -585,6 +607,18 @@ export function createScheduleTools(options = {}) {
       },
       importTask,
       { annotations: { readOnlyHint: false } }
+    ),
+    tool(
+      'schedule_preview',
+      SCHEDULER_PRECEDENCE_NOTE +
+        ' Preview a scheduled task\'s script-gate decision without creating a run or calling the agent. Returns decision run|skip|error, the effective prompt, and the gate exit code/output. Use it to test a command gate cheaply before enabling the task.' +
+        PREDEFINED_VARS_NOTE,
+      {
+        id: z.string().describe('Scheduled task id.'),
+        params: paramOverridesField,
+      },
+      preview,
+      { annotations: { readOnlyHint: true } }
     ),
     tool(
       'schedule_preset_list',

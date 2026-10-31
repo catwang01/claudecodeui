@@ -5,8 +5,8 @@ import type { ScheduledTask, ScheduledTaskInput, ScheduledTaskPatch, ScheduledTa
 /** Keep next-run/last-status reasonably fresh while the panel is open. */
 const AUTO_REFRESH_MS = 20000;
 
-export function useScheduledTasks(params: { status: TaskStatusFilter; search: string }) {
-  const { status, search } = params;
+export function useScheduledTasks(params: { status: TaskStatusFilter; search: string; tag?: string }) {
+  const { status, search, tag } = params;
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -17,7 +17,7 @@ export function useScheduledTasks(params: { status: TaskStatusFilter; search: st
     requestIdRef.current = requestId;
     setIsLoading(true);
     try {
-      const next = await scheduledTasksApi.list({ status, search });
+      const next = await scheduledTasksApi.list({ status, search, tag });
       if (requestId !== requestIdRef.current) return;
       setTasks(next);
       setError(null);
@@ -27,7 +27,7 @@ export function useScheduledTasks(params: { status: TaskStatusFilter; search: st
     } finally {
       if (requestId === requestIdRef.current) setIsLoading(false);
     }
-  }, [status, search]);
+  }, [status, search, tag]);
 
   useEffect(() => {
     void refresh();

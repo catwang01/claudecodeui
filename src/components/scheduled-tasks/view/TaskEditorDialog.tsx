@@ -28,6 +28,8 @@ export type TaskEditorValues = {
   params: ParamDef[];
   /** docs §17 conflict policy. */
   conflictPolicy: ConflictPolicy;
+  /** docs §19 tags. */
+  tags: string[];
 };
 
 type TaskEditorDialogProps = {
@@ -60,6 +62,8 @@ export default function TaskEditorDialog({ task, onClose, onSubmit }: TaskEditor
   );
   const [enabled, setEnabled] = useState(task?.enabled ?? true);
   const [conflictPolicy, setConflictPolicy] = useState<ConflictPolicy>(task?.conflictPolicy ?? 'skip');
+  // §19: a comma-separated input keeps the editor simple; the API receives an array.
+  const [tagsText, setTagsText] = useState((task?.tags ?? []).join(', '));
   const [draft, setDraft] = useState<RuleDraft>(() => initialDraft(task));
   const [paramDrafts, setParamDrafts] = useState<ParamDraft[]>(() => paramsToDrafts(task?.params));
   const [projectOptions, setProjectOptions] = useState<ProjectOption[]>([]);
@@ -149,6 +153,10 @@ export default function TaskEditorDialog({ task, onClose, onSubmit }: TaskEditor
         rule: validation.rule,
         params: paramValidation.params,
         conflictPolicy,
+        tags: tagsText
+          .split(',')
+          .map((tag) => tag.trim())
+          .filter(Boolean),
       });
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : String(err));
@@ -292,6 +300,22 @@ export default function TaskEditorDialog({ task, onClose, onSubmit }: TaskEditor
                 </option>
               ))}
             </select>
+          </FormField>
+
+          <FormField
+            label={t('editor.fields.tags')}
+            htmlFor="scheduled-task-tags"
+            hint={t('editor.fields.tagsHint')}
+          >
+            <input
+              id="scheduled-task-tags"
+              type="text"
+              className={controlClassName}
+              value={tagsText}
+              placeholder={t('editor.fields.tagsPlaceholder')}
+              onChange={(event) => setTagsText(event.target.value)}
+              disabled={isSaving}
+            />
           </FormField>
 
           <div className="flex items-center justify-between gap-4">

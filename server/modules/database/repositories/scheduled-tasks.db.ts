@@ -30,6 +30,8 @@ export type ScheduledTaskRow = {
   // Conflict policy (docs section 17); NULL on rows created before the feature,
   // which read as 'skip'.
   conflict_policy: string | null;
+  // Tags (docs section 19) as JSON string[]; NULL/'' means "no tags".
+  tags_json: string | null;
 };
 
 export type ScheduledTaskRunRow = {
@@ -169,6 +171,9 @@ export type CreateScheduledTaskInput = {
   presetTaskId?: string | null;
   // docs section 17: 'skip' | 'queue' | 'replace'; defaults to 'skip'.
   conflictPolicy?: string | null;
+  // docs section 19: JSON string[]; NULL/'' means "no tags".
+  tagsJson?: string | null;
+  tags_json?: string | null;
 };
 
 export type ScheduledTaskUpdatePatch = Partial<{
@@ -189,6 +194,8 @@ export type ScheduledTaskUpdatePatch = Partial<{
   presetId: string | null;
   presetTaskId: string | null;
   conflictPolicy: string | null;
+  tagsJson: string | null;
+  tags_json: string | null;
 }>;
 
 export type ScheduledTaskAdvancePatch = Partial<{
@@ -309,8 +316,8 @@ function serializeRule(task: PresetTaskInput): string {
 const INSERT_TASK_SQL =
   'INSERT INTO scheduled_tasks (id, user_id, title, prompt, project_path, provider, model, kind, rule_json, ' +
   'next_run_at, last_run_at, last_status, last_error, enabled, run_count, created_at, updated_at, ' +
-  'command, command_timeout_seconds, params_json, preset_id, preset_task_id, conflict_policy) ' +
-  'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)';
+  'command, command_timeout_seconds, params_json, preset_id, preset_task_id, conflict_policy, tags_json) ' +
+  'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
 
 const INSERT_PRESET_SQL =
   'INSERT INTO scheduled_task_presets (id, user_id, source, name, description, icon, version, enabled, ' +
@@ -364,7 +371,8 @@ export const scheduledTasksDb = {
         pick(input.paramsJson, input.params_json) ?? null,
         input.presetId ?? null,
         input.presetTaskId ?? null,
-        input.conflictPolicy ?? 'skip'
+        input.conflictPolicy ?? 'skip',
+        pick(input.tagsJson, input.tags_json) ?? null
       );
     return selectTask(id) as ScheduledTaskRow;
   },
@@ -418,6 +426,7 @@ export const scheduledTasksDb = {
     pushAssignment(assignments, values, 'preset_id', patch.presetId);
     pushAssignment(assignments, values, 'preset_task_id', patch.presetTaskId);
     pushAssignment(assignments, values, 'conflict_policy', patch.conflictPolicy);
+    pushAssignment(assignments, values, 'tags_json', pick(patch.tagsJson, patch.tags_json));
     if (patch.enabled !== undefined) pushAssignment(assignments, values, 'enabled', toEnabled(patch.enabled));
 
     assignments.push('updated_at = ?');

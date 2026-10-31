@@ -16,7 +16,9 @@ import type {
   ScheduledTaskPatch,
   ScheduledTaskRun,
   TaskExport,
+  TaskPreview,
   TaskStatusFilter,
+  UpcomingOccurrence,
 } from './types';
 
 const BASE_URL = '/api/scheduled-tasks';
@@ -95,8 +97,12 @@ async function setPresetEnabled(
 }
 
 export const scheduledTasksApi = {
-  async list(params: { status: TaskStatusFilter; search: string }): Promise<ScheduledTask[]> {
-    const query = buildQuery({ status: toApiStatus(params.status), search: params.search.trim() });
+  async list(params: { status: TaskStatusFilter; search: string; tag?: string }): Promise<ScheduledTask[]> {
+    const query = buildQuery({
+      status: toApiStatus(params.status),
+      search: params.search.trim(),
+      tag: params.tag?.trim(),
+    });
     const response = await authenticatedFetch(`${BASE_URL}${query}`);
     const data = await parseResponse<{ tasks?: ScheduledTask[] }>(response);
     return data?.tasks ?? [];
@@ -181,6 +187,28 @@ export const scheduledTasksApi = {
     const data = await parseResponse<{ run?: ScheduledTaskRun; queued?: boolean }>(response);
     // §17 queue policy: the trigger was accepted but no run exists yet.
     return data?.queued ? null : (data?.run ?? null);
+  },
+
+  /** POST /:id/preview (section 20): run the script gate only, no agent. */
+  async preview(
+    id: string,
+    options: { params?: Record<string, unknown> } = {},
+  ): Promise<TaskPreview> {
+    const body = options.params === undefined ? undefined : JSON.stringify({ params: options.params });
+    const response = await authenticatedFetch(`${BASE_URL}/${encodeURIComponent(id)}/preview`, {
+      method: 'POST',
+      ...(body === undefined ? {} : { body }),
+    });
+    const data = await parseResponse<{ preview: TaskPreview }>(response);
+    return data.preview;
+  },
+
+  /** GET /upcoming (section 21): next occurrences of active tasks. */
+  async upcoming(options: { days?: number; limit?: number } = {}): Promise<UpcomingOccurrence[]> {
+    const query = buildQuery({ days: options.days, limit: options.limit });
+    const response = await authenticatedFetch(`${BASE_URL}/upcoming${query}`);
+    const data = await parseResponse<{ upcoming?: UpcomingOccurrence[] }>(response);
+    return data?.upcoming ?? [];
   },
 
   async listRuns(

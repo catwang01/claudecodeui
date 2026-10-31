@@ -9,11 +9,13 @@ import { cn } from '../../../lib/utils';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useScheduledTasks } from '../hooks/useScheduledTasks';
 import { scheduledTasksApi } from '../api';
-import type { ImportTaskInput, ScheduledTask, ScheduledTaskInput, TaskStatusFilter } from '../types';
+import type { ImportTaskInput, ScheduledTask, ScheduledTaskInput, TaskPreview, TaskStatusFilter } from '../types';
 import { taskParams } from '../utils/params';
 import ConfirmDialog from './ConfirmDialog';
 import CopyTaskDialog from './CopyTaskDialog';
 import type { CopyTaskValues } from './CopyTaskDialog';
+import PreviewDialog from './PreviewDialog';
+import UpcomingSection from './UpcomingSection';
 import { controlClassName } from './FormControls';
 import PresetsSection from './PresetsSection';
 import RunningCountBadge from './RunningCountBadge';
@@ -31,7 +33,7 @@ type ScheduledTasksPanelProps = {
   runningCount?: number;
 };
 
-type PanelTab = 'tasks' | 'presets';
+type PanelTab = 'tasks' | 'calendar' | 'presets';
 
 /** A filesystem-safe name for a downloaded task envelope. */
 function exportFileName(title: string): string {
@@ -44,7 +46,7 @@ function exportFileName(title: string): string {
 }
 
 const STATUS_FILTERS: TaskStatusFilter[] = ['all', 'enabled', 'paused'];
-const PANEL_TABS: PanelTab[] = ['tasks', 'presets'];
+const PANEL_TABS: PanelTab[] = ['tasks', 'calendar', 'presets'];
 
 export default function ScheduledTasksPanel({ onClose, runningCount = 0 }: ScheduledTasksPanelProps) {
   const { t } = useTranslation('scheduledTasks');
@@ -53,10 +55,19 @@ export default function ScheduledTasksPanel({ onClose, runningCount = 0 }: Sched
   const [searchInput, setSearchInput] = useState('');
   const search = useDebouncedValue(searchInput, 250);
   const [statusFilter, setStatusFilter] = useState<TaskStatusFilter>('all');
+  const [tagInput, setTagInput] = useState('');
+  const tag = useDebouncedValue(tagInput, 250);
   const { tasks, isLoading, error, refresh, createTask, updateTask, deleteTask, runNow } = useScheduledTasks({
     status: statusFilter,
     search,
+    tag,
   });
+
+  // §20 preview dialog state
+  const [previewTarget, setPreviewTarget] = useState<ScheduledTask | null>(null);
+  const [previewResult, setPreviewResult] = useState<TaskPreview | null>(null);
+  const [isPreviewing, setIsPreviewing] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [editorTask, setEditorTask] = useState<ScheduledTask | null>(null);
@@ -85,14 +96,15 @@ export default function ScheduledTasksPanel({ onClose, runningCount = 0 }: Sched
         !pendingDelete &&
         !isPresetOverlayOpen &&
         !runDialogTask &&
-        !copyTarget
+        !copyTarget &&
+        !previewTarget
       ) {
         onClose();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, isEditorOpen, pendingDelete, isPresetOverlayOpen, runDialogTask, copyTarget]);
+  }, [onClose, isEditorOpen, pendingDelete, isPresetOverlayOpen, runDialogTask, copyTarget, previewTarget]);
 
   const openCreate = () => {
     setEditorTask(null);
@@ -147,6 +159,21 @@ export default function ScheduledTasksPanel({ onClose, runningCount = 0 }: Sched
       setRunDialogTask(null);
     } finally {
       setBusyTaskId(null);
+    }
+  };
+
+  const handlePreview = async (task: ScheduledTask) => {
+    setPreviewTarget(task);
+    setPreviewResult(null);
+    setPreviewError(null);
+    setIsPreviewing(true);
+    try {
+      const result = await scheduledTasksApi.preview(task.id);
+      setPreviewResult(result);
+    } catch (err) {
+      setPreviewError(err instanceof Error ? err.message : t('errors.preview'));
+    } finally {
+      setIsPreviewing(false);
     }
   };
 
@@ -343,6 +370,14 @@ export default function ScheduledTasksPanel({ onClose, runningCount = 0 }: Sched
             </div>
 
             <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={tagInput}
+                aria-label={t('tagFilter.placeholder')}
+                placeholder={t('tagFilter.placeholder')}
+                className={cn(controlClassName, 'w-32')}
+                onChange={(event) => setTagInput(event.target.value)}
+              />
               <div className="flex items-center rounded-md border border-border p-0.5" role="group" aria-label={t('filters.label')}>
                 {STATUS_FILTERS.map((filter) => (
                   <button
@@ -406,6 +441,8 @@ export default function ScheduledTasksPanel({ onClose, runningCount = 0 }: Sched
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
           {activeTab === 'presets' ? (
             <PresetsSection onTasksChanged={refresh} onOverlayChange={setIsPresetOverlayOpen} />
+          ) : activeTab === 'calendar' ? (
+            <UpcomingSection />
           ) : (
             <>
               {error && tasks.length === 0 && (
@@ -468,6 +505,9 @@ export default function ScheduledTasksPanel({ onClose, runningCount = 0 }: Sched
                       onExport={(task) => {
                         void handleExport(task);
                       }}
+                      onPreview={(task) => {
+                        void handlePreview(task);
+                      }}
                       onDelete={setPendingDelete}
                       onToggleHistory={handleToggleHistory}
                       onOpenSession={(sessionId) => {
@@ -514,6 +554,20 @@ export default function ScheduledTasksPanel({ onClose, runningCount = 0 }: Sched
           }}
           onConfirm={(values) => {
             void handleCopyConfirm(values);
+          }}
+        />
+      )}
+
+      {previewTarget && (
+        <PreviewDialog
+          task={previewTarget}
+          preview={previewResult}
+          isLoading={isPreviewing}
+          error={previewError}
+          onClose={() => {
+            setPreviewTarget(null);
+            setPreviewResult(null);
+            setPreviewError(null);
           }}
         />
       )}

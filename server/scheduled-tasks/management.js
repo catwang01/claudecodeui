@@ -94,6 +94,48 @@ function conflictPolicyOf(row) {
   return CONFLICT_POLICIES.has(value) ? value : DEFAULT_CONFLICT_POLICY;
 }
 
+const MAX_TAGS = 20;
+const MAX_TAG_LENGTH = 32;
+
+/** §19: short non-empty tags, deduped case-insensitively; null clears them. */
+function normalizeTags(value) {
+  if (value === null || value === undefined) return { ok: true, value: null };
+  if (!Array.isArray(value)) return fail('invalid_input', 'tags must be an array of strings');
+  const seen = new Set();
+  const tags = [];
+  for (const raw of value) {
+    if (typeof raw !== 'string' || !raw.trim()) {
+      return fail('invalid_input', 'tags must be non-empty strings');
+    }
+    const tag = raw.trim();
+    if (tag.length > MAX_TAG_LENGTH) {
+      return fail('invalid_input', `Tags must be at most ${MAX_TAG_LENGTH} characters`);
+    }
+    const key = tag.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    tags.push(tag);
+  }
+  if (tags.length > MAX_TAGS) return fail('invalid_input', `At most ${MAX_TAGS} tags per task`);
+  return { ok: true, value: tags.length ? JSON.stringify(tags) : null };
+}
+
+function parseTags(raw) {
+  if (raw === null || raw === undefined || raw === '') return [];
+  if (Array.isArray(raw)) return raw.filter((tag) => typeof tag === 'string' && tag.trim());
+  if (typeof raw !== 'string') return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((tag) => typeof tag === 'string' && tag.trim()) : [];
+  } catch {
+    return [];
+  }
+}
+
+function tagsOf(row) {
+  return parseTags(row?.tags_json ?? row?.tagsJson);
+}
+
 function toIso(ms) {
   return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
 }
@@ -161,6 +203,8 @@ export function taskRowToJson(row) {
     enabled: row.enabled === undefined ? false : !!row.enabled,
     // §17: legacy rows read as 'skip', the pre-existing behaviour.
     conflictPolicy: conflictPolicyOf(row),
+    // §19: legacy rows read as [].
+    tags: tagsOf(row),
     runCount: row.run_count ?? 0,
     createdAt: row.created_at ?? null,
     updatedAt: row.updated_at ?? null,
@@ -298,6 +342,14 @@ async function loadDefaultRunNow() {
     cachedRunNow = service.runScheduledTaskNow;
   }
   return cachedRunNow;
+}
+
+// §20: runner.js owns the script-gate execution; loaded lazily so task management
+// does not depend on it unless a preview is requested.
+let cachedRunnerModule = null;
+async function loadRunnerModule() {
+  if (!cachedRunnerModule) cachedRunnerModule = await import('./runner.js');
+  return cachedRunnerModule;
 }
 
 // §10.3 preset service. Loaded lazily so a missing/incomplete presets module
@@ -480,9 +532,14 @@ export function createManagement(deps = {}) {
         ? options.status
         : undefined;
     const search = nonEmptyString(options.search) || undefined;
+    const tag = nonEmptyString(options.tag);
     let rows = repo.listTasks({ userId: options.userId ?? null, status, search }) || [];
     if (scope && scope.projectPath) {
       rows = rows.filter((row) => inScope(row, scope));
+    }
+    if (tag) {
+      const needle = tag.toLowerCase();
+      rows = rows.filter((row) => tagsOf(row).some((value) => value.toLowerCase() === needle));
     }
     return { ok: true, tasks: rows.map(taskRowToJson) };
   }
@@ -553,6 +610,9 @@ export function createManagement(deps = {}) {
     const conflict = checkConflictPolicy(input.conflictPolicy);
     if (!conflict.ok) return conflict;
 
+    const tags = input.tags === undefined ? undefined : normalizeTags(input.tags);
+    if (tags && !tags.ok) return tags;
+
     const nowMs = now();
     const checked = validateAndNormalize(withIntervalAnchor(input.rule, nowMs), rules);
     if (!checked.ok) return checked;
@@ -580,6 +640,7 @@ export function createManagement(deps = {}) {
       commandTimeoutSeconds: commandTimeoutSeconds ? commandTimeoutSeconds.value : undefined,
       paramsJson: params ? params.value : undefined,
       conflictPolicy: conflict.value ?? DEFAULT_CONFLICT_POLICY,
+      tagsJson: tags ? tags.value : undefined,
       presetId: nonEmptyString(input.presetId) ?? undefined,
       presetTaskId: nonEmptyString(input.presetTaskId) ?? undefined,
     });
@@ -634,6 +695,11 @@ export function createManagement(deps = {}) {
       const checked = checkConflictPolicy(patch.conflictPolicy);
       if (!checked.ok) return checked;
       changes.conflictPolicy = checked.value;
+    }
+    if (patch.tags !== undefined) {
+      const checked = normalizeTags(patch.tags);
+      if (!checked.ok) return checked;
+      changes.tagsJson = checked.value;
     }
     if (patch.presetId !== undefined) {
       changes.presetId = nonEmptyString(patch.presetId);
@@ -804,6 +870,7 @@ export function createManagement(deps = {}) {
       commandTimeoutSeconds: row.command_timeout_seconds ?? null,
       paramsJson: row.params_json ?? row.paramsJson ?? null,
       conflictPolicy: conflictPolicyOf(row),
+      tagsJson: row.tags_json ?? row.tagsJson ?? null,
     });
     await ensureTaskWorkspaceBestEffort(created);
     return { ok: true, task: taskRowToJson(created) };
@@ -831,6 +898,7 @@ export function createManagement(deps = {}) {
         command: task.command,
         commandTimeoutSeconds: task.commandTimeoutSeconds,
         params: task.params ?? [],
+        tags: task.tags ?? [],
         rule: task.rule,
       },
     };
@@ -874,11 +942,85 @@ export function createManagement(deps = {}) {
         command: candidate.command,
         commandTimeoutSeconds: candidate.commandTimeoutSeconds,
         params: candidate.params,
+        tags: candidate.tags,
         rule: candidate.rule,
         enabled,
       },
       scope
     );
+  }
+
+  /**
+   * §20: preview a task's script-gate decision without creating a run row or
+   * calling the agent. The caller maps { preview } to the API.
+   */
+  async function previewTask(id, options = {}, scope = {}) {
+    const row = await findTask(id, scope);
+    if (!row) return notFound();
+    let runPreview = deps.previewTask ?? null;
+    if (!runPreview) {
+      try {
+        const mod = await loadRunnerModule();
+        runPreview = mod.previewTask;
+      } catch (err) {
+        return fail('internal_error', errorMessage(err), 500);
+      }
+    }
+    if (typeof runPreview !== 'function') {
+      return fail('internal_error', 'preview is unavailable', 500);
+    }
+    try {
+      const preview = await runPreview(row, { params: options.params });
+      return { ok: true, preview };
+    } catch (err) {
+      return fail('internal_error', errorMessage(err), 500);
+    }
+  }
+
+  /**
+   * §21: the next occurrences of every active task inside a time horizon, sorted
+   * by time. Compute is bounded per task so a runaway rule cannot spin.
+   */
+  async function listUpcoming(options = {}, scope = {}) {
+    const repo = await getRepo();
+    const rules = await getRules();
+    const nowMs = now();
+    const horizonMs = nowMs + clampInt(options.days, 7, 1, 31) * 24 * 60 * 60 * 1000;
+    const limit = clampInt(options.limit, 200, 1, 1000);
+    let rows = repo.listTasks({ userId: options.userId ?? null, status: 'active' }) || [];
+    if (scope && scope.projectPath) rows = rows.filter((row) => inScope(row, scope));
+    const upcoming = [];
+    for (const row of rows) {
+      const rule = parseJson(row.rule_json ?? row.ruleJson);
+      if (!rule) continue;
+      const kind = rule.kind ?? row.kind;
+      let cursor = nowMs;
+      for (let i = 0; i < 50 && upcoming.length < limit; i += 1) {
+        let ms;
+        try {
+          ms = rules.computeNextRun(rule, cursor);
+        } catch {
+          break;
+        }
+        if (!Number.isFinite(ms) || ms > horizonMs) break;
+        if (ms < nowMs) {
+          if (kind === 'once') break;
+          cursor = nowMs;
+          continue;
+        }
+        upcoming.push({
+          taskId: row.id,
+          title: row.title,
+          projectPath: row.project_path ?? row.projectPath ?? null,
+          tags: tagsOf(row),
+          at: new Date(ms).toISOString(),
+        });
+        if (kind === 'once') break;
+        cursor = ms + 1;
+      }
+    }
+    upcoming.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+    return { ok: true, upcoming: upcoming.slice(0, limit) };
   }
 
   return {
@@ -904,6 +1046,8 @@ export function createManagement(deps = {}) {
     copyTask,
     exportTask,
     importTask,
+    previewTask,
+    listUpcoming,
     // §10.3 presets — same service for the REST routes and the agent tools.
     presets: {
       listPresets: (options) => getPresetsService().then((service) => service.listPresets(options)),

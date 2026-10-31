@@ -146,6 +146,8 @@ export interface ScheduledTask {
   enabled: boolean;
   /** docs §17: conflict policy while a run is still in flight; legacy rows read 'skip'. */
   conflictPolicy: ConflictPolicy;
+  /** docs §19: grouping tags; legacy rows read []. */
+  tags?: string[];
   runCount: number;
   createdAt: string;
   updatedAt: string;
@@ -167,6 +169,8 @@ export interface ScheduledTaskInput {
   params?: ParamDef[];
   /** docs §17; defaults to 'skip'. */
   conflictPolicy?: ConflictPolicy;
+  /** docs §19; an empty list clears the tags. */
+  tags?: string[];
 }
 
 export interface ScheduledTaskPatch {
@@ -183,6 +187,8 @@ export interface ScheduledTaskPatch {
   params?: ParamDef[];
   /** docs §17 conflict policy. */
   conflictPolicy?: ConflictPolicy;
+  /** docs §19 tags. */
+  tags?: string[];
 }
 
 export interface ProjectOption {
@@ -320,5 +326,29 @@ export interface PresetUpgradeResult {
   preset: Preset;
   tasks: ScheduledTask[];
   projects: PresetUpgradeProject[];
+}
+
+/** POST /:id/preview response (section 20): the script-gate decision only. */
+export interface TaskPreview {
+  decision: 'run' | 'skip' | 'error';
+  /** The prompt the agent would receive (decision 'run' with a gate). */
+  effectivePrompt?: string | null;
+  /** Skip reason when decision is 'skip'. */
+  reason?: string | null;
+  /** Error code when decision is 'error'. */
+  error?: string | null;
+  /** Whether a script gate actually ran. */
+  gate?: boolean;
+  scriptExitCode?: number | null;
+  scriptOutput?: string | null;
+}
+
+/** One upcoming occurrence from GET /upcoming (section 21). */
+export interface UpcomingOccurrence {
+  taskId: string;
+  title: string;
+  projectPath: string | null;
+  tags?: string[];
+  at: string;
 }
 
