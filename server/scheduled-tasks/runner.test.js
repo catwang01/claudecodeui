@@ -8,6 +8,7 @@ vi.mock('../modules/database/index.js', () => ({
     createRun: vi.fn(),
     finishRun: vi.fn(),
     attachRunSession: vi.fn(),
+    markRunAgentStarted: vi.fn(),
   },
 }));
 
@@ -77,6 +78,7 @@ beforeEach(() => {
     params_json: input.paramsJson ?? null,
   }));
   scheduledTasksDb.attachRunSession.mockReset().mockReturnValue({});
+  scheduledTasksDb.markRunAgentStarted.mockReset().mockReturnValue({});
   scheduledTasksDb.finishRun.mockReset().mockImplementation((id, patch) => ({
     id,
     task_id: 't1',
@@ -841,6 +843,97 @@ describe('built-in parameters (§13)', () => {
     expect(result.status).toBe('error');
     expect(result.error).toBe('invalid_input');
     expect(queryClaudeSDK).not.toHaveBeenCalled();
+  });
+});
+
+describe('agent-started tracking (§14.2)', () => {
+  // The gate spawns with cwd = projectPath, so use a directory that really exists.
+  const PROJECT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'scheduled-agent-'));
+  const emit = (text) => "printf '%s' '" + text + "'";
+
+  afterAll(() => {
+    fs.rmSync(PROJECT_DIR, { recursive: true, force: true });
+  });
+
+  it('does not mark the run while the script gate is still executing', async () => {
+    const task = makeTask({
+      project_path: PROJECT_DIR,
+      command: 'sleep 0.5; ' + emit('{"skip":true}'),
+    });
+
+    const { done } = startTaskRun(task);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    expect(scheduledTasksDb.markRunAgentStarted).not.toHaveBeenCalled();
+
+    const result = await done;
+    expect(result.status).toBe('skipped');
+    expect(scheduledTasksDb.markRunAgentStarted).not.toHaveBeenCalled();
+  });
+
+  it('never marks a run whose gate skips it', async () => {
+    const result = await startTaskRun(
+      makeTask({ project_path: PROJECT_DIR, command: emit('{"skip":true,"reason":"nothing to do"}') })
+    ).done;
+
+    expect(result.status).toBe('skipped');
+    expect(scheduledTasksDb.markRunAgentStarted).not.toHaveBeenCalled();
+  });
+
+  it('never marks a run whose gate fails', async () => {
+    const result = await startTaskRun(makeTask({ project_path: PROJECT_DIR, command: 'exit 3' })).done;
+
+    expect(result.status).toBe('error');
+    expect(result.error).toBe('script_exit_3');
+    expect(scheduledTasksDb.markRunAgentStarted).not.toHaveBeenCalled();
+  });
+
+  it('never marks a run rejected before the agent (params / provider)', async () => {
+    const missing = await startTaskRun(
+      makeTask({ params_json: JSON.stringify([{ name: 'region', type: 'string', required: true }]) })
+    ).done;
+    expect(missing.status).toBe('error');
+    expect(missing.error).toBe('missing_required_param');
+
+    const provider = await startTaskRun(makeTask({ provider: 'codex' })).done;
+    expect(provider.status).toBe('error');
+    expect(String(provider.error)).toContain('Unsupported provider');
+
+    expect(scheduledTasksDb.markRunAgentStarted).not.toHaveBeenCalled();
+  });
+
+  it('marks the run exactly once when the agent call starts', async () => {
+    queryClaudeSDK.mockResolvedValue(undefined);
+
+    const result = await startTaskRun(makeTask({ project_path: PROJECT_DIR })).done;
+
+    expect(result.status).toBe('success');
+    expect(scheduledTasksDb.markRunAgentStarted).toHaveBeenCalledTimes(1);
+    expect(scheduledTasksDb.markRunAgentStarted).toHaveBeenCalledWith('run-1');
+  });
+
+  it('marks a dry-run run too (the dry-run stands in for the agent call)', async () => {
+    process.env.SCHEDULED_TASK_DRY_RUN = '1';
+
+    const result = await startTaskRun(makeTask({ project_path: PROJECT_DIR })).done;
+
+    expect(result.status).toBe('success');
+    expect(queryClaudeSDK).not.toHaveBeenCalled();
+    expect(scheduledTasksDb.markRunAgentStarted).toHaveBeenCalledTimes(1);
+  });
+
+  it('never fails the run when the mark itself throws', async () => {
+    queryClaudeSDK.mockResolvedValue(undefined);
+    scheduledTasksDb.markRunAgentStarted.mockImplementation(() => {
+      throw new Error('database is locked');
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const result = await startTaskRun(makeTask({ project_path: PROJECT_DIR })).done;
+
+    expect(result.status).toBe('success');
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 });
 

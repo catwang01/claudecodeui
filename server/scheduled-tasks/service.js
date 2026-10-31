@@ -3,7 +3,8 @@
  *
  * Owns the tick loop that turns due tasks into runs. Contract: docs/scheduled-tasks.md §4.
  *
- *   createScheduler(deps?) -> { tick(), start(), stop(), runNow(taskId), state(), whenIdle() }
+ *   createScheduler(deps?) -> { tick(), start(), stop(), runNow(taskId), state(), whenIdle(),
+ *                               reconcileInterrupted(error?) }
  *   startScheduledTaskService() / stopScheduledTaskService()
  *   runScheduledTaskNow(taskId) / getSchedulerState()
  *
@@ -16,6 +17,12 @@
  * again with lastRunAt/lastStatus/lastError/runCount.
  *
  * Env: SCHEDULED_TASKS_ENABLED (default on), SCHEDULED_TASKS_TICK_MS (default 30000).
+ *
+ * Interrupted runs (§14.1): an agent is a child of this process, so nothing can
+ * still be running after a restart. startScheduledTaskService() (async since
+ * §14.1) sweeps leftover 'running' rows to error *before* the first tick, so a
+ * crash can neither inflate the running-task count nor leave a run in progress
+ * forever. createScheduler() itself never mutates rows.
  */
 
 const DEFAULT_TICK_MS = 30000;
@@ -298,7 +305,23 @@ export function createScheduler(deps = {}) {
     };
   }
 
-  return { tick, start, stop, runNow, state, whenIdle };
+  /**
+   * docs §14.1: fail every run left 'running' by a previous process. Only
+   * startScheduledTaskService() calls this — createScheduler() itself must stay
+   * pure so unit tests keep an untouched repository.
+   */
+  async function reconcileInterrupted(error = 'server_restart') {
+    const repo = await getRepo();
+    if (typeof repo.failInterruptedRuns !== 'function') return 0;
+    try {
+      return repo.failInterruptedRuns(new Date(now()).toISOString(), error) || 0;
+    } catch (err) {
+      logger.warn?.(`[scheduled-tasks] failInterruptedRuns failed: ${errorMessage(err)}`);
+      return 0;
+    }
+  }
+
+  return { tick, start, stop, runNow, state, whenIdle, reconcileInterrupted };
 }
 
 // ─── Module-level default scheduler ────────────────────────────────────────────
@@ -310,9 +333,23 @@ function getDefaultScheduler() {
   return defaultScheduler;
 }
 
-export function startScheduledTaskService() {
+/**
+ * Async since §14.1: the interrupted-run sweep must finish *before* the first
+ * tick, otherwise it could fail a run that tick just created. It never rejects.
+ */
+export async function startScheduledTaskService() {
   const scheduler = getDefaultScheduler();
   if (scheduler.state().running) return;
+  // Sweep before the enabled check: GET /running is readable either way, and a
+  // row left 'running' by a crash must not be reported as running forever.
+  try {
+    const failed = await scheduler.reconcileInterrupted('server_restart');
+    if (failed > 0) {
+      console.log(`[scheduled-tasks] marked ${failed} interrupted run(s) as error`);
+    }
+  } catch (err) {
+    console.warn(`[scheduled-tasks] interrupted-run sweep failed: ${errorMessage(err)}`);
+  }
   if (!isEnabled()) {
     console.log('[scheduled-tasks] Scheduler disabled (SCHEDULED_TASKS_ENABLED)');
     return;

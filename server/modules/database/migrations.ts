@@ -171,6 +171,10 @@ export function runMigrations(): void {
   addColumnIfMissing(db, 'scheduled_task_runs', 'params_json', 'TEXT');
   addColumnIfMissing(db, 'scheduled_task_preset_tasks', 'params_json', 'TEXT');
 
+  // Running count (docs section 14.1). Additive: existing runs keep agent_started_at
+  // NULL and therefore never count as "running" after the upgrade.
+  addColumnIfMissing(db, 'scheduled_task_runs', 'agent_started_at', 'TEXT');
+
   // Data migrations
   migrateLegacySessionNames(db);
 

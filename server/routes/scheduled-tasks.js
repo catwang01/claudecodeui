@@ -245,6 +245,18 @@ export function createScheduledTasksRouter(overrides = {}) {
     })
   );
 
+  // GET /running — how many tasks have an agent-started run in flight (docs §14.3).
+  // Registered before /:id, otherwise the literal "running" is read as a task id
+  // (same reason as the /presets routes above).
+  router.get(
+    '/running',
+    handler(async (req, res) => {
+      const result = await (await getManagement()).countRunningTasks();
+      if (!result.ok) return sendError(res, result);
+      res.json({ count: result.count });
+    })
+  );
+
   // GET /:id
   router.get(
     '/:id',

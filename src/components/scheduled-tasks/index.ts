@@ -2,6 +2,7 @@ export { default as ScheduledTasksLauncher } from './view/ScheduledTasksLauncher
 export { default as ScheduledTasksPanel } from './view/ScheduledTasksPanel';
 export { default as PresetsSection } from './view/PresetsSection';
 export { scheduledTasksApi, ScheduledTasksApiError } from './api';
+export { useRunningScheduledTasks } from './hooks/useRunningScheduledTasks';
 export type {
   CustomPresetInput,
   DeletePresetResult,

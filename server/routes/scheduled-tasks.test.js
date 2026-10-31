@@ -750,3 +750,26 @@ describe('params (§12)', () => {
   });
 });
 
+describe('GET /running (§14.3)', () => {
+  it('returns the number of tasks whose agent has started', async () => {
+    repo.countRunningAgentRuns = vi.fn(() => 4);
+
+    const result = await api('GET', '/running');
+
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual({ count: 4 });
+    expect(repo.countRunningAgentRuns).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads as 0 and never shadows GET /:id', async () => {
+    const before = await api('GET', '/running');
+    expect(before.status).toBe(200);
+    expect(before.body).toEqual({ count: 0 });
+
+    const created = await api('POST', '/', validBody);
+    const fetched = await api('GET', '/' + created.body.task.id);
+    expect(fetched.status).toBe(200);
+    expect(fetched.body.task.id).toBe(created.body.task.id);
+  });
+});
+

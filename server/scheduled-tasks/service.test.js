@@ -295,3 +295,38 @@ describe('getSchedulerState', () => {
     expect(typeof state.tickMs).toBe('number');
   });
 });
+
+describe('interrupted-run sweep (§14.1)', () => {
+  it('fails leftover running rows with the given reason and reports the count', async () => {
+    const repo = makeRepo([makeTask()]);
+    repo.failInterruptedRuns = vi.fn(() => 2);
+    const scheduler = createScheduler({
+      repo,
+      runner: makeRunner(null),
+      now,
+      tickMs: 1000,
+      computeNextRun: vi.fn(() => NOW + 60000),
+    });
+
+    await expect(scheduler.reconcileInterrupted()).resolves.toBe(2);
+    expect(repo.failInterruptedRuns).toHaveBeenCalledWith(new Date(NOW).toISOString(), 'server_restart');
+  });
+
+  it('reads as 0 when the repository has no sweep (older fakes)', async () => {
+    const scheduler = createScheduler({ repo: makeRepo([]), runner: makeRunner(null), now, tickMs: 1000 });
+
+    await expect(scheduler.reconcileInterrupted()).resolves.toBe(0);
+  });
+
+  it('never throws when the sweep itself fails', async () => {
+    const repo = makeRepo([]);
+    repo.failInterruptedRuns = vi.fn(() => {
+      throw new Error('database is locked');
+    });
+    const logger = { warn: vi.fn(), error: vi.fn() };
+    const scheduler = createScheduler({ repo, runner: makeRunner(null), now, tickMs: 1000, logger });
+
+    await expect(scheduler.reconcileInterrupted()).resolves.toBe(0);
+    expect(logger.warn).toHaveBeenCalled();
+  });
+});

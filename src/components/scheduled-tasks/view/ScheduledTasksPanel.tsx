@@ -12,6 +12,7 @@ import { taskParams } from '../utils/params';
 import ConfirmDialog from './ConfirmDialog';
 import { controlClassName } from './FormControls';
 import PresetsSection from './PresetsSection';
+import RunningCountBadge from './RunningCountBadge';
 import RunWithParamsDialog from './RunWithParamsDialog';
 import ScheduledTaskCard from './ScheduledTaskCard';
 import TaskEditorDialog from './TaskEditorDialog';
@@ -19,6 +20,11 @@ import type { TaskEditorValues } from './TaskEditorDialog';
 
 type ScheduledTasksPanelProps = {
   onClose: () => void;
+  /**
+   * Tasks whose agent has actually started (section 14). Optional so existing
+   * callers/tests render the panel unchanged; 0 hides the badge.
+   */
+  runningCount?: number;
 };
 
 type PanelTab = 'tasks' | 'presets';
@@ -26,7 +32,7 @@ type PanelTab = 'tasks' | 'presets';
 const STATUS_FILTERS: TaskStatusFilter[] = ['all', 'enabled', 'paused'];
 const PANEL_TABS: PanelTab[] = ['tasks', 'presets'];
 
-export default function ScheduledTasksPanel({ onClose }: ScheduledTasksPanelProps) {
+export default function ScheduledTasksPanel({ onClose, runningCount = 0 }: ScheduledTasksPanelProps) {
   const { t } = useTranslation('scheduledTasks');
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<PanelTab>('tasks');
@@ -199,6 +205,7 @@ export default function ScheduledTasksPanel({ onClose }: ScheduledTasksPanelProp
           <div className="flex items-center gap-2">
             <Clock className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-base font-semibold text-foreground">{t('title')}</h2>
+            <RunningCountBadge count={runningCount} label={t('launcher.running', { count: runningCount })} />
             <div
               className="ml-2 flex items-center rounded-md border border-border p-0.5"
               role="tablist"

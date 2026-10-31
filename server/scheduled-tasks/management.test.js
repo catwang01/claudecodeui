@@ -303,3 +303,26 @@ describe('parameters (§12)', () => {
   });
 });
 
+describe('running count (§14.3)', () => {
+  it('reads the repository count', async () => {
+    const { repo, management } = setup();
+    repo.countRunningAgentRuns = vi.fn(() => 3);
+
+    await expect(management.countRunningTasks()).resolves.toEqual({ ok: true, count: 3 });
+    expect(repo.countRunningAgentRuns).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads as 0 when the repository cannot count (older fakes)', async () => {
+    const { management } = setup();
+
+    await expect(management.countRunningTasks()).resolves.toEqual({ ok: true, count: 0 });
+  });
+
+  it('exposes agentStartedAt on the run view and defaults it to null', () => {
+    expect(runRowToJson({ id: 'run-1', agent_started_at: '2026-01-01T00:00:00.000Z' }).agentStartedAt).toBe(
+      '2026-01-01T00:00:00.000Z'
+    );
+    expect(runRowToJson({ id: 'run-1', status: 'running' }).agentStartedAt).toBeNull();
+  });
+});
+

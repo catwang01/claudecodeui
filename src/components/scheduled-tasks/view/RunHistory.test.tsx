@@ -24,7 +24,7 @@ import RunHistory from './RunHistory';
 // keep a generous per-test budget instead of relying on the 5s default.
 vi.setConfig({ testTimeout: 30000 });
 
-function makeRun(id: string, sessionId: string): ScheduledTaskRun {
+function makeRun(id: string, sessionId: string | null): ScheduledTaskRun {
   return {
     id,
     taskId: 'task-1',
@@ -32,6 +32,7 @@ function makeRun(id: string, sessionId: string): ScheduledTaskRun {
     trigger: 'manual',
     scheduledFor: null,
     startedAt: '2026-01-01T00:00:00.000Z',
+    agentStartedAt: '2026-01-01T00:00:00.500Z',
     finishedAt: '2026-01-01T00:00:01.000Z',
     sessionId,
     output: null,
@@ -214,5 +215,47 @@ describe('RunHistory', () => {
 
     await waitFor(() => expect(listRuns).toHaveBeenCalledTimes(1));
     expect(screen.getByText('runs.builtinsHint')).toBeTruthy();
+  });
+
+  it('shows the script-gate label for a running run whose agent has not started', async () => {
+    listRuns.mockResolvedValueOnce({
+      runs: [
+        {
+          ...makeRun('run-gate', null),
+          status: 'running',
+          agentStartedAt: null,
+          finishedAt: null,
+        },
+      ],
+      total: 1,
+    });
+
+    render(<RunHistory taskId="task-1" refreshToken="1|x|y" />);
+
+    await waitFor(() => expect(screen.getByText('status.running')).toBeTruthy());
+    const body = document.body.textContent ?? '';
+    expect(body).toContain('runs.gatePhase');
+    expect(body).not.toContain('runs.inProgress');
+  });
+
+  it('shows the in-progress label once the agent has actually started', async () => {
+    listRuns.mockResolvedValueOnce({
+      runs: [
+        {
+          ...makeRun('run-agent', 'session-agent'),
+          status: 'running',
+          agentStartedAt: '2026-01-01T00:00:05.000Z',
+          finishedAt: null,
+        },
+      ],
+      total: 1,
+    });
+
+    render(<RunHistory taskId="task-1" refreshToken="1|x|y" />);
+
+    await waitFor(() => expect(screen.getByText('status.running')).toBeTruthy());
+    const body = document.body.textContent ?? '';
+    expect(body).toContain('runs.inProgress');
+    expect(body).not.toContain('runs.gatePhase');
   });
 });

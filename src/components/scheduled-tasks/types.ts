@@ -101,6 +101,12 @@ export interface ScheduledTaskRun {
   trigger: RunTrigger;
   scheduledFor: string | null;
   startedAt: string;
+  /**
+   * When the runner actually started the agent (section 14), ISO-8601 UTC.
+   * null while the run is still in the script gate; it stays null for a run
+   * that will be skipped. Only a started agent counts as "running".
+   */
+  agentStartedAt: string | null;
   finishedAt: string | null;
   sessionId: string | null;
   output: string | null;

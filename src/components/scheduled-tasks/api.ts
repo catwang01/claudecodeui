@@ -98,6 +98,18 @@ export const scheduledTasksApi = {
     return data?.tasks ?? [];
   },
 
+  /**
+   * GET /running (section 14.3): how many scheduled tasks currently have a run
+   * whose agent was actually started. The count is global (one scheduler), not
+   * scoped to a user. A malformed payload reads as 0.
+   */
+  async runningCount(): Promise<number> {
+    const response = await authenticatedFetch(`${BASE_URL}/running`);
+    const data = await parseResponse<{ count?: unknown }>(response);
+    const count = data?.count;
+    return typeof count === 'number' && Number.isFinite(count) ? count : 0;
+  },
+
   async create(input: ScheduledTaskInput): Promise<ScheduledTask> {
     const response = await authenticatedFetch(BASE_URL, {
       method: 'POST',

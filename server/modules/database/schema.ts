@@ -258,7 +258,11 @@ CREATE TABLE IF NOT EXISTS scheduled_task_runs (
   script_output TEXT,
   prompt_used TEXT,
   -- Resolved parameter values of the run (docs section 12.4).
-  params_json TEXT
+  params_json TEXT,
+  -- Running count (docs section 14.1): ISO-8601 UTC of the moment the runner
+  -- decided to call the agent. NULL until then, so gate-phase / skipped /
+  -- errored-before-agent runs never count as running.
+  agent_started_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_scheduled_task_runs_task ON scheduled_task_runs(task_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_scheduled_task_runs_session ON scheduled_task_runs(session_id);`;

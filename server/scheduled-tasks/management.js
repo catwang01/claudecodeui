@@ -160,6 +160,9 @@ export function runRowToJson(row) {
     scriptExitCode: row.script_exit_code ?? null,
     scriptOutput: row.script_output ?? null,
     promptUsed: row.prompt_used ?? null,
+    // §14.3: when the runner actually started the agent. NULL while the run is
+    // still in the script gate, so the UI can tell the two phases apart.
+    agentStartedAt: row.agent_started_at ?? row.agentStartedAt ?? null,
     // §12.6: the resolved parameter values of this run.
     params: parseParamValues(row.params_json ?? row.paramsJson),
   };
@@ -477,6 +480,18 @@ export function createManagement(deps = {}) {
     return { ok: true, runs: runs.map(runRowToJson), total };
   }
 
+  /**
+   * §14.3: how many scheduled tasks currently have an agent-started run in
+   * flight. The script-gate phase and a run that will be skipped do not count.
+   * A repository without the method (older fakes) reads as 0.
+   */
+  async function countRunningTasks() {
+    const repo = await getRepo();
+    const count =
+      typeof repo.countRunningAgentRuns === 'function' ? repo.countRunningAgentRuns() : 0;
+    return { ok: true, count: Number.isFinite(count) ? count : 0 };
+  }
+
   async function getTaskWithRuns(id, scope = {}, limit = 5) {
     const row = await findTask(id, scope);
     if (!row) return notFound();
@@ -712,6 +727,7 @@ export function createManagement(deps = {}) {
     getTask,
     listRuns,
     getTaskWithRuns,
+    countRunningTasks,
     // mutations
     createTask,
     updateTask,

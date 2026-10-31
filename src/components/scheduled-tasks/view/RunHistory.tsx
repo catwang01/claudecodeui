@@ -25,7 +25,14 @@ function RunRow({
   onOpenSession?: (sessionId: string) => void;
 }) {
   const { t } = useTranslation('scheduledTasks');
-  const duration = run.status === 'running' ? t('runs.inProgress') : formatDuration(run.startedAt, run.finishedAt);
+  // A running run whose agent has not started yet is still inside the script
+  // gate (section 14); only a started agent shows the generic in-progress label.
+  const duration =
+    run.status === 'running'
+      ? run.agentStartedAt == null
+        ? t('runs.gatePhase')
+        : t('runs.inProgress')
+      : formatDuration(run.startedAt, run.finishedAt);
   // Display-only: a null result means the payload does not know this id yet, so
   // the row falls back to showing the raw id and the action stays available.
   const resolvedSession = run.sessionId && projects ? findSessionInProjects(projects, run.sessionId) : null;

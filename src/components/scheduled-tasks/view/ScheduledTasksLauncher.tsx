@@ -1,15 +1,20 @@
 import { useState } from 'react';
 import { Clock } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useRunningScheduledTasks } from '../hooks/useRunningScheduledTasks';
+import RunningCountBadge from './RunningCountBadge';
 import ScheduledTasksPanel from './ScheduledTasksPanel';
 
 /**
  * Sidebar footer entry point. Renders the desktop and mobile button variants
- * (the footer hosts both) and mounts the overlay panel through its portal.
+ * (the footer hosts both), shows the running-task count on each (section 14)
+ * and mounts the overlay panel through its portal.
  */
 export default function ScheduledTasksLauncher() {
   const { t } = useTranslation('scheduledTasks');
   const [isOpen, setIsOpen] = useState(false);
+  const { count: runningCount } = useRunningScheduledTasks();
+  const runningLabel = t('launcher.running', { count: runningCount });
 
   const open = () => setIsOpen(true);
 
@@ -23,6 +28,7 @@ export default function ScheduledTasksLauncher() {
         >
           <Clock className="h-3.5 w-3.5" />
           <span className="text-sm">{t('launcher.label')}</span>
+          <RunningCountBadge count={runningCount} label={runningLabel} className="ml-auto" />
         </button>
       </div>
 
@@ -36,10 +42,11 @@ export default function ScheduledTasksLauncher() {
             <Clock className="h-4 w-4 text-muted-foreground" />
           </div>
           <span className="text-base font-medium text-foreground">{t('launcher.label')}</span>
+          <RunningCountBadge count={runningCount} label={runningLabel} className="ml-auto" />
         </button>
       </div>
 
-      {isOpen && <ScheduledTasksPanel onClose={() => setIsOpen(false)} />}
+      {isOpen && <ScheduledTasksPanel onClose={() => setIsOpen(false)} runningCount={runningCount} />}
     </>
   );
 }

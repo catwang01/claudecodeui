@@ -1,7 +1,9 @@
 {
   "title": "定时任务",
   "launcher": {
-    "label": "定时任务"
+    "label": "定时任务",
+    "running_one": "{{count}} 个任务运行中",
+    "running_other": "{{count}} 个任务运行中"
   },
   "tabs": {
     "label": "面板分栏",
@@ -327,6 +329,7 @@
     "output": "输出",
     "error": "错误",
     "inProgress": "运行中…",
+    "gatePhase": "脚本门控中…",
     "skipReason": "跳过原因",
     "noReason": "未提供原因",
     "effectivePrompt": "实际提示词",

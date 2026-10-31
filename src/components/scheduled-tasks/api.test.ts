@@ -42,6 +42,31 @@ describe('scheduledTasksApi.runNow parameter contract (section 12.5)', () => {
   });
 });
 
+describe('scheduledTasksApi.runningCount (section 14.3)', () => {
+  beforeEach(() => {
+    authenticatedFetch.mockReset();
+  });
+
+  it('reads { count } from GET /running', async () => {
+    authenticatedFetch.mockResolvedValueOnce(jsonResponse({ count: 3 }));
+
+    await expect(scheduledTasksApi.runningCount()).resolves.toBe(3);
+    expect(authenticatedFetch).toHaveBeenCalledWith('/api/scheduled-tasks/running');
+  });
+
+  it('defaults to 0 for a malformed payload', async () => {
+    authenticatedFetch.mockResolvedValueOnce(jsonResponse({ count: 'many' }));
+
+    await expect(scheduledTasksApi.runningCount()).resolves.toBe(0);
+  });
+
+  it('defaults to 0 when the body is missing', async () => {
+    authenticatedFetch.mockResolvedValueOnce(jsonResponse(null));
+
+    await expect(scheduledTasksApi.runningCount()).resolves.toBe(0);
+  });
+});
+
 describe('scheduledTasksApi.installPreset parameter contract (section 12.5)', () => {
   beforeEach(() => {
     authenticatedFetch.mockReset();

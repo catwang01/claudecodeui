@@ -40,6 +40,11 @@
  * to the agent (options.env), from one predefinedVarsEnv() object, so both paths
  * always agree. A static "Predefined scheduled-task variables" block is prepended
  * to the prompt, so a task never has to hardcode its project directory.
+ *
+ * Running count (§14.2): agent_started_at is written immediately before the agent
+ * call (and in the dry-run branch that stands in for it). The script gate, a
+ * skip, a gate/params error and an unsupported provider all leave it NULL, so
+ * "script is running" is never reported as "task is running".
  */
 
 import { spawn as nodeSpawn } from 'child_process';
@@ -439,9 +444,25 @@ export function createTaskRunner(deps = {}) {
       });
     }
 
+    // docs §14.2: record that the agent is being started. Everything before this
+    // point — the script gate (a script that runs is *not* a running task), a
+    // skipped/errored gate, a params error, an unsupported provider — must stay
+    // NULL so it never counts as running. Best-effort: a bookkeeping failure must
+    // never break the run itself.
+    const markAgentStarted = () => {
+      if (typeof db.markRunAgentStarted !== 'function') return;
+      try {
+        db.markRunAgentStarted(run.id);
+      } catch (err) {
+        console.warn('[scheduled-tasks] markRunAgentStarted failed:', errorMessage(err));
+      }
+    };
+
     // Dry-run replaces only the agent call: the gate above has already run and
-    // decided, and the effective prompt is reported back.
+    // decided, and the effective prompt is reported back. The call it replaces is
+    // the agent call, so the run counts as agent-started here too (§14.2).
     if (isDryRun()) {
+      markAgentStarted();
       return finishOnce(task, run, 'success', {
         output: `[dry-run] ${effectivePrompt}`,
         sessionId: null,
@@ -520,6 +541,10 @@ export function createTaskRunner(deps = {}) {
       }, timeoutMs);
       if (timer && typeof timer.unref === 'function') timer.unref();
     });
+
+    // docs §14.2: the agent call starts here; project registration and prompt
+    // assembly above are not agent work.
+    markAgentStarted();
 
     try {
       await Promise.race([query(agentPrompt, options, writer), timedOut]);

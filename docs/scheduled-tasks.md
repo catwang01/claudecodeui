@@ -859,7 +859,6 @@ without parameters exports no `SCHEDULED_TASK_PARAM_*`; and reinstalling a prese
 parameter contract. Plus the full `npx vitest run`, `tsc --noEmit` for both configs and
 `eslint src/ server/`.
 
-
 ## 13. Predefined task variables（第十一轮，issue #14 comment 976）
 
 Every run injects a fixed set of **predefined variables**. They are the contract a task should use instead
@@ -995,3 +994,93 @@ carry every predefined name, the no-hardcode wording and the id clarification), 
 (allowlist) and the frontend tests. Plus the full `npx vitest run`, `tsc --noEmit` for both configs and
 `eslint src/ server/`.
 
+## 14. Running count: only a started agent counts（第十二轮）
+
+需求：前端要有一个地方显示「当前有多少个定时任务正在运行」。这里的"运行"是 **agent 已被启动**，
+不是"这条 run 还开着"。脚本门控（§7）阶段不算运行：一个最终会 `skipped` 的任务，在被脚本判定跳过
+之前的那段时间里也不算运行；只有门控放行、agent 调用真正发起之后才算。
+
+权威判定依据：`scheduled_task_runs.agent_started_at`。
+
+### 14.1 Database (additive)
+
+```sql
+ALTER TABLE scheduled_task_runs ADD COLUMN agent_started_at TEXT;  -- NULL = agent 尚未启动
+```
+
+走 `addColumnIfMissing(db, 'scheduled_task_runs', 'agent_started_at', 'TEXT')`（`migrations.ts`），
+`schema.ts` 的 `CREATE TABLE` 同步补列（新库直接有）。语义：ISO-8601 UTC，NULL 直到 runner
+决定调用 agent 的那一刻才写入；`skipped`、门控 `error`、参数错误、provider 不支持的 run 永远是 NULL。
+
+Repository additions（`server/modules/database/repositories/scheduled-tasks.db.ts`）:
+
+```ts
+markRunAgentStarted(id: string): ScheduledTaskRunRow | undefined  // 幂等，只写一次：WHERE id = ? AND agent_started_at IS NULL
+countRunningAgentRuns(): number    // COUNT(DISTINCT task_id) WHERE status='running' AND agent_started_at IS NOT NULL
+failInterruptedRuns(finishedAt: string, error: string): number    // status='running' -> 'error' + finished_at/error，返回受影响行数
+```
+
+`ScheduledTaskRunRow` 新增 `agent_started_at: string | null`。
+
+崩溃一致性：进程重启后不可能还有 run 在跑（agent 是本进程的子进程），所以
+`startScheduledTaskService()` 在启动 tick 之前先执行一次 `failInterruptedRuns(nowIso, 'server_restart')`，
+否则残留的 `running` 行会把计数永久抬高（顺带修掉 run history 永远显示 Running… 的老问题）。
+只在默认 scheduler 启动时做，`createScheduler()`（含其单元测试）行为不变；`startScheduledTaskService()`
+因此从本轮起是 **async**（先 `await` 清理、再启动 tick，永不 reject；`server/index.js` 的调用点无需 await）。
+
+### 14.2 Runner（`server/scheduled-tasks/runner.js`）
+
+- 在真正发起 agent 调用之前调用 `db.markRunAgentStarted(run.id)`，best-effort：失败只 `console.warn`，绝不影响运行。
+- 位置：provider 校验之后、`ensureProject` 之后、`query()` 之前；dry-run 分支在
+  `finishOnce(... 'success')` 之前标记（§4 的 dry-run 只替换 agent 调用，语义上 agent 已启动，
+  验收脚本依赖这一点）。
+- 门控 skip / 门控 error / 参数错误 / provider 不支持 / `commands_disabled` 路径**绝不**调用它。
+
+### 14.3 REST（`/api/scheduled-tasks`，沿用 router 现有鉴权）
+
+| Method | Path | Response |
+|---|---|---|
+| GET | `/running` | `{ count: number }` |
+
+- 注册在 `GET /:id` **之前**（同 `/presets`，否则 `running` 会被当成 task id）。
+- `count = countRunningAgentRuns()`：agent 已启动且 run 仍在跑的**任务**数（DISTINCT `task_id`；
+  一个任务同时最多一条 run）。计数是全局的，不按 user 过滤（scheduler 只有一个，任何用户都能看到它）。
+- 走 `management.countRunningTasks()`（`{ ok: true, count }`）保证 REST 与其它调用方共用同一视图层。
+- Run JSON 增加 `agentStartedAt`（camelCase，`runRowToJson`）。
+
+### 14.4 Frontend
+
+- `types.ts`: `ScheduledTaskRun.agentStartedAt: string | null`。
+- `api.ts`: `runningCount(): Promise<number>` → `GET /api/scheduled-tasks/running` → `data.count`（缺省 0）。
+- 新 hook `useRunningScheduledTasks({ intervalMs = 10000 })`：轮询该接口，返回 `{ count, refresh }`；
+  `document.hidden` 时跳过请求、`visibilitychange` 回到可见时立即刷新；丢弃过期响应；请求失败保留上一次的值。
+- `ScheduledTasksLauncher`（侧栏 footer 常驻入口）：`count > 0` 时在桌面与移动两个按钮上显示数字徽标
+  （aria-label 用 i18n 复数），并把 `runningCount` 传给 `ScheduledTasksPanel`。
+- `ScheduledTasksPanel` 头部标题旁显示同一计数徽标（`count > 0` 时）。
+- `RunHistory`：`status === 'running'` 且 `agentStartedAt == null` 时显示 `t('runs.gatePhase')`
+  （脚本门控中），否则保持现在的 `t('runs.inProgress')`。
+- i18n（`en` + `zh-CN`，其余 locale 回退 en）：`launcher.running_one/other`、`runs.gatePhase`。
+
+### 14.5 Write scopes (one owner per file)
+
+| Owner | Files |
+|---|---|
+| backend | `server/modules/database/schema.ts`, `migrations.ts`, `repositories/scheduled-tasks.db.ts` (+test), `server/scheduled-tasks/runner.js` (+test), `service.js` (+test), `management.js` (+test), `server/routes/scheduled-tasks.js` (+test) |
+| frontend | `src/components/scheduled-tasks/**`, `src/i18n/locales/{en,zh-CN}/scheduledTasks.json` |
+| verify | `scripts/verify-scheduled-tasks-running-count.mjs` |
+| lead | `docs/scheduled-tasks.md` |
+
+### 14.6 Acceptance
+
+- `npx vitest run`：除 main 上**既有**的 2 个 copilot 失败（`server/copilot-sdk.test.js` 的
+  network-path 用例、`server/providers/copilot/adapter.test.js` 的 artifact-card 用例；本轮 base 的
+  clean worktree 实测 2 failed / 791 passed，与本改动无关）外应全绿；外加 `npm run typecheck`、`npm run lint`。
+- 单元测试覆盖：仓储层（列存在 / `markRunAgentStarted` 幂等 / `COUNT(DISTINCT task_id)` / 中断清理与幂等）、
+  runner（门控执行期间与 skip 路径不标记、真正启动才标记一次、dry-run 标记、标记抛错不影响 run）、
+  service（`reconcileInterrupted` 及其容错）、management（`countRunningTasks` / `agentStartedAt`）、
+  route（`GET /running` 返回 count 且不遮蔽 `GET /:id`）、前端（hook 轮询与隐藏页暂停、徽标、RunHistory 门控文案）。
+- `npx tsx --tsconfig server/tsconfig.json scripts/verify-scheduled-tasks-running-count.mjs`：
+  - 门控脚本 sleep 期间 count（`management.countRunningTasks()`，即 `GET /running` 的同一视图）为 0（脚本在跑 ≠ agent 在跑）；
+  - 门控 `{"skip":true}` 的 run 全程 count 为 0，且 `agent_started_at` 为 NULL；
+  - 门控放行、注入的 fake query 挂起期间 count 为 1 且 `agentStartedAt` 非空，query resolve 后回 0；
+  - `failInterruptedRuns` 收掉残留 `running` 行后计数归零。

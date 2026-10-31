@@ -45,6 +45,10 @@ export type ScheduledTaskRunRow = {
   prompt_used: string | null;
   // Resolved parameter values of this run (docs section 12.4).
   params_json: string | null;
+  // docs section 14.1: ISO-8601 UTC of the moment the runner started the agent.
+  // NULL while the run is in the script gate, and for every run that ends as
+  // skipped / gate-error / params-error / unsupported-provider.
+  agent_started_at: string | null;
 };
 
 // docs section 9.1: which scheduled task started a session (the newest run wins).
@@ -502,6 +506,51 @@ export const scheduledTasksDb = {
       .run(sessionId, id);
     if (info.changes === 0) return undefined;
     return selectRun(id);
+  },
+
+  /**
+   * docs section 14.1: record the moment the runner actually decided to call the
+   * agent. Idempotent / write-once — a second call never moves the timestamp, so
+   * a retried mark cannot make a long run look freshly started.
+   */
+  markRunAgentStarted(id: string): ScheduledTaskRunRow | undefined {
+    getConnection()
+      .prepare(
+        'UPDATE scheduled_task_runs SET agent_started_at = ? WHERE id = ? AND agent_started_at IS NULL'
+      )
+      .run(currentIso(), id);
+    return selectRun(id);
+  },
+
+  /**
+   * docs section 14.1: how many distinct tasks have an agent-started run in
+   * flight. A task can only own one run at a time, so this is also the number of
+   * "running" tasks the UI shows; gate-phase / skipped runs are excluded.
+   */
+  countRunningAgentRuns(): number {
+    const row = getConnection()
+      .prepare(
+        'SELECT COUNT(DISTINCT task_id) AS count FROM scheduled_task_runs ' +
+          "WHERE status = 'running' AND agent_started_at IS NOT NULL"
+      )
+      .get() as { count: number } | undefined;
+    return row ? row.count : 0;
+  },
+
+  /**
+   * docs section 14.1: fail every run left 'running' by a previous process. The
+   * agent is a child of this process, so after a restart it can only be gone;
+   * leaving the rows 'running' would inflate the running-task count forever.
+   * Returns the number of rows that were interrupted.
+   */
+  failInterruptedRuns(finishedAt: string, error: string): number {
+    const info = getConnection()
+      .prepare(
+        "UPDATE scheduled_task_runs SET status = 'error', finished_at = ?, error = ? " +
+          "WHERE status = 'running'"
+      )
+      .run(finishedAt, error);
+    return info.changes;
   },
 
   listRuns(taskId: string, limit = 20, offset = 0): ScheduledTaskRunRow[] {

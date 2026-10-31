@@ -1009,3 +1009,91 @@ describe('parameters (docs section 12.4)', () => {
   });
 });
 
+describe('agent-started tracking (docs section 14.1)', () => {
+  const columns = (table: string): string[] =>
+    (getConnection().prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((row) => row.name);
+
+  it('adds agent_started_at to a database created before the feature', () => {
+    // The database was created from the pre-feature DDL in beforeAll().
+    expect(columns('scheduled_task_runs')).toContain('agent_started_at');
+    // Legacy rows stay NULL: nothing historical is reported as running.
+    expect(scheduledTasksDb.countRunningAgentRuns()).toBe(0);
+  });
+
+  it('marks a run once and never moves the timestamp', () => {
+    const task = makeTask({ title: 'Agent started ' + tag() });
+    const run = scheduledTasksDb.createRun({ taskId: task.id, status: 'running', trigger: 'schedule' });
+    expect(run.agent_started_at).toBeNull();
+
+    const marked = must(scheduledTasksDb.markRunAgentStarted(run.id));
+    expect(marked.agent_started_at).toBeTruthy();
+    const first = marked.agent_started_at;
+
+    const again = must(scheduledTasksDb.markRunAgentStarted(run.id));
+    expect(again.agent_started_at).toBe(first);
+
+    scheduledTasksDb.finishRun(run.id, { status: 'success' });
+  });
+
+  it('counts distinct tasks whose agent-started run is in flight', () => {
+    const task = makeTask({ title: 'Running agent ' + tag() });
+    const other = makeTask({ title: 'Other agent ' + tag() });
+    const before = scheduledTasksDb.countRunningAgentRuns();
+
+    // Gate phase: the run is 'running' but the agent has not started.
+    const gateRun = scheduledTasksDb.createRun({ taskId: task.id, status: 'running', trigger: 'schedule' });
+    expect(gateRun.agent_started_at).toBeNull();
+    expect(scheduledTasksDb.countRunningAgentRuns()).toBe(before);
+
+    // A skipped run whose agent never started is not counted either.
+    scheduledTasksDb.finishRun(gateRun.id, { status: 'skipped' });
+
+    const agentRun = scheduledTasksDb.createRun({ taskId: task.id, status: 'running', trigger: 'schedule' });
+    scheduledTasksDb.markRunAgentStarted(agentRun.id);
+    expect(scheduledTasksDb.countRunningAgentRuns()).toBe(before + 1);
+
+    scheduledTasksDb.finishRun(agentRun.id, { status: 'success' });
+    expect(scheduledTasksDb.countRunningAgentRuns()).toBe(before);
+
+    // Two in-flight runs of one task collapse to a single task.
+    const first = scheduledTasksDb.createRun({ taskId: other.id, status: 'running', trigger: 'schedule' });
+    const second = scheduledTasksDb.createRun({ taskId: other.id, status: 'running', trigger: 'schedule' });
+    scheduledTasksDb.markRunAgentStarted(first.id);
+    scheduledTasksDb.markRunAgentStarted(second.id);
+    expect(scheduledTasksDb.countRunningAgentRuns()).toBe(before + 1);
+
+    scheduledTasksDb.finishRun(first.id, { status: 'error' });
+    scheduledTasksDb.finishRun(second.id, { status: 'error' });
+    expect(scheduledTasksDb.countRunningAgentRuns()).toBe(before);
+  });
+
+  it('fails every interrupted run and reports how many', () => {
+    const task = makeTask({ title: 'Interrupted ' + tag() });
+    const interrupted = scheduledTasksDb.createRun({ taskId: task.id, status: 'running', trigger: 'schedule' });
+    scheduledTasksDb.markRunAgentStarted(interrupted.id);
+    const finished = scheduledTasksDb.createRun({ taskId: task.id, status: 'running', trigger: 'schedule' });
+    scheduledTasksDb.finishRun(finished.id, { status: 'success' });
+
+    const finishedAt = new Date().toISOString();
+    // Earlier tests in this file also leave 'running' rows behind; the sweep must
+    // fail exactly those, so measure instead of assuming a single row.
+    const runningBefore = must(
+      getConnection().prepare("SELECT COUNT(*) AS count FROM scheduled_task_runs WHERE status = 'running'").get() as {
+        count: number;
+      }
+    ).count;
+    expect(runningBefore).toBeGreaterThanOrEqual(1);
+    expect(scheduledTasksDb.failInterruptedRuns(finishedAt, 'server_restart')).toBe(runningBefore);
+
+    const after = must(scheduledTasksDb.listRuns(task.id, 5, 0).find((row) => row.id === interrupted.id));
+    expect(after.status).toBe('error');
+    expect(after.error).toBe('server_restart');
+    expect(after.finished_at).toBe(finishedAt);
+
+    // Already-finished rows are untouched and the sweep is idempotent.
+    expect(must(scheduledTasksDb.listRuns(task.id, 5, 0).find((row) => row.id === finished.id)).status).toBe('success');
+    expect(scheduledTasksDb.failInterruptedRuns(finishedAt, 'server_restart')).toBe(0);
+    expect(scheduledTasksDb.countRunningAgentRuns()).toBe(0);
+  });
+});
+

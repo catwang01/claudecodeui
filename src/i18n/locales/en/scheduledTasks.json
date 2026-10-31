@@ -1,7 +1,9 @@
 {
   "title": "Scheduled tasks",
   "launcher": {
-    "label": "Scheduled tasks"
+    "label": "Scheduled tasks",
+    "running_one": "{{count}} task running",
+    "running_other": "{{count}} tasks running"
   },
   "tabs": {
     "label": "Panel sections",
@@ -333,6 +335,7 @@
     "output": "Output",
     "error": "Error",
     "inProgress": "Running…",
+    "gatePhase": "Script gate…",
     "skipReason": "Skip reason",
     "noReason": "No reason provided",
     "effectivePrompt": "Effective prompt",
