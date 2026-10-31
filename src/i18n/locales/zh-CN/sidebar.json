@@ -145,6 +145,8 @@
     "sessionCount_one": "此项目包含 {{count}} 个对话。",
     "sessionCount_other": "此项目包含 {{count}} 个对话。",
     "allConversationsDeleted": "所有对话将被永久删除。",
+    "hiddenSessionsHint": "其中 {{count}} 个会话已从侧边栏隐藏，未显示在此处。",
+    "forceConfirm": "服务器仍检测到该文件夹包含会话，删除将永久移除这些会话。",
     "cannotUndo": "此操作无法撤销。"
   }
 }

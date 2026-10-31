@@ -23,6 +23,7 @@ import {
   DEFAULT_RECENTS_TAG_LIMIT,
   sortProjects,
 } from '../utils/utils';
+import { resolveDeleteFailure, resolveDeleteRequest } from '../utils/deleteProject';
 import { logger } from '../../../utils/logger';
 
 type SnippetHighlight = {
@@ -61,6 +62,12 @@ export type ConversationSearchResults = {
 export type SearchProgress = {
   scannedProjects: number;
   totalProjects: number;
+};
+
+type DeleteProjectErrorBody = {
+  error?: string;
+  code?: string;
+  sessionCount?: number | null;
 };
 
 type UseSidebarControllerArgs = {
@@ -548,9 +555,15 @@ export function useSidebarController({
 
   const requestProjectDelete = useCallback(
     (project: Project) => {
+      // The sidebar only renders sessions it can see, so the visible count alone
+      // would report 0 for a project whose sessions are all hidden. Merge it with
+      // the server-reported total so the dialog states the real size.
+      const visibleCount = getProjectSessions(project).length;
+      const { sessionCount, hiddenSessionCount } = resolveDeleteRequest(project, visibleCount);
       setDeleteConfirmation({
         project,
-        sessionCount: getProjectSessions(project).length,
+        sessionCount,
+        hiddenSessionCount,
       });
     },
     [getProjectSessions],
@@ -561,20 +574,48 @@ export function useSidebarController({
       return;
     }
 
-    const { project, sessionCount } = deleteConfirmation;
-    const isEmpty = sessionCount === 0;
+    const { project, sessionCount, requiresForce } = deleteConfirmation;
+    const visibleCount = getProjectSessions(project).length;
+    const force = requiresForce ?? (sessionCount > 0);
 
     setDeleteConfirmation(null);
     setDeletingProjects((prev) => new Set([...prev, project.name]));
 
     try {
-      const response = await api.deleteProject(project.name, !isEmpty);
+      const response = await api.deleteProject(project.name, force);
 
       if (response.ok) {
         onProjectDelete?.(project.name);
       } else {
-        const error = (await response.json()) as { error?: string };
-        alert(error.error || t('messages.deleteProjectFailed'));
+        let body: DeleteProjectErrorBody | null = null;
+        try {
+          body = (await response.json()) as DeleteProjectErrorBody;
+        } catch {
+          body = null;
+        }
+
+        const failure = resolveDeleteFailure({
+          status: response.status,
+          body,
+          fallbackCount: sessionCount,
+          visibleCount,
+        });
+
+        if (failure.needsForceConfirmation && requiresForce !== true) {
+          // The server still sees sessions the sidebar cannot show. Re-open the
+          // dialog with the authoritative count in force mode (cancellable).
+          setDeleteConfirmation({
+            project,
+            sessionCount: failure.sessionCount,
+            hiddenSessionCount: failure.hiddenSessionCount,
+            requiresForce: true,
+          });
+        } else {
+          // Generic failure, or the server rejected an already-force request.
+          // Do not re-open: a forced retry that still conflicts would otherwise
+          // loop the dialog forever. Surface the error instead.
+          alert(body?.error || t('messages.deleteProjectFailed'));
+        }
       }
     } catch (error) {
       logger.error('Error deleting project:', error);
@@ -586,7 +627,7 @@ export function useSidebarController({
         return next;
       });
     }
-  }, [deleteConfirmation, onProjectDelete, t]);
+  }, [deleteConfirmation, getProjectSessions, onProjectDelete, t]);
 
   const loadMoreSessions = useCallback(
     async (project: Project) => {

@@ -1106,7 +1106,7 @@ async function getProjectsLegacy(progressCallback = null) {
   return projects;
 }
 
-async function getSessions(projectName, limit = 5, offset = 0, preFilter = null) {
+async function getSessions(projectName, limit = 5, offset = 0, preFilter = null, { strict = false } = {}) {
   try {
     const actualProjectDir = await extractProjectDirectory(projectName);
     const claudeProjectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
@@ -1153,6 +1153,9 @@ async function getSessions(projectName, limit = 5, offset = 0, preFilter = null)
     return { sessions: paginatedSessions, hasMore, total, offset, limit };
   } catch (error) {
     console.error(`Error getting sessions for project ${projectName}:`, error);
+    // Callers that must not confuse "lookup failed" with "no sessions" (the delete
+    // guard) opt into strict mode and handle the failure themselves.
+    if (strict) throw error;
     return { sessions: [], hasMore: false, total: 0 };
   }
 }
@@ -1984,15 +1987,28 @@ async function deleteSession(projectName, sessionId) {
   return true;
 }
 
-// Check if a project is empty (has no sessions)
-async function isProjectEmpty(projectName) {
+// Count every session stored for a project, including sessions hidden from
+// recents (getSessions does not apply the sidebar exclusion filter).
+//
+// Returns null — never 0 — when the count cannot be determined, so callers can
+// tell "unknown" apart from a real zero and fail closed before removing data.
+async function countProjectSessions(projectName) {
   try {
-    const sessionsResult = await getSessions(projectName, 1, 0);
-    return sessionsResult.total === 0;
+    // strict: a swallowed lookup error must surface here as null rather than as 0,
+    // otherwise an unreadable index would look like an empty project.
+    const sessionsResult = await getSessions(projectName, 1, 0, null, { strict: true });
+    return sessionsResult.total;
   } catch (error) {
-    console.error(`Error checking if project ${projectName} is empty:`, error);
-    return false;
+    console.error(`Error counting sessions for project ${projectName}:`, error);
+    return null;
   }
+}
+
+// Check if a project is empty (has no sessions).
+// An unavailable count (null) is treated as "not empty", preserving the previous
+// fail-safe behaviour: never delete when emptiness cannot be proven.
+async function isProjectEmpty(projectName) {
+  return (await countProjectSessions(projectName)) === 0;
 }
 
 // Delete a project (force=true to delete even with sessions)
@@ -2000,9 +2016,13 @@ async function deleteProject(projectName, force = false) {
   const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
 
   try {
-    const isEmpty = await isProjectEmpty(projectName);
-    if (!isEmpty && !force) {
-      throw new Error('Cannot delete project with existing sessions');
+    const sessionCount = await countProjectSessions(projectName);
+    if (sessionCount === null || (sessionCount > 0 && !force)) {
+      // Fail closed: an unknown count must never be mistaken for an empty project.
+      const error = new Error('Cannot delete project with existing sessions');
+      error.code = 'PROJECT_HAS_SESSIONS';
+      error.sessionCount = sessionCount ?? undefined;
+      throw error;
     }
 
     const projectPath = await extractProjectDirectory(projectName).catch(() => null);
@@ -3451,6 +3471,7 @@ export {
   renameProject,
   deleteSession,
   forkSession,
+  countProjectSessions,
   isProjectEmpty,
   deleteProject,
   addProjectManually,

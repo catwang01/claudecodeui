@@ -77,6 +77,7 @@ export default function SidebarModals({
     () => projects.map(normalizeProjectForSettings),
     [projects],
   );
+  const hiddenSessionCount = deleteConfirmation?.hiddenSessionCount ?? 0;
 
   return (
     <>
@@ -125,10 +126,20 @@ export default function SidebarModals({
                         <p className="text-sm font-medium text-red-700 dark:text-red-300">
                           {t('deleteConfirmation.sessionCount', { count: deleteConfirmation.sessionCount })}
                         </p>
+                        {hiddenSessionCount > 0 && (
+                          <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+                            {t('deleteConfirmation.hiddenSessionsHint', { count: hiddenSessionCount })}
+                          </p>
+                        )}
                         <p className="mt-1 text-xs text-red-600 dark:text-red-400">
                           {t('deleteConfirmation.allConversationsDeleted')}
                         </p>
                       </div>
+                    )}
+                    {deleteConfirmation.requiresForce === true && (
+                      <p className="mt-3 text-xs font-medium text-red-600 dark:text-red-400">
+                        {t('deleteConfirmation.forceConfirm')}
+                      </p>
                     )}
                     <p className="mt-3 text-xs text-muted-foreground">
                       {t('deleteConfirmation.cannotUndo')}

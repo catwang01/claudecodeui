@@ -145,6 +145,8 @@
     "sessionCount_one": "This project contains {{count}} conversation.",
     "sessionCount_other": "This project contains {{count}} conversations.",
     "allConversationsDeleted": "All conversations will be permanently deleted.",
+    "hiddenSessionsHint": "{{count}} of them are hidden from the sidebar and are not listed here.",
+    "forceConfirm": "The server still reports sessions in this folder. Deleting it permanently removes them.",
     "cannotUndo": "This action cannot be undone."
   }
 }

@@ -12,6 +12,10 @@ export type LoadingSessionsByProject = Record<string, boolean>;
 export type DeleteProjectConfirmation = {
   project: Project;
   sessionCount: number;
+  /** Sessions the server knows about but the sidebar does not list. */
+  hiddenSessionCount?: number;
+  /** True when the user already saw the server-authoritative count and must confirm again. */
+  requiresForce?: boolean;
 };
 
 export type SessionDeleteConfirmation = {

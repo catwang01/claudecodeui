@@ -954,6 +954,15 @@ app.delete('/api/projects/:projectName', authenticateToken, async (req, res) => 
         await deleteProject(projectName, force);
         res.json({ success: true });
     } catch (error) {
+        if (error.code === 'PROJECT_HAS_SESSIONS') {
+            // The client's visible session count is not authoritative — answer with a
+            // conflict plus the real server count so the UI can re-confirm in force mode.
+            return res.status(409).json({
+                error: error.message,
+                code: 'PROJECT_HAS_SESSIONS',
+                sessionCount: error.sessionCount ?? null,
+            });
+        }
         res.status(500).json({ error: error.message });
     }
 });
