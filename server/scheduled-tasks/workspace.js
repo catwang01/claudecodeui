@@ -1,15 +1,17 @@
 /**
  * Per-task on-disk workspace for scheduled tasks.
  *
- * Contract: docs/scheduled-tasks.md §10.4. Every scheduled task owns a directory
- * tree under `<root>/<taskId>/`:
+ * Contract: docs/scheduled-tasks.md §10.4. Every scheduled task owns one root
+ * directory `<root>/<taskId>/`. The framework writes only its own files there:
  *
  *   task.json      machine snapshot of the task definition
  *   prompt.md      copy of the current task prompt (the DB row stays authoritative)
  *   README.md      the layout contract (the same text the agent receives)
- *   state/         durable per-task data — the only place an agent may keep state
- *   runs/<runId>/  run.json, prompt.md, output.md, logs/, tmp/
- *   tmp/           task scratch, wiped at the start of every run
+ *   runs/<runId>/  run.json, prompt.md, output.md, logs/
+ *
+ * Everything else under the task root belongs to the task, which organizes it
+ * however it wants. The framework does not create, prescribe or wipe a state/ or
+ * tmp/ directory: how a task keeps state across runs is the task's own decision.
  *
  * Root: `SCHEDULED_TASK_DATA_DIR` when set, otherwise
  * `~/.claudecodeui/scheduled-tasks`.
@@ -89,9 +91,6 @@ function runDirRaw(taskId, runId) {
   return path.join(runs, segment);
 }
 
-function taskTmpDirRaw(taskId) {
-  return joinUnder(taskDirRaw(taskId), 'tmp');
-}
 
 /** Gate + best-effort wrapper for the pure path helpers. */
 function pathFn(label, fn) {
@@ -101,7 +100,7 @@ function pathFn(label, fn) {
 
 /**
  * Path templates shared by task.json/run.json and the public helpers.
- * @returns {{root: string, taskDir: string, stateDir: string, tmpDir: string, runDir: string|null}|null}
+ * @returns {{root: string, taskDir: string, runDir: string|null}|null}
  */
 function workspacePaths(taskId, runId) {
   const dir = taskDirRaw(taskId);
@@ -109,8 +108,6 @@ function workspacePaths(taskId, runId) {
   return {
     root: computeRoot(),
     taskDir: dir,
-    stateDir: path.join(dir, 'state'),
-    tmpDir: path.join(dir, 'tmp'),
     runDir: runId === undefined || runId === null ? null : runDirRaw(taskId, runId),
   };
 }
@@ -261,8 +258,6 @@ function layoutText(task, { runId } = {}) {
   const projectPath = (known ? projectPathOf(task) : null) ?? '<project directory>';
   const taskDir = taskId ? taskDirRaw(taskId) : null;
   const root = taskDir ?? '<task root>';
-  const stateDir = taskDir ? path.join(taskDir, 'state') : '<task root>/state';
-  const tmpDir = taskDir ? path.join(taskDir, 'tmp') : '<task root>/tmp';
   const runSegment = resolveSegment(runId) ?? '<runId>';
   const runDir = taskDir ? path.join(taskDir, 'runs', runSegment) : `${root}/runs/${runSegment}`;
 
@@ -271,19 +266,12 @@ function layoutText(task, { runId } = {}) {
     '',
     `You are running scheduled task "${title}" (task id: ${id}), run id: ${runSegment}.`,
     '',
-    'The task owns this directory tree. Keep everything the task produces inside it:',
-    '',
     `- Project directory (the only place you may edit project files): ${projectPath}`,
-    `- Task root: ${root}`,
-    `- Durable task state (${stateDir}/): keep every long-lived cache, counter or note here; it survives across runs.`,
-    `- Task scratch (${tmpDir}/): wiped at the start of every run; never keep anything you need across runs there.`,
-    `- This run's directory (${runDir}/):`,
-    '  - prompt.md: the full prompt for this run',
-    '  - output.md: the final output of this run',
-    '  - logs/: log files',
-    '  - tmp/: per-run scratch, removed when the run finishes',
+    `- Task root: ${root} — this directory belongs to the task. Organize it however the task wants; keeping long-lived state, caches or notes there makes them survive across runs, but how (or whether) to do that is the task's own choice.`,
+    '- Framework files already written by the app in the task root (do not overwrite them): task.json, prompt.md and README.md.',
+    `- This run's directory (${runDir}/): the app writes run.json, prompt.md, output.md and logs/ there for this run.`,
     '',
-    'Never write outside the task root and the project directory.',
+    'Prefer keeping files the task generates inside the task root or the project directory.',
   ].join('\n');
 }
 
@@ -328,8 +316,6 @@ function writeRunJson(dir, task, run, patch = {}) {
     workspace: {
       root: ws.root ?? null,
       taskDir: ws.taskDir ?? null,
-      stateDir: ws.stateDir ?? null,
-      tmpDir: ws.tmpDir ?? null,
       runDir: ws.runDir ?? dir,
     },
   };
@@ -359,14 +345,6 @@ export function taskDir(taskId) {
   return pathFn('taskDir', () => taskDirRaw(taskId));
 }
 
-export function taskStateDir(taskId) {
-  return pathFn('taskStateDir', () => joinUnder(taskDirRaw(taskId), 'state'));
-}
-
-export function taskTmpDir(taskId) {
-  return pathFn('taskTmpDir', () => joinUnder(taskDirRaw(taskId), 'tmp'));
-}
-
 export function taskRunsDir(taskId) {
   return pathFn('taskRunsDir', () => joinUnder(taskDirRaw(taskId), 'runs'));
 }
@@ -375,13 +353,11 @@ export function runDir(taskId, runId) {
   return pathFn('runDir', () => runDirRaw(taskId, runId));
 }
 
-export function runTmpDir(taskId, runId) {
-  return pathFn('runTmpDir', () => joinUnder(runDirRaw(taskId, runId), 'tmp'));
-}
-
 /**
- * Create the task directories plus task.json / prompt.md / README.md.
- * @returns {{root, taskDir, stateDir, tmpDir, runDir}|null}
+ * Create the task root plus the framework's own files (task.json / prompt.md /
+ * README.md). No state/ or tmp/ directory is created: the rest of the root is
+ * the task's to organize.
+ * @returns {{root, taskDir, runDir}|null}
  */
 export function ensureTaskWorkspace(task) {
   if (!isWorkspaceEnabled()) return null;
@@ -389,9 +365,6 @@ export function ensureTaskWorkspace(task) {
     const taskId = taskIdOf(task);
     const dir = taskDirRaw(taskId);
     if (!dir) return null;
-    fs.mkdirSync(path.join(dir, 'state'), { recursive: true });
-    fs.mkdirSync(path.join(dir, 'runs'), { recursive: true });
-    fs.mkdirSync(path.join(dir, 'tmp'), { recursive: true });
     writeJson(path.join(dir, 'task.json'), taskSnapshot(task, nowIso()));
     writeFile(path.join(dir, 'prompt.md'), promptOf(task));
     writeFile(path.join(dir, 'README.md'), layoutText(task));
@@ -403,7 +376,7 @@ export function ensureTaskWorkspace(task) {
  * Create this run's directory plus run.json and prompt.md.
  * `effectivePrompt` defaults to the task prompt; pass the post-gate prompt to
  * refresh prompt.md with the full agent-facing text.
- * @returns {{root, taskDir, stateDir, tmpDir, runDir}|null}
+ * @returns {{root, taskDir, runDir}|null}
  */
 export function ensureRunWorkspace(task, run, { effectivePrompt, paramsBlock } = {}) {
   if (!isWorkspaceEnabled()) return null;
@@ -413,7 +386,6 @@ export function ensureRunWorkspace(task, run, { effectivePrompt, paramsBlock } =
     const dir = runDirRaw(taskId, runId);
     if (!dir) return null;
     fs.mkdirSync(path.join(dir, 'logs'), { recursive: true });
-    fs.mkdirSync(path.join(dir, 'tmp'), { recursive: true });
     const prompt = effectivePrompt === undefined || effectivePrompt === null ? promptOf(task) : effectivePrompt;
     writeFile(path.join(dir, 'prompt.md'), agentPromptText(task, prompt, runId, paramsBlock));
     writeRunJson(dir, task, run);
@@ -421,22 +393,11 @@ export function ensureRunWorkspace(task, run, { effectivePrompt, paramsBlock } =
   });
 }
 
-/** Wipe the task scratch dir before a run, then recreate it empty. */
-export function clearTaskTmp(taskId) {
-  if (!isWorkspaceEnabled()) return null;
-  return safe('clearTaskTmp', () => {
-    const dir = taskTmpDirRaw(taskId);
-    if (!dir) return null;
-    fs.rmSync(dir, { recursive: true, force: true });
-    fs.mkdirSync(dir, { recursive: true });
-    return dir;
-  });
-}
 
 /**
- * Record the run outcome: output.md, run.json status and per-run tmp cleanup
- * (kept when SCHEDULED_TASK_KEEP_RUN_TMP=1). The script-gate stdout is saved to
- * logs/gate-stdout.log when present.
+ * Record the run outcome: output.md and run.json status. The script-gate stdout
+ * is saved to logs/gate-stdout.log when present. The framework never removes
+ * task files (there is no tmp to clean up: the task root belongs to the task).
  */
 export function finalizeRunWorkspace(task, run, patch = {}) {
   if (!isWorkspaceEnabled()) return null;
@@ -464,16 +425,14 @@ export function finalizeRunWorkspace(task, run, patch = {}) {
     // Keep the last known status when the caller does not provide one.
     if (patch.status !== undefined) finalPatch.status = patch.status;
     writeRunJson(dir, task, run, finalPatch);
-
-    if (process.env.SCHEDULED_TASK_KEEP_RUN_TMP !== '1') {
-      fs.rmSync(path.join(dir, 'tmp'), { recursive: true, force: true });
-    }
     return workspacePaths(taskId, runId);
   });
 }
 
 /**
- * Extra environment for the script gate (§10.4): the five SCHEDULED_TASK_* vars.
+ * Extra environment for one run (§10.4): SCHEDULED_TASK_DIR (the task root),
+ * SCHEDULED_TASK_RUN_ID and SCHEDULED_TASK_RUN_DIR. The runner hands the same
+ * values to the script gate and to the agent session.
  * @returns {Record<string, string>|null}
  */
 export function workspaceEnv(task, { runId } = {}) {
@@ -485,8 +444,6 @@ export function workspaceEnv(task, { runId } = {}) {
     const segment = resolveSegment(runId);
     return {
       SCHEDULED_TASK_DIR: dir,
-      SCHEDULED_TASK_STATE_DIR: path.join(dir, 'state'),
-      SCHEDULED_TASK_TMP_DIR: path.join(dir, 'tmp'),
       SCHEDULED_TASK_RUN_ID: segment ?? '',
       SCHEDULED_TASK_RUN_DIR: segment ? runDirRaw(taskId, segment) : '',
     };

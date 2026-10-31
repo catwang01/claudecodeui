@@ -23,7 +23,6 @@ import { workspacePromptBlock } from './workspace.js';
 // §13.6: the predefined-variable text is rendered from params.js (the same source
 // the agent prompt block uses), so the MCP descriptions cannot drift from it.
 import {
-  BUILTIN_PARAM_ENV_NAMES,
   PARAM_ENV_PREFIX,
   PARAMS_ENV_NAME,
   PREDEFINED_TASK_VARS,
@@ -79,16 +78,14 @@ const SCHEDULER_STORAGE_NOTE =
  * the contract documented anyway.
  */
 const WORKSPACE_FALLBACK_LAYOUT =
-  ' Scheduled task workspace: every task owns a directory tree under the scheduled-task data root — ' +
-  'task.json (task snapshot), prompt.md, README.md, state/ (durable per-task data: keep every long-lived cache, counter or note here, it survives across runs), ' +
-  'runs/<runId>/ (run.json, prompt.md, output.md, logs/ and a tmp/ scratch removed when the run finishes) and ' +
-  'tmp/ (task scratch, wiped at the start of every run — never keep anything you need across runs there). ' +
-  'Never write outside the task root and the project directory.';
+  ' Scheduled task workspace: every task owns one root directory under the scheduled-task data root. The app writes only task.json, prompt.md and README.md there, plus runs/<runId>/ (run.json, prompt.md, output.md, logs/). ' +
+  'Everything else under the task root belongs to the task: organize it however the task wants, and keep any cross-run state you need inside it. ' +
+  'Prefer keeping files the task generates inside the task root or the project directory.';
 
 const WORKSPACE_LAYOUT_NOTE =
   '\n\n' +
   (workspacePromptBlock() ?? WORKSPACE_FALLBACK_LAYOUT) +
-  '\n\nThe script gate receives SCHEDULED_TASK_DIR, SCHEDULED_TASK_STATE_DIR, SCHEDULED_TASK_TMP_DIR, SCHEDULED_TASK_RUN_ID and SCHEDULED_TASK_RUN_DIR.';
+  '\n\nThe script gate and the agent session both receive SCHEDULED_TASK_DIR, SCHEDULED_TASK_RUN_ID and SCHEDULED_TASK_RUN_DIR.';
 
 /**
  * §13.6: the predefined-variable contract of every run, stated once and appended
@@ -98,17 +95,14 @@ const WORKSPACE_LAYOUT_NOTE =
  * the MCP text and the docs cannot drift.
  */
 const PREDEFINED_VARS_NOTE =
-  ' Predefined variables every run injects into the script gate environment: ' +
+  ' Predefined variables every run injects into the script gate environment AND the agent session environment, with the same names and values: ' +
   PREDEFINED_TASK_VARS.map((entry) => entry.envName + ' (' + entry.description + ')').join('; ') +
   '; plus the user-declared parameters ' +
   PARAM_ENV_PREFIX +
   '<NAME> and the compact JSON ' +
   PARAMS_ENV_NAME +
-  '. The agent session additionally receives ' +
-  BUILTIN_PARAM_ENV_NAMES.join(', ') +
-  ' and the parameters in its environment; the workspace and id values reach it as text in the Scheduled task workspace prompt block. ' +
-  'Read these from the environment or from that block; never hardcode the task name, the project path or any workspace directory, so the task keeps working from any directory. ' +
-  'SCHEDULED_TASK_ID is the scheduled-task row id (stable across its runs), SCHEDULED_TASK_RUN_ID is this run id, and neither is the chat session id. ' +
+  '. The task root (SCHEDULED_TASK_DIR) belongs to the task: the app writes only task.json, prompt.md, README.md and runs/<runId>/ there, so keep any cross-run state you need inside that root, in whatever layout you choose. ' +
+  'Read these from the environment; never hardcode the task name, the project path or any workspace directory, so the task keeps working from any directory. ' +
   SESSION_ID_NOTE;
 
 /** SCHEDULED_TASKS_TOOLS=0 (default on) removes the tools entirely. */

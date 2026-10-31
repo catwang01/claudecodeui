@@ -40,16 +40,16 @@
  *          runtime behaviour is unit-covered by runner.test.js "passes
  *          options.env to the agent")
  *   C. section 13 predefined task variables (issue #14 comment 976)
- *      C1 the script gate of a zero-parameter task sees all nine predefined
- *         variables and no param variable
+ *      C1 the script gate of a zero-parameter task sees all seven predefined
+ *         variables (state/tmp retired) and no param variable
  *      C2 a declared parameter named like a predefined variable cannot shadow it,
  *         and an override targeting one is rejected as unknown
  *      C3 the agent prompt lists every predefined variable (grouped), the
  *         no-hardcode instruction and the task-id-vs-session-id note, while a
  *         bare task still gets no section 12.6 Parameters block
  *      C4 prompt order: workspace block < predefined block < section 12.6 params
- *      C5 agent-env split: built-ins + parameters only; the workspace group stays
- *         script-gate-only (static wiring; runtime in runner.test.js)
+ *      C5 one predefinedVarsEnv() object feeds the gate env and the agent env
+ *      C6 the observed gate env equals that object's values for the same run id
  *
  * Usage: node scripts/verify-scheduled-task-params.mjs
  *   Needs Node 22 (.nvmrc): better-sqlite3 ships a Node 22 native binding.
@@ -228,9 +228,9 @@ function envDumpCommand() {
   return 'env | grep "^SCHEDULED_TASK" | sort > "$SCHEDULED_TASK_RUN_DIR/env.txt"; printf ' + Q + '{"prompt":"ENVDONE"}' + Q;
 }
 
-/** Touch a sentinel in the task tmp dir, proving the gate ran. */
+/** Touch a sentinel in the run dir, proving the gate ran. */
 function sentinelCommand(sentinel) {
-  return 'env | grep "^SCHEDULED_TASK" | sort > "$SCHEDULED_TASK_RUN_DIR/env.txt"; touch "$SCHEDULED_TASK_TMP_DIR/' + sentinel + '"; printf ' + Q + '{"prompt":"GATE_RAN"}' + Q;
+  return 'env | grep "^SCHEDULED_TASK" | sort > "$SCHEDULED_TASK_RUN_DIR/env.txt"; touch "$SCHEDULED_TASK_RUN_DIR/' + sentinel + '"; printf ' + Q + '{"prompt":"GATE_RAN"}' + Q;
 }
 
 function readRunEnv(taskId, runId) {
@@ -504,12 +504,13 @@ async function main() {
       command: sentinelCommand(SENTINEL),
     });
     expectJson(requiredTask.params, [{ name: 'token', type: 'string', required: true }], 'required param shape');
-    const sentinelPath = path.join(DATA_DIR, requiredTask.id, 'tmp', SENTINEL);
-    assert(!fs.existsSync(sentinelPath), 'sentinel must not exist before the run');
+    const runsDir = path.join(DATA_DIR, requiredTask.id, 'runs');
+    assert(!fs.existsSync(runsDir), 'no run dir must exist before the run');
     const { finished } = await runToFinish(requiredTask.id);
     assert(finished.status === 'error', 'expected status error, got ' + finished.status + ' output=' + JSON.stringify(finished.output));
     assert(finished.error === 'missing_required_param', 'error=' + JSON.stringify(finished.error));
     assert(finished.sessionId === null, 'no agent session must be created');
+    const sentinelPath = path.join(runsDir, finished.id, SENTINEL);
     assert(!fs.existsSync(sentinelPath), 'the gate ran even though a required parameter was missing');
     const meta = runJson(requiredTask.id, finished.id);
     assert(meta.status === 'error', 'run.json status=' + meta.status);
@@ -521,7 +522,7 @@ async function main() {
     const { finished } = await runToFinish(requiredTask.id, { params: { token: 's3cret' } });
     assert(finished.status === 'success', 'status ' + finished.status + ' err=' + finished.error);
     assert(parseEnvelopeOutput(finished.output) === 'GATE_RAN', 'gate did not run: ' + JSON.stringify(finished.output));
-    assert(fs.existsSync(path.join(DATA_DIR, requiredTask.id, 'tmp', SENTINEL)), 'sentinel missing -> gate did not run');
+    assert(fs.existsSync(path.join(DATA_DIR, requiredTask.id, 'runs', finished.id, SENTINEL)), 'sentinel missing -> gate did not run');
     const env = envToMap(readRunEnv(requiredTask.id, finished.id));
     assert(env.SCHEDULED_TASK_PARAM_TOKEN === 's3cret', 'TOKEN=' + env.SCHEDULED_TASK_PARAM_TOKEN);
     return 'gate ran, TOKEN=s3cret';
@@ -737,15 +738,15 @@ async function main() {
     const runner = readTextFile(path.join(REPO, 'server/scheduled-tasks/runner.js'));
     const sdk = readTextFile(path.join(REPO, 'server/claude-sdk.js'));
     assert(
-      runner.indexOf('options.env = { ...builtinVars, ...(paramVars ?? {}) }') >= 0,
-      'runner.js no longer hands options.env = built-ins + params to the provider'
+      runner.indexOf('options.env = { ...predefinedVars, ...(paramVars ?? {}) }') >= 0,
+      'runner.js no longer hands options.env = predefined variables + params to the provider'
     );
     assert(
-      runner.indexOf('builtinParamsEnv(task, { cwd: projectPath || process.cwd() })') >= 0,
-      'runner.js no longer computes the section 13 built-ins'
+      runner.indexOf('const predefinedVars = predefinedVarsEnv(task, {') >= 0,
+      'runner.js no longer builds the shared predefined-variable object'
     );
     assert(sdk.indexOf('sdkOptions.env = env') >= 0 && sdk.indexOf("options.env") >= 0, 'claude-sdk.js no longer merges options.env into sdkOptions.env');
-    assert(sdk.indexOf('BUILTIN_PARAM_ENV_NAMES') >= 0, 'claude-sdk.js no longer allowlists the section 13.1 built-ins');
+    assert(sdk.indexOf('PREDEFINED_ENV_NAMES') >= 0, 'claude-sdk.js allowlist is no longer derived from PREDEFINED_ENV_NAMES');
     assert(runner.indexOf('query(agentPrompt, options, writer)') >= 0, 'runner.js no longer passes options to queryClaudeSDK');
     return 'static wiring present (runtime asserted by runner.test.js "passes options.env to the agent")';
   });
@@ -757,15 +758,15 @@ async function main() {
     'SCHEDULED_TASK_PROJECT',
     'SCHEDULED_TASK_ID',
     'SCHEDULED_TASK_DIR',
-    'SCHEDULED_TASK_STATE_DIR',
-    'SCHEDULED_TASK_TMP_DIR',
     'SCHEDULED_TASK_RUN_ID',
     'SCHEDULED_TASK_RUN_DIR',
   ];
+  // §10.4: removed by the per-task-root change, never exported again.
+  const RETIRED = ['SCHEDULED_TASK_STATE_DIR', 'SCHEDULED_TASK_TMP_DIR'];
   let predefinedTaskId = null;
   let predefinedRunId = null;
 
-  await check('C1 the script gate of a zero-parameter task sees all nine predefined variables', async () => {
+  await check('C1 the script gate of a zero-parameter task sees all seven predefined variables', async () => {
     const task = await createTask({ title: 'Builtin probe', prompt: 'BUILTIN_PROMPT', command: envDumpCommand() });
     const { finished } = await runToFinish(task.id);
     assert(finished.status === 'success', 'status ' + finished.status + ' err=' + finished.error);
@@ -785,9 +786,12 @@ async function main() {
     assert(env.SCHEDULED_TASK_RUN_ID === finished.id, 'RUN_ID=' + JSON.stringify(env.SCHEDULED_TASK_RUN_ID));
     assert(env.SCHEDULED_TASK_DIR.indexOf(task.id) >= 0, 'DIR=' + env.SCHEDULED_TASK_DIR);
     assert(env.SCHEDULED_TASK_RUN_DIR.indexOf(finished.id) >= 0, 'RUN_DIR=' + env.SCHEDULED_TASK_RUN_DIR);
+    for (const name of RETIRED) {
+      assert(!(name in env), 'retired variable still exported: ' + name);
+    }
     const paramKeys = paramEnvKeys(env);
     assert(paramKeys.length === 0, 'zero-param task exported ' + JSON.stringify(paramKeys));
-    return 'nine predefined variables present (values checked), no param vars';
+    return 'seven predefined variables present (values checked), retired state/tmp absent, no param vars';
   });
 
   await check('C2 a declared parameter named like a predefined variable cannot shadow it', async () => {
@@ -820,8 +824,10 @@ async function main() {
     for (const name of PREDEFINED) {
       assert(text.indexOf('$' + name) > 0, name + ' missing from the prompt block');
     }
-    assert(text.indexOf('Built-in parameters') > 0, 'built-in group missing');
-    assert(text.indexOf('Workspace variables') > 0, 'workspace group missing');
+    assert(text.indexOf('belongs to the task') > 0, 'the per-task-root note is missing');
+    for (const name of RETIRED) {
+      assert(text.indexOf('$' + name) < 0, 'retired variable still named in the prompt: ' + name);
+    }
     assert(/never hardcode/i.test(text), 'the no-hardcode instruction is missing');
     assert(/NOT a chat session id/i.test(text), 'the task-id-vs-session-id note is missing');
     assert(text.indexOf('sessionId') > 0, 'the session-id recording note is missing');
@@ -839,20 +845,59 @@ async function main() {
     return 'workspace < predefined < parameters';
   });
 
-  await check('C5 agent-env split: built-ins + parameters only, workspace group gate-only', async () => {
+  await check('C5 both environments are built from one predefinedVarsEnv() object', async () => {
     const runner = readTextFile(path.join(REPO, 'server/scheduled-tasks/runner.js'));
     const sdk = readTextFile(path.join(REPO, 'server/claude-sdk.js'));
     assert(
-      runner.indexOf('options.env = { ...builtinVars, ...(paramVars ?? {}) }') >= 0,
-      'runner no longer hands built-ins + params to the agent'
+      runner.indexOf('const predefinedVars = predefinedVarsEnv(task, {') >= 0,
+      'runner no longer builds one predefinedVarsEnv object'
     );
     assert(
-      runner.indexOf('options.env = { ...workspaceVars') < 0,
-      'runner must not put the workspace group into the agent env (section 13.1/13.3)'
+      runner.indexOf('runScriptGate(task, projectPath, predefinedVars, paramVars)') >= 0,
+      'the script gate no longer receives the shared object'
     );
-    assert(sdk.indexOf('BUILTIN_PARAM_ENV_NAMES') >= 0, 'claude-sdk allowlist no longer pins the three built-ins');
-    assert(runner.indexOf('...(workspaceVars ?? {})') >= 0, 'runner no longer hands the workspace group to the script gate');
-    return 'agent env = built-ins + params; gate env = all predefined + params';
+    assert(
+      runner.indexOf('options.env = { ...predefinedVars, ...(paramVars ?? {}) }') >= 0,
+      'the agent env is no longer spread from the shared object'
+    );
+    assert(sdk.indexOf('PREDEFINED_ENV_NAMES') >= 0, 'claude-sdk allowlist is no longer derived from PREDEFINED_ENV_NAMES');
+    return 'gate env and agent env are one object; allowlist from the same table';
+  });
+
+  await check('C6 gate env and the agent-env source agree per run (same run id)', async () => {
+    assert(predefinedTaskId && predefinedRunId, 'no C1 run');
+    const params = await import(pathToFileURL(path.join(REPO, 'server/scheduled-tasks/params.js')).href);
+    const workspace = await import(pathToFileURL(path.join(REPO, 'server/scheduled-tasks/workspace.js')).href);
+    const previousRoot = process.env.SCHEDULED_TASK_DATA_DIR;
+    process.env.SCHEDULED_TASK_DATA_DIR = DATA_DIR;
+    try {
+      const expected = params.predefinedVarsEnv(
+        { id: predefinedTaskId, title: 'Builtin probe', project_path: PROJECT_A },
+        {
+          cwd: PROJECT_A,
+          workspaceVars: workspace.workspaceEnv({ id: predefinedTaskId }, { runId: predefinedRunId }),
+        }
+      );
+      const gateEnv = envToMap(readRunEnv(predefinedTaskId, predefinedRunId));
+      for (const name of PREDEFINED) {
+        assert(
+          gateEnv[name] === expected[name],
+          name + ' gate=' + JSON.stringify(gateEnv[name]) + ' agent-source=' + JSON.stringify(expected[name])
+        );
+      }
+      assert(
+        expected.SCHEDULED_TASK_RUN_ID === predefinedRunId,
+        'agent-source RUN_ID=' + JSON.stringify(expected.SCHEDULED_TASK_RUN_ID)
+      );
+      assert(
+        expected.SCHEDULED_TASK_RUN_DIR.indexOf(predefinedRunId) >= 0,
+        'agent-source RUN_DIR=' + expected.SCHEDULED_TASK_RUN_DIR
+      );
+      return 'gate env == predefinedVarsEnv() for all seven names on run ' + predefinedRunId;
+    } finally {
+      if (previousRoot === undefined) delete process.env.SCHEDULED_TASK_DATA_DIR;
+      else process.env.SCHEDULED_TASK_DATA_DIR = previousRoot;
+    }
   });
 }
 

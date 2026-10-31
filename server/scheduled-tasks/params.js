@@ -50,8 +50,6 @@ export const RESERVED_SCHEDULED_TASK_ENV = [
   'SCHEDULED_TASK_CWD',
   'SCHEDULED_TASK_PROJECT',
   'SCHEDULED_TASK_DIR',
-  'SCHEDULED_TASK_STATE_DIR',
-  'SCHEDULED_TASK_TMP_DIR',
   'SCHEDULED_TASK_RUN_ID',
   'SCHEDULED_TASK_RUN_DIR',
   PARAMS_ENV_NAME,
@@ -59,14 +57,23 @@ export const RESERVED_SCHEDULED_TASK_ENV = [
 
 /**
  * §13.1: every predefined variable a run exports, with the one-line meaning used
- * by the agent prompt block and by the MCP tool descriptions (single source of
- * truth, so those texts cannot drift).
+ * by the runtime env (predefinedVarsEnv), the agent prompt block, the MCP tool
+ * descriptions and the docs (single source of truth, so those texts cannot
+ * drift).
  *
- * group      'builtin'   the built-in parameters (task/run identity)
- *            'workspace' the §10.4 workspace variables
- * agentEnv   true  => the agent session also receives it as an environment variable
- *            false => script-gate-only; the agent reads the same value as text in
- *                     the Scheduled task workspace block
+ * group    'task'      identity/project of the task and of this run
+ *          'workspace' the §10.4 per-task root / run directory
+ * builtin  true => also part of §13.1's BUILTIN_PARAMS (builtinParamsEnv)
+ *
+ * The framework does NOT prescribe how a task stores state: it only gives the
+ * task a root directory (DIR) and this run's ids/paths. Organizing that root is
+ * up to the task (§10.4).
+ *
+ * Every entry is exported to BOTH the script gate and the agent session (§13.3):
+ * the runner builds one predefinedVarsEnv() object and spreads it into both
+ * environments, so the two paths can never disagree. The §12 declared parameters
+ * are the only per-path extra (the gate merges them too; the agent gets them
+ * through options.env).
  *
  * The reserved SCHEDULED_TASK_* namespace is deliberately NOT the §12.2
  * SCHEDULED_TASK_PARAM_* namespace, so a declared parameter can never replace a
@@ -74,90 +81,79 @@ export const RESERVED_SCHEDULED_TASK_ENV = [
  */
 export const PREDEFINED_TASK_VARS = [
   {
-    group: 'builtin',
+    group: 'task',
+    builtin: true,
     name: 'TITLE',
     envName: 'SCHEDULED_TASK_TITLE',
     description: "the task's name",
-    agentEnv: true,
   },
   {
-    group: 'builtin',
+    group: 'task',
+    builtin: true,
     name: 'CWD',
     envName: 'SCHEDULED_TASK_CWD',
     description: 'the working directory of this run',
-    agentEnv: true,
   },
   {
-    group: 'builtin',
+    group: 'task',
+    builtin: true,
     name: 'PROJECT',
     envName: 'SCHEDULED_TASK_PROJECT',
     description: 'the absolute path of the project root that owns the task',
-    agentEnv: true,
   },
   {
-    group: 'workspace',
+    group: 'task',
+    builtin: false,
     name: 'ID',
     envName: 'SCHEDULED_TASK_ID',
-    description: 'the id of the scheduled-task row, stable across its runs — this is NOT a chat session id',
-    agentEnv: false,
+    description:
+      'the scheduled-task row id, stable across the runs of that task — this is NOT a chat session id',
   },
   {
     group: 'workspace',
+    builtin: false,
     name: 'DIR',
     envName: 'SCHEDULED_TASK_DIR',
-    description: 'the root of the workspace tree of this task',
-    agentEnv: false,
+    description:
+      "the root directory of this task's own workspace — it belongs to the task: organize it however the task wants, and keep any cross-run state inside it",
   },
   {
     group: 'workspace',
-    name: 'STATE_DIR',
-    envName: 'SCHEDULED_TASK_STATE_DIR',
-    description: 'durable per-task state directory (survives across runs)',
-    agentEnv: false,
-  },
-  {
-    group: 'workspace',
-    name: 'TMP_DIR',
-    envName: 'SCHEDULED_TASK_TMP_DIR',
-    description: 'task scratch directory, wiped at the start of every run',
-    agentEnv: false,
-  },
-  {
-    group: 'workspace',
+    builtin: false,
     name: 'RUN_ID',
     envName: 'SCHEDULED_TASK_RUN_ID',
     description: 'the id of this run (not the task id)',
-    agentEnv: false,
   },
   {
     group: 'workspace',
+    builtin: false,
     name: 'RUN_DIR',
     envName: 'SCHEDULED_TASK_RUN_DIR',
     description: 'this run directory (run.json, prompt.md, output.md, logs/)',
-    agentEnv: false,
   },
 ];
 
 /** §13.1: the built-in-parameter subset (the three parameters of every run). */
-export const BUILTIN_PARAMS = PREDEFINED_TASK_VARS.filter((entry) => entry.group === 'builtin');
-
-/** §13.1: every predefined env name (built-ins + workspace variables). */
-export const PREDEFINED_ENV_NAMES = PREDEFINED_TASK_VARS.map((entry) => entry.envName);
+export const BUILTIN_PARAMS = PREDEFINED_TASK_VARS.filter((entry) => entry.builtin);
 
 /**
- * §13.3: the exact built-in names server/claude-sdk.js may merge into the
- * provider environment (the workspace variables stay script-gate-only; the agent
- * reads them as text in the workspace block). Kept here so the runner, the docs
- * and the allowlist cannot drift.
+ * §13.1/§13.3: every predefined env name, in table order. Single source for the
+ * runtime env (predefinedVarsEnv), the prompt block, the MCP descriptions and the
+ * server/claude-sdk.js options.env allowlist — there is no second name list.
  */
+export const PREDEFINED_ENV_NAMES = PREDEFINED_TASK_VARS.map((entry) => entry.envName);
+
+/** §13.1: the built-in-parameter subset of the predefined env names. */
 export const BUILTIN_PARAM_ENV_NAMES = BUILTIN_PARAMS.map((entry) => entry.envName);
 
 /**
- * §13.6: the one id that is NOT an environment variable, worded once so the agent
- * prompt, the MCP descriptions and the docs stay identical.
+ * §13.6: the three ids, worded once so the agent prompt, the MCP descriptions and
+ * the docs stay identical. From the agent's point of view SCHEDULED_TASK_ID is a
+ * task row id, never the chat session id (which is not an environment variable at
+ * all).
  */
 export const SESSION_ID_NOTE =
-  'The chat session id a run creates is NOT an environment variable and does not exist when the run starts: the provider creates it after the run begins, so it is null for a dry run or a failed start. It is recorded on the run instead — the run history in this app and runs/<runId>/run.json "sessionId" — not in the gate env.';
+  'SCHEDULED_TASK_ID is the scheduled-task row id (stable across every run of that task) and SCHEDULED_TASK_RUN_ID is this run id: neither is the chat session id. The provider creates the chat session id only after the run starts, so it does not exist when the run begins (null for a dry run or a failed start) and it is never an environment variable; the app records it on the run instead — see the run history and runs/<runId>/run.json "sessionId", written by finalizeRunWorkspace.';
 
 function fail(message, code = 'invalid_input') {
   return { ok: false, code, message };
@@ -460,31 +456,62 @@ export function builtinParamsEnv(task, { cwd } = {}) {
 }
 
 /**
+ * §13.1/§13.3: every predefined variable of one run in a single object, built
+ * from the table above, so the script gate and the agent session receive exactly
+ * the same names and values — the runner spreads this object into both.
+ *
+ * `workspaceVars` is workspaceEnv(task, { runId }) from ./workspace.js (the five
+ * §10.4 names) or null when the workspace layer is disabled; params.js stays pure,
+ * so the caller passes the paths in. Without it the workspace group is absent
+ * from both environments (and from the prompt block).
+ * @param {{id?: unknown, title?: string, project_path?: string, projectPath?: string}} task
+ * @param {{cwd?: string, workspaceVars?: Record<string, string>|null}} [options]
+ * @returns {Record<string, string>}
+ */
+export function predefinedVarsEnv(task, { cwd, workspaceVars } = {}) {
+  const source = isPlainObject(task) ? task : {};
+  const values = builtinParamsEnv(source, { cwd });
+  const id = source.id;
+  for (const entry of PREDEFINED_TASK_VARS) {
+    if (entry.name === 'ID') {
+      values[entry.envName] = id === undefined || id === null ? '' : String(id);
+    }
+  }
+  if (isPlainObject(workspaceVars)) {
+    for (const [key, value] of Object.entries(workspaceVars)) values[key] = value;
+  }
+  const env = {};
+  for (const entry of PREDEFINED_TASK_VARS) {
+    if (!Object.prototype.hasOwnProperty.call(values, entry.envName)) continue;
+    const value = values[entry.envName];
+    env[entry.envName] = value === undefined || value === null ? '' : String(value);
+  }
+  return env;
+}
+
+/**
  * §13.5: the always-on predefined-variables block of the agent prompt. Static —
- * it names every variable, says where the agent can read it and why, so the same
- * text describes every run and the agent reads the actual values from the
- * environment (built-ins, parameters) or from the workspace block above
- * (workspace variables).
+ * it names every predefined variable, says where the agent reads it and why, so
+ * the same text describes every run and the agent reads the actual values from
+ * the environment.
+ *
+ * `includeWorkspace: false` (the workspace layer is disabled for this run, or the
+ * task id is unusable) drops the workspace group, so the block never advertises a
+ * variable this run does not export.
+ * @param {{includeWorkspace?: boolean}} [options]
  * @returns {string} never null (unlike the §12.6 Parameters block)
  */
-export function predefinedVarsPromptBlock() {
+export function predefinedVarsPromptBlock({ includeWorkspace = true } = {}) {
+  const entries = includeWorkspace
+    ? PREDEFINED_TASK_VARS
+    : PREDEFINED_TASK_VARS.filter((entry) => entry.group !== 'workspace');
   const lines = [
     '## Predefined scheduled-task variables',
     '',
-    'The app injects these variables into the script gate of every run. Read them from the environment or from this block; never hardcode the task name, the project path or any workspace directory, so the task keeps working from any directory.',
+    'Every scheduled-task run injects these variables into the script gate environment and into this session environment. Read them from the environment; never hardcode the task name, the project path or any workspace directory, so the task keeps working from any directory. The task root (DIR) belongs to the task: the framework only writes task.json, prompt.md, README.md and runs/<runId>/ there, so keep any cross-run state you need inside that root, in whatever layout you choose:',
     '',
-    'Built-in parameters (script gate env + this session env):',
   ];
-  for (const entry of PREDEFINED_TASK_VARS) {
-    if (entry.group !== 'builtin') continue;
-    lines.push('- ' + entry.name + ' ($' + entry.envName + ') — ' + entry.description + '.');
-  }
-  lines.push('');
-  lines.push(
-    'Workspace variables (script gate env; the same values are spelled out in the Scheduled task workspace block above):'
-  );
-  for (const entry of PREDEFINED_TASK_VARS) {
-    if (entry.group !== 'workspace') continue;
+  for (const entry of entries) {
     lines.push('- ' + entry.name + ' ($' + entry.envName + ') — ' + entry.description + '.');
   }
   lines.push('');

@@ -483,9 +483,9 @@ async function main() {
     assertFile(path.join(dir, 'task.json'), 'task root');
     assertFile(path.join(dir, 'prompt.md'), 'task root');
     assertFile(path.join(dir, 'README.md'), 'task root');
-    assertDir(path.join(dir, 'state'), 'task root');
-    assertDir(path.join(dir, 'tmp'), 'task root');
-    assertDir(path.join(dir, 'runs'), 'task root');
+    // §10.4: no state/ or tmp/ is prescribed or created by the framework.
+    assert(!fs.existsSync(path.join(dir, 'state')), 'task root must not get a state/ dir');
+    assert(!fs.existsSync(path.join(dir, 'tmp')), 'task root must not get a tmp/ dir');
     const snapshot = readJsonFile(path.join(dir, 'task.json'));
     assert(snapshot.schemaVersion === 1, 'task.json schemaVersion: ' + snapshot.schemaVersion);
     assert(snapshot.id === layoutTask.id, 'task.json id mismatch');
@@ -494,9 +494,9 @@ async function main() {
     assert(readTextFile(path.join(dir, 'prompt.md')) === 'LAYOUT_PROMPT', 'prompt.md is not the task prompt copy');
     const readme = readTextFile(path.join(dir, 'README.md'));
     assert(readme.indexOf('Scheduled task workspace') >= 0, 'README.md missing the layout heading');
-    assert(readme.indexOf('state/') >= 0, 'README.md missing the state/ contract');
-    assert(readme.indexOf('never write outside') >= 0 || readme.indexOf('Never write outside') >= 0, 'README.md missing the write-scope rule');
-    assert(fs.readdirSync(path.join(dir, 'tmp')).length === 0, 'task tmp/ should start empty');
+    assert(readme.indexOf('belongs to the task') >= 0, 'README.md missing the per-task-root contract');
+    assert(readme.indexOf('task.json, prompt.md and README.md') >= 0, 'README.md missing the framework-file list');
+    assert(readme.indexOf('Prefer keeping files the task generates') >= 0, 'README.md missing the write preference');
     return dir;
   });
 
@@ -519,7 +519,7 @@ async function main() {
     assertFile(path.join(runDir, 'prompt.md'), 'run');
     assertFile(path.join(runDir, 'output.md'), 'run');
     assertDir(path.join(runDir, 'logs'), 'run');
-    assert(!fs.existsSync(path.join(runDir, 'tmp')), 'per-run tmp/ should be removed when the run finishes');
+    assert(!fs.existsSync(path.join(runDir, 'tmp')), 'the framework must not create a per-run tmp/');
     const meta = readJsonFile(path.join(runDir, 'run.json'));
     assert(meta.schemaVersion === 1, 'run.json schemaVersion: ' + meta.schemaVersion);
     assert(meta.runId === layoutRun.id, 'run.json runId mismatch');
@@ -527,8 +527,6 @@ async function main() {
     assert(meta.status === 'success', 'run.json status: ' + meta.status);
     assert(meta.workspace && meta.workspace.root === DATA_DIR, 'run.json workspace.root mismatch: ' + JSON.stringify(meta.workspace));
     assert(meta.workspace.taskDir === taskDir, 'run.json workspace.taskDir mismatch');
-    assert(meta.workspace.stateDir === path.join(taskDir, 'state'), 'run.json workspace.stateDir mismatch');
-    assert(meta.workspace.tmpDir === path.join(taskDir, 'tmp'), 'run.json workspace.tmpDir mismatch');
     assert(meta.workspace.runDir === runDir, 'run.json workspace.runDir mismatch');
     const agentPrompt = readTextFile(path.join(runDir, 'prompt.md'));
     assert(agentPrompt.indexOf('## Scheduled task workspace') === 0, 'runs/<id>/prompt.md is missing the workspace block');
@@ -539,8 +537,8 @@ async function main() {
 
   // ── #8 script-gate env ──────────────────────────────────────────────────────
   const Q = String.fromCharCode(39);
-  const ENV_PROBE_COMMAND = 'printf ' + Q + '{"prompt":"%s"}' + Q + ' "$SCHEDULED_TASK_DIR|$SCHEDULED_TASK_STATE_DIR|$SCHEDULED_TASK_TMP_DIR|$SCHEDULED_TASK_RUN_ID|$SCHEDULED_TASK_RUN_DIR"';
-  await check('#8 the script gate sees the five SCHEDULED_TASK_* env vars', async () => {
+  const ENV_PROBE_COMMAND = 'printf ' + Q + '{"prompt":"%s"}' + Q + ' "$SCHEDULED_TASK_DIR|$SCHEDULED_TASK_RUN_ID|$SCHEDULED_TASK_RUN_DIR"';
+  await check('#8 the script gate sees the three SCHEDULED_TASK_* workspace vars', async () => {
     const probeTask = (await api('POST', base, {
       title: 'Env probe',
       prompt: 'ENV_PROBE_FALLBACK',
@@ -559,9 +557,9 @@ async function main() {
     const prefix = '[dry-run] ';
     assert(String(finished.output).indexOf(prefix) === 0, 'unexpected probe output: ' + JSON.stringify(finished.output));
     const values = String(finished.output).slice(prefix.length).split('|');
-    assert(values.length === 5, 'expected 5 env values, got ' + values.length + ': ' + JSON.stringify(values));
+    assert(values.length === 3, 'expected 3 env values, got ' + values.length + ': ' + JSON.stringify(values));
     const taskDir = path.join(DATA_DIR, probeTask.id);
-    const expected = [taskDir, path.join(taskDir, 'state'), path.join(taskDir, 'tmp'), started.id, path.join(taskDir, 'runs', started.id)];
+    const expected = [taskDir, started.id, path.join(taskDir, 'runs', started.id)];
     for (let i = 0; i < expected.length; i += 1) {
       assert(values[i] === expected[i], 'env var ' + i + ' mismatch: got ' + JSON.stringify(values[i]) + ' want ' + JSON.stringify(expected[i]));
     }

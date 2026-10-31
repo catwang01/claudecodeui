@@ -508,74 +508,81 @@ count of deleted real tasks.
 
 New error codes: `builtin_preset`, `invalid_catalog`, `no_tasks`.
 
-### 10.4 Per-task workspace (`server/scheduled-tasks/workspace.js`)
+### 10.4 Per-task root (`server/scheduled-tasks/workspace.js`)
 
 Root: `process.env.SCHEDULED_TASK_DATA_DIR` when set, otherwise
-`path.join(os.homedir(), '.claudecodeui', 'scheduled-tasks')`. Layout:
+`path.join(os.homedir(), '.claudecodeui', 'scheduled-tasks')`. Every task owns exactly one root
+directory, `<root>/<taskId>/`. The framework writes only its own files there; everything else in
+the root belongs to the task:
 
 ```
 <root>/<taskId>/
   task.json      machine snapshot of the task definition (schemaVersion, id, title, projectPath, provider, model, kind, rule, command, commandTimeoutSeconds, url?, updatedAt)
   prompt.md      current task prompt (copy; the DB row stays authoritative)
   README.md      the layout contract, generated on create/update (see below)
-  state/         durable per-task data — the ONLY place an agent may keep state between runs
   runs/<runId>/
     run.json     run metadata + workspace paths (see below)
     prompt.md    the full prompt sent to the agent (workspace block + effective prompt)
     output.md    final assistant output / error text
     logs/        script-gate stdout and other logs
-    tmp/         per-run scratch, removed when the run finishes
-  tmp/           task scratch, wiped at the start of every run
 ```
+
+The framework does **not** create, prescribe or wipe a `state/` or `tmp/` directory, and it never
+removes task files: how a task organizes its root and where it keeps state across runs is the task's
+own decision (a task may keep state in the root, pass its own path in as a parameter, or use anything
+else). `SCHEDULED_TASK_STATE_DIR`, `SCHEDULED_TASK_TMP_DIR` and `SCHEDULED_TASK_KEEP_RUN_TMP` are
+**retired** by this change. Migration: `$SCHEDULED_TASK_STATE_DIR` → a directory of the task's choosing
+under `$SCHEDULED_TASK_DIR` (e.g. `$SCHEDULED_TASK_DIR/state`); `$SCHEDULED_TASK_TMP_DIR` → e.g.
+`$SCHEDULED_TASK_DIR/tmp`.
 
 ```js
 export const SCHEDULED_TASK_SCHEMA_VERSION = 1;
 export function tasksRoot();
 export function isWorkspaceEnabled();          // SCHEDULED_TASKS_WORKSPACE=0 disables everything
-export function taskDir(taskId); taskStateDir(taskId); taskTmpDir(taskId); taskRunsDir(taskId);
-export function runDir(taskId, runId); runTmpDir(taskId, runId);
-export function ensureTaskWorkspace(task);      // creates dirs + task.json + prompt.md + README.md
-export function ensureRunWorkspace(task, run, { effectivePrompt } = {});   // dirs + run.json + prompt.md
-export function clearTaskTmp(taskId);           // wipe <taskDir>/tmp before a run
-export function finalizeRunWorkspace(task, run, patch);  // output.md, run.json status, per-run tmp cleanup
-export function workspaceEnv(task, { runId } = {});      // extra env for the script gate
+export function taskDir(taskId); taskRunsDir(taskId);
+export function runDir(taskId, runId);
+export function ensureTaskWorkspace(task);      // task root + task.json + prompt.md + README.md
+export function ensureRunWorkspace(task, run, { effectivePrompt } = {});   // run dir + run.json + prompt.md + logs/
+export function finalizeRunWorkspace(task, run, patch);  // output.md, run.json status
+export function workspaceEnv(task, { runId } = {});      // DIR/RUN_ID/RUN_DIR for gate + agent
 export function workspacePromptBlock(task, { runId } = {});  // markdown block prepended to the prompt
 ```
 Every function is a no-op returning `null` when `isWorkspaceEnabled()` is false, and all of them are
 best-effort: filesystem failures are logged, never thrown to the caller (a task must still run).
 `run.json` fields: `{ schemaVersion, runId, taskId, title, projectPath, trigger, scheduledFor,
 startedAt, finishedAt, status, sessionId, scriptExitCode, error, workspace: { root, taskDir,
-stateDir, tmpDir, runDir } }`.
+runDir } }`.
 
-Env added to the script gate (never replacing the existing three):
-`SCHEDULED_TASK_DIR`, `SCHEDULED_TASK_STATE_DIR`, `SCHEDULED_TASK_TMP_DIR`,
-`SCHEDULED_TASK_RUN_ID`, `SCHEDULED_TASK_RUN_DIR`.
+Env added for every run — to the **script gate and the agent** (§13.3), never replacing `process.env`:
+`SCHEDULED_TASK_DIR` (the task root), `SCHEDULED_TASK_RUN_ID`, `SCHEDULED_TASK_RUN_DIR`.
 
 Prompt block (`workspacePromptBlock`) is prepended to the prompt the agent receives, in English,
-and states: the task id/title/run id, the project directory the agent may edit, the task root, the
-durable `state/` directory ("keep every long-lived cache, counter or note here"), this run's
-directory (`runs/<runId>/` with `output.md`, `logs/`, `tmp/`), the task `tmp/` that is wiped at the
-start of each run ("never keep anything you need across runs there"), and "never write outside the
-task root and the project directory". The same layout text is written to `README.md` and appended to
-the `schedule_create` / `schedule_preset_install` tool descriptions, so an agent authoring a task
-knows the contract before the first run.
+and states: the task id/title/run id, the project directory the agent may edit, the task root
+("this directory belongs to the task. Organize it however the task wants; keeping long-lived state,
+caches or notes there makes them survive across runs, but how (or whether) to do that is the task's
+own choice"), the framework files already written there (`task.json`, `prompt.md`, `README.md`) and
+this run's directory (`runs/<runId>/` with `run.json`, `prompt.md`, `output.md`, `logs/`), closing
+with the preference "prefer keeping files the task generates inside the task root or the project
+directory" (guidance, not a hard boundary). The same layout text is written to `README.md` and
+appended to the `schedule_create` / `schedule_preset_install` tool descriptions, so an agent
+authoring a task knows the contract before the first run.
 
 Runner integration (`server/scheduled-tasks/runner.js`):
-1. In `execute()`, before the script gate: `clearTaskTmp(task.id)`, `ensureTaskWorkspace(task)`,
-   `ensureRunWorkspace(task, run)`.
-2. The script gate env gains `workspaceEnv(task, { runId: run.id })`.
-3. After the gate decision, the agent is called with
-   `workspacePromptBlock(task, { runId }) + '\n\n' + effectivePrompt`.
-   `prompt_used` keeps the pre-block effective prompt (unchanged §7 semantics) and
-   `runs/<runId>/prompt.md` stores the full agent-facing text.
+1. In `execute()`, before the script gate: `ensureTaskWorkspace(task)`, `ensureRunWorkspace(task, run)`.
+2. The script gate env gains `predefinedVarsEnv(task, { cwd, workspaceVars })` (§13.1) — merged over
+   `process.env`, never replacing it.
+3. After the gate decision, the agent is called with the workspace block, the §13.5 predefined block,
+   the optional §12.6 parameters block and the effective prompt. `prompt_used` keeps the pre-block
+   effective prompt (unchanged §7 semantics) and `runs/<runId>/prompt.md` stores the full agent-facing
+   text.
 4. `finishOnce` calls `finalizeRunWorkspace(...)` (best-effort) with status/output/error/sessionId/
-   script fields; per-run `tmp/` is removed unless `SCHEDULED_TASK_KEEP_RUN_TMP=1`.
+   script fields; nothing under the task root is ever removed.
 5. Dry-run (`SCHEDULED_TASK_DRY_RUN=1`) still creates the workspace and writes `prompt.md`/
    `output.md`, so the layout is verifiable without model calls. Dry-run output stays
    `[dry-run] <effective prompt>` (without the block).
 
 Task lifecycle: `management.createTask`/`updateTask` call `ensureTaskWorkspace` (best-effort) so
-the directories, `README.md` and `task.json` exist right after creation. `DELETE /api/scheduled-tasks/:id`
+the root, `README.md` and `task.json` exist right after creation. `DELETE /api/scheduled-tasks/:id`
 accepts `?purge=1` to remove `<root>/<taskId>` (default: data is kept).
 
 ### 10.5 REST additions (same router, same auth)
@@ -687,12 +694,12 @@ the existing preset keeps working untouched):
 - `command` (script gate, self-contained `node -e`, no extra files): locate the project's Claude
   session directory with the app's own rule (`absolutePath.replace(/[^a-zA-Z0-9]/g, '-')` under
   `~/.claude/projects`), compare the newest transcript's mtime with the cursor kept in
-  `$SCHEDULED_TASK_STATE_DIR/autodoc-cursor.json`, then either print
+  `$SCHEDULED_TASK_DIR/autodoc-cursor.json` (task-owned path, §10.4), then either print
   `{"skip":true,"reason":"no new conversations since <ts>"}` (no model call) or
   `{"prompt":"<the refresh prompt>"}`.
 - `prompt`: read the conversations/changes since the cursor and update the project's docs
-  (`docs/` plus `CLAUDE.md` when present); keep notes and the new cursor under the task's
-  `state/` directory (the layout of §10.4).
+  (`docs/` plus `CLAUDE.md` when present); keep notes and the new cursor under the task root
+  (the layout of §10.4).
 - Generated runs are ordinary sessions of the target project and are hidden from the sidebar by
   default through the existing scheduled-task rule (§9), which replaces AutoDoc's own hiding.
 

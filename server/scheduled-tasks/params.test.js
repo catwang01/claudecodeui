@@ -22,6 +22,7 @@ import {
   paramEnvValue,
   paramsPromptBlock,
   parseParamDefs,
+  predefinedVarsEnv,
   predefinedVarsPromptBlock,
   resolveParams,
 } from './params.js';
@@ -432,7 +433,7 @@ describe('predefined task variables (§13)', () => {
     expect(builtinParamsEnv(undefined).SCHEDULED_TASK_CWD).toBe('');
   });
 
-  it('advertises the nine predefined names, grouped, with the env/agent split', () => {
+  it('advertises the seven predefined names (one root, run id, run dir)', () => {
     expect(BUILTIN_PARAMS.map((entry) => entry.envName)).toEqual([
       'SCHEDULED_TASK_TITLE',
       'SCHEDULED_TASK_CWD',
@@ -445,20 +446,42 @@ describe('predefined task variables (§13)', () => {
       'SCHEDULED_TASK_PROJECT',
       'SCHEDULED_TASK_ID',
       'SCHEDULED_TASK_DIR',
-      'SCHEDULED_TASK_STATE_DIR',
-      'SCHEDULED_TASK_TMP_DIR',
       'SCHEDULED_TASK_RUN_ID',
       'SCHEDULED_TASK_RUN_DIR',
     ]);
-    expect(PREDEFINED_TASK_VARS.filter((entry) => entry.group === 'workspace')).toHaveLength(6);
-    // Only the three built-ins reach the agent environment (runner.js); the
-    // workspace group is script-gate-only and reaches the agent as prompt text.
-    expect(PREDEFINED_TASK_VARS.filter((entry) => entry.agentEnv).map((entry) => entry.envName)).toEqual(
-      BUILTIN_PARAM_ENV_NAMES
-    );
+    expect(PREDEFINED_TASK_VARS.filter((entry) => entry.group === 'workspace')).toHaveLength(3);
+    // §10.4: the framework no longer prescribes state/ or tmp/ directories.
+    expect(PREDEFINED_ENV_NAMES).not.toContain('SCHEDULED_TASK_STATE_DIR');
+    expect(PREDEFINED_ENV_NAMES).not.toContain('SCHEDULED_TASK_TMP_DIR');
     for (const name of PREDEFINED_ENV_NAMES) {
       expect(RESERVED_SCHEDULED_TASK_ENV).toContain(name);
     }
+  });
+
+  it('predefinedVarsEnv is the one object both execution paths spread', () => {
+    const env = predefinedVarsEnv(
+      { id: 't1', title: 'nightly', project_path: '/proj' },
+      {
+        cwd: '/proj',
+        workspaceVars: {
+          SCHEDULED_TASK_DIR: '/data/t1',
+          SCHEDULED_TASK_RUN_ID: 'run-1',
+          SCHEDULED_TASK_RUN_DIR: '/data/t1/runs/run-1',
+        },
+      }
+    );
+    expect(Object.keys(env)).toEqual(PREDEFINED_ENV_NAMES);
+    expect(env.SCHEDULED_TASK_ID).toBe('t1');
+    expect(env.SCHEDULED_TASK_DIR).toBe('/data/t1');
+    expect(env.SCHEDULED_TASK_RUN_ID).toBe('run-1');
+    expect(env.SCHEDULED_TASK_RUN_DIR).toBe('/data/t1/runs/run-1');
+    // Without a workspace the workspace group is absent from both paths.
+    expect(Object.keys(predefinedVarsEnv({ id: 't1' }))).toEqual([
+      'SCHEDULED_TASK_TITLE',
+      'SCHEDULED_TASK_CWD',
+      'SCHEDULED_TASK_PROJECT',
+      'SCHEDULED_TASK_ID',
+    ]);
   });
 
   it('keeps the param namespace disjoint from every predefined name (§13.2)', () => {
@@ -513,13 +536,24 @@ describe('predefined task variables (§13)', () => {
       expect(block).toContain(entry.description);
     }
     expect(block).toContain('never hardcode');
-    expect(block).toContain('Built-in parameters');
-    expect(block).toContain('Workspace variables');
+    expect(block).toContain('belongs to the task');
     expect(block).toContain(PARAM_ENV_PREFIX);
     expect(block).toContain(PARAMS_ENV_NAME);
     // §13: the three ids are distinguished and the session id is not an env var.
     expect(block).toContain('NOT a chat session id');
     expect(block).toContain(SESSION_ID_NOTE);
+    // §10.4: the framework files the task must not overwrite are named.
+    expect(block).toContain('task.json, prompt.md, README.md');
+    // With the workspace disabled the block drops the workspace group, so it
+    // never advertises a variable that run does not export.
+    const noWorkspace = predefinedVarsPromptBlock({ includeWorkspace: false });
+    for (const name of PREDEFINED_ENV_NAMES) {
+      if (name === 'SCHEDULED_TASK_DIR' || name === 'SCHEDULED_TASK_RUN_ID' || name === 'SCHEDULED_TASK_RUN_DIR') {
+        expect(noWorkspace).not.toContain('$' + name);
+      } else {
+        expect(noWorkspace).toContain('$' + name);
+      }
+    }
     // The §12.6 Parameters block stays conditional; this block never is.
     expect(paramsPromptBlock([], {})).toBeNull();
   });

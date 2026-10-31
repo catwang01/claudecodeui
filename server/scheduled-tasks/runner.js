@@ -22,11 +22,12 @@
  * promptUsed = <effective prompt>.
  *
  * Workspace (§10.4): every run plans its on-disk workspace through
- * ./workspace.js — the task tree (task.json/README.md/state/tmp) and the run
- * directory (run.json/prompt.md/logs/tmp) exist before the script gate, the gate
- * receives the SCHEDULED_TASK_*_DIR env vars, the agent prompt is prefixed with
- * workspacePromptBlock(...) while promptUsed stays the effective prompt, and
- * finishOnce records output.md/run.json through finalizeRunWorkspace.
+ * ./workspace.js — the task root (task.json/README.md/prompt.md) and this run's
+ * directory (run.json/prompt.md/output.md/logs) exist before the script gate, the
+ * gate and the agent both receive SCHEDULED_TASK_DIR / RUN_ID / RUN_DIR, the agent
+ * prompt is prefixed with workspacePromptBlock(...) while promptUsed stays the
+ * effective prompt, and finishOnce records output.md/run.json through
+ * finalizeRunWorkspace. The rest of the task root belongs to the task.
  * SCHEDULED_TASKS_WORKSPACE=0 disables the whole layer.
  *
  * Parameters (§12): the task's ParamDef[] is resolved before the script gate into
@@ -35,9 +36,9 @@
  * run row (params_json) and runs/<runId>/run.json (params).
  *
  * Predefined variables (§13): every run exports SCHEDULED_TASK_ID, TITLE, CWD,
- * PROJECT, DIR, STATE_DIR, TMP_DIR, RUN_ID and RUN_DIR to the script gate; the
- * agent (options.env) additionally receives TITLE/CWD/PROJECT and the §12
- * parameters. A static "Predefined scheduled-task variables" block is prepended
+ * PROJECT, DIR, RUN_ID and RUN_DIR plus the §12 parameters to the script gate AND
+ * to the agent (options.env), from one predefinedVarsEnv() object, so both paths
+ * always agree. A static "Predefined scheduled-task variables" block is prepended
  * to the prompt, so a task never has to hardcode its project directory.
  */
 
@@ -46,7 +47,6 @@ import { scheduledTasksDb } from '../modules/database/index.js';
 import { addProjectManually } from '../projects.js';
 import { queryClaudeSDK, abortClaudeSDKSession } from '../claude-sdk.js';
 import {
-  clearTaskTmp,
   ensureRunWorkspace,
   ensureTaskWorkspace,
   finalizeRunWorkspace,
@@ -55,9 +55,9 @@ import {
 } from './workspace.js';
 // §12/§13: the parameter layer is pure; the runner only resolves and exports it.
 import {
-  builtinParamsEnv,
   parseParamDefs,
   paramsPromptBlock,
+  predefinedVarsEnv,
   predefinedVarsPromptBlock,
   resolveParams,
 } from './params.js';
@@ -231,17 +231,16 @@ export function createTaskRunner(deps = {}) {
    * exit code, and turn the JSON envelope into a skip/prompt decision.
    * Never rejects.
    */
-  function runScriptGate(task, projectPath, builtinVars, workspaceVars, paramVars) {
+  function runScriptGate(task, projectPath, predefinedVars, paramVars) {
     const command = task.command;
     const timeoutSeconds = resolveCommandTimeoutSeconds(task);
     const env = {
       ...process.env,
-      SCHEDULED_TASK_ID: task.id ?? '',
-      // §13.3: the built-ins come first; the workspace variables (§10.4) and the
-      // parameters (§12.2) are merged after them and can never collide with a
-      // built-in, because their namespaces are disjoint (§13.2).
-      ...(builtinVars ?? {}),
-      ...(workspaceVars ?? {}),
+      // §13.3: the predefined variables come first (the same object the agent
+      // env is built from); the parameters (§12.2) are merged after them and can
+      // never collide with a predefined name, because their namespaces are
+      // disjoint (§13.2).
+      ...(predefinedVars ?? {}),
       ...(paramVars ?? {}),
     };
 
@@ -363,16 +362,19 @@ export function createTaskRunner(deps = {}) {
     const paramValues = resolved.values;
     const paramVars = resolved.env;
     const paramBlock = paramsPromptBlock(resolved.params, paramValues);
-    // §13.3: built-ins come from the task and this run only — a declared parameter
-    // or a per-run override can never change them.
-    const builtinVars = builtinParamsEnv(task, { cwd: projectPath || process.cwd() });
 
     // §10.4 step 1: plan the on-disk workspace before the script gate, so the
     // layout exists even when the gate skips or fails the run. Best-effort.
-    clearTaskTmp(task.id);
     ensureTaskWorkspace(task);
     ensureRunWorkspace(task, run);
     const workspaceVars = workspaceEnv(task, { runId: run.id });
+    // §13.1/§13.3: one object, built from the task and this same runId, is spread
+    // into the script-gate env below and into the agent's options.env, so the two
+    // paths can never disagree on a value.
+    const predefinedVars = predefinedVarsEnv(task, {
+      cwd: projectPath || process.cwd(),
+      workspaceVars,
+    });
 
     // §7 script gate: runs before the provider check and before any agent call.
     if (typeof task.command === 'string' && task.command.trim()) {
@@ -385,7 +387,7 @@ export function createTaskRunner(deps = {}) {
         });
       }
 
-      const gate = await runScriptGate(task, projectPath, builtinVars, workspaceVars, paramVars);
+      const gate = await runScriptGate(task, projectPath, predefinedVars, paramVars);
       scriptExitCode = gate.scriptExitCode ?? null;
       scriptOutput = gate.scriptOutput ?? null;
 
@@ -410,7 +412,10 @@ export function createTaskRunner(deps = {}) {
 
     // §13.5: the predefined-variables block describes every run; §12.6's
     // Parameters block is appended after it only when the task declares parameters.
-    const predefinedBlock = predefinedVarsPromptBlock();
+    // §13.5: drop the workspace group when this run has no workspace (layer
+    // disabled or unusable task id), so the text never advertises a variable the
+    // run does not export.
+    const predefinedBlock = predefinedVarsPromptBlock({ includeWorkspace: workspaceVars !== null });
     const extraBlocks = paramBlock ? `${predefinedBlock}\n\n${paramBlock}` : predefinedBlock;
     // §10.4 step 3: prompt.md stores the full agent-facing text, which is only
     // known once the gate has decided the effective prompt.
@@ -494,10 +499,10 @@ export function createTaskRunner(deps = {}) {
     // must be bypassed — same as the external API route (server/routes/agent.js).
     const options = { cwd: projectPath, permissionMode: 'bypassPermissions' };
     if (task.model) options.model = task.model;
-    // §12.5/§13.3: hand the built-ins and the resolved parameters to the provider
-    // CLI through server/claude-sdk.js, which merges options.env into
+    // §12.5/§13.3: hand the predefined variables and the resolved parameters to the
+    // provider CLI through server/claude-sdk.js, which merges options.env into
     // sdkOptions.env (only these two namespaces are accepted there).
-    options.env = { ...builtinVars, ...(paramVars ?? {}) };
+    options.env = { ...predefinedVars, ...(paramVars ?? {}) };
 
     const agentResult = (status, extra = {}) =>
       finishOnce(task, run, status, {

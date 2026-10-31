@@ -266,8 +266,10 @@ describe('loadBuiltinCatalog (shipped catalog)', () => {
         expect(ids.has(task.id), `duplicate template id ${task.id}`).toBe(false);
         ids.add(task.id);
         expect(['daily', 'weekly', 'cron', 'interval']).toContain(task.rule.kind);
-        expect(task.prompt).toMatch(/SCHEDULED_TASK_STATE_DIR/);
-        expect(task.prompt).toMatch(/runs\//);
+        expect(task.prompt).toMatch(/SCHEDULED_TASK_DIR/);
+        expect(task.prompt).toMatch(/runs\/|SCHEDULED_TASK_RUN_DIR/);
+        // §10.4: the framework no longer hands out state/ or tmp/ dirs.
+        expect(task.prompt).not.toMatch(/SCHEDULED_TASK_STATE_DIR|SCHEDULED_TASK_TMP_DIR/);
         if (task.command) gated += 1;
       }
     }
@@ -720,7 +722,7 @@ describe('builtin auto-doc preset (docs §11.3)', () => {
     expect(typeof template.command).toBe('string');
     expect(template.command.length).toBeGreaterThan(0);
     expect(template.prompt).toContain('CLAUDE.md');
-    expect(template.prompt).toContain('SCHEDULED_TASK_STATE_DIR');
+    expect(template.prompt).toContain('SCHEDULED_TASK_DIR');
   });
 
   it('lists the preset and installs one enabled task', async () => {
@@ -771,9 +773,8 @@ describe('builtin auto-doc preset (docs §11.3)', () => {
           PATH: path.dirname(process.execPath) + path.delimiter + (process.env.PATH || ''),
           HOME: home,
           SCHEDULED_TASK_PROJECT: project,
-          SCHEDULED_TASK_DIR: tmp,
-          SCHEDULED_TASK_STATE_DIR: stateDir,
-          SCHEDULED_TASK_TMP_DIR: path.join(tmp, 'tmp'),
+          // §10.4: the cursor now lives in the task root.
+          SCHEDULED_TASK_DIR: stateDir,
         };
         const stdout = execFileSync('sh', ['-c', template.command], { cwd: project, env, encoding: 'utf8' });
         return JSON.parse(stdout.trim());

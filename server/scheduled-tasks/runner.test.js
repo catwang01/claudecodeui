@@ -24,13 +24,7 @@ import { scheduledTasksDb } from '../modules/database/index.js';
 import { addProjectManually } from '../projects.js';
 import { queryClaudeSDK, abortClaudeSDKSession } from '../claude-sdk.js';
 import { createTaskRunner, startTaskRun } from './runner.js';
-import {
-  runDir,
-  taskDir,
-  taskStateDir,
-  taskTmpDir,
-  workspacePromptBlock,
-} from './workspace.js';
+import { runDir, taskDir, workspacePromptBlock } from './workspace.js';
 import { PREDEFINED_ENV_NAMES, predefinedVarsPromptBlock } from './params.js';
 
 let dataDir;
@@ -469,13 +463,15 @@ describe('workspace (§10.4)', () => {
     expect(fs.existsSync(path.join(taskDir('t1'), 'README.md'))).toBe(true);
     expect(fs.existsSync(path.join(taskDir('t1'), 'prompt.md'))).toBe(true);
     expect(fs.readFileSync(path.join(taskDir('t1'), 'prompt.md'), 'utf8')).toBe('do stuff');
-    expect(fs.statSync(taskStateDir('t1')).isDirectory()).toBe(true);
+    // §10.4: the framework creates no state/ or tmp/ — the root is the task's.
+    expect(fs.existsSync(path.join(taskDir('t1'), 'state'))).toBe(false);
+    expect(fs.existsSync(path.join(taskDir('t1'), 'tmp'))).toBe(false);
 
     const dir = runDir('t1', 'run-1');
     expect(readJson(path.join(dir, 'run.json')).status).toBe('success');
     expect(fs.readFileSync(path.join(dir, 'output.md'), 'utf8')).toBe('[dry-run] do stuff');
     expect(fs.statSync(path.join(dir, 'logs')).isDirectory()).toBe(true);
-    // Per-run scratch is removed when the run finishes.
+    // The framework never creates a per-run tmp/ either.
     expect(fs.existsSync(path.join(dir, 'tmp'))).toBe(false);
   });
 
@@ -503,8 +499,6 @@ describe('workspace (§10.4)', () => {
     expect(record.workspace).toEqual({
       root: path.resolve(dataDir),
       taskDir: taskDir('t1'),
-      stateDir: taskStateDir('t1'),
-      tmpDir: taskTmpDir('t1'),
       runDir: runDir('t1', 'run-1'),
     });
   });
@@ -544,13 +538,11 @@ describe('workspace (§10.4)', () => {
 
     try {
       const envEcho =
-        "printf '{\"prompt\":\"%s|%s|%s|%s|%s\"}' \"$SCHEDULED_TASK_DIR\" \"$SCHEDULED_TASK_STATE_DIR\" \"$SCHEDULED_TASK_TMP_DIR\" \"$SCHEDULED_TASK_RUN_ID\" \"$SCHEDULED_TASK_RUN_DIR\"";
+        "printf '{\"prompt\":\"%s|%s|%s\"}' \"$SCHEDULED_TASK_DIR\" \"$SCHEDULED_TASK_RUN_ID\" \"$SCHEDULED_TASK_RUN_DIR\"";
       const result = await startTaskRun(makeTask({ project_path: projectDir, command: envEcho })).done;
 
       expect(result.status).toBe('success');
-      expect(result.promptUsed).toBe(
-        [taskDir('t1'), taskStateDir('t1'), taskTmpDir('t1'), 'run-1', runDir('t1', 'run-1')].join('|')
-      );
+      expect(result.promptUsed).toBe([taskDir('t1'), 'run-1', runDir('t1', 'run-1')].join('|'));
     } finally {
       fs.rmSync(projectDir, { recursive: true, force: true });
     }
@@ -568,13 +560,14 @@ describe('workspace (§10.4)', () => {
     expect(fs.readFileSync(path.join(dir, 'output.md'), 'utf8')).toBe('boom');
   });
 
-  it('keeps the per-run tmp when SCHEDULED_TASK_KEEP_RUN_TMP=1', async () => {
-    process.env.SCHEDULED_TASK_KEEP_RUN_TMP = '1';
+  it('creates no state/ or tmp/ dir for the task (the root belongs to the task)', async () => {
     queryClaudeSDK.mockResolvedValue(undefined);
 
     await startTaskRun(makeTask()).done;
 
-    expect(fs.statSync(path.join(runDir('t1', 'run-1'), 'tmp')).isDirectory()).toBe(true);
+    expect(fs.existsSync(path.join(taskDir('t1'), 'state'))).toBe(false);
+    expect(fs.existsSync(path.join(taskDir('t1'), 'tmp'))).toBe(false);
+    expect(fs.existsSync(path.join(runDir('t1', 'run-1'), 'tmp'))).toBe(false);
   });
 
   it('creates nothing and leaves the prompt untouched when the workspace is disabled', async () => {
@@ -584,12 +577,19 @@ describe('workspace (§10.4)', () => {
     const result = await startTaskRun(makeTask()).done;
 
     expect(result.promptUsed).toBe('do stuff');
-    // §13.5: the built-in block does not depend on the workspace layer.
+    // §13.5: with no workspace the block drops the workspace group.
     expect(queryClaudeSDK).toHaveBeenCalledWith(
-      `${predefinedVarsPromptBlock()}\n\ndo stuff`,
+      `${predefinedVarsPromptBlock({ includeWorkspace: false })}\n\ndo stuff`,
       expect.anything(),
       expect.anything()
     );
+    const [, options] = queryClaudeSDK.mock.calls[0];
+    expect(Object.keys(options.env).sort()).toEqual([
+      'SCHEDULED_TASK_CWD',
+      'SCHEDULED_TASK_ID',
+      'SCHEDULED_TASK_PROJECT',
+      'SCHEDULED_TASK_TITLE',
+    ]);
     expect(fs.readdirSync(dataDir)).toEqual([]);
   });
 });
@@ -626,16 +626,16 @@ describe('parameters (§12)', () => {
       // The gate cannot echo SCHEDULED_TASK_PARAMS inside its JSON envelope (the
       // value's own quotes would break it), so it writes the values to disk.
       const command =
-        'printf "%s" "$SCHEDULED_TASK_PARAM_REGION|$SCHEDULED_TASK_PARAM_THRESHOLD|$SCHEDULED_TASK_PARAM_DRYRUN" > "$SCHEDULED_TASK_TMP_DIR/params.txt"; ' +
-        'printf "%s" "$SCHEDULED_TASK_PARAMS" > "$SCHEDULED_TASK_TMP_DIR/params.json"; ' +
+        'printf "%s" "$SCHEDULED_TASK_PARAM_REGION|$SCHEDULED_TASK_PARAM_THRESHOLD|$SCHEDULED_TASK_PARAM_DRYRUN" > "$SCHEDULED_TASK_RUN_DIR/params.txt"; ' +
+        'printf "%s" "$SCHEDULED_TASK_PARAMS" > "$SCHEDULED_TASK_RUN_DIR/params.json"; ' +
         'printf \'{"skip":true,"reason":"gated"}\'';
       const result = await startTaskRun(
         makeTask({ project_path: projectDir, params_json: DEFS, command })
       ).done;
 
       expect(result.status).toBe('skipped');
-      expect(fs.readFileSync(path.join(taskTmpDir('t1'), 'params.txt'), 'utf8')).toBe('eu|3|false');
-      expect(fs.readFileSync(path.join(taskTmpDir('t1'), 'params.json'), 'utf8')).toBe(RESOLVED);
+      expect(fs.readFileSync(path.join(runDir('t1', 'run-1'), 'params.txt'), 'utf8')).toBe('eu|3|false');
+      expect(fs.readFileSync(path.join(runDir('t1', 'run-1'), 'params.json'), 'utf8')).toBe(RESOLVED);
     } finally {
       fs.rmSync(projectDir, { recursive: true, force: true });
     }
@@ -648,9 +648,13 @@ describe('parameters (§12)', () => {
 
     const [prompt, options] = queryClaudeSDK.mock.calls[0];
     expect(options.env).toEqual({
+      SCHEDULED_TASK_ID: 't1',
       SCHEDULED_TASK_TITLE: 'Nightly docs',
       SCHEDULED_TASK_CWD: '/tmp/scheduled-project',
       SCHEDULED_TASK_PROJECT: '/tmp/scheduled-project',
+      SCHEDULED_TASK_DIR: taskDir('t1'),
+      SCHEDULED_TASK_RUN_ID: 'run-1',
+      SCHEDULED_TASK_RUN_DIR: runDir('t1', 'run-1'),
       SCHEDULED_TASK_PARAM_REGION: 'eu',
       SCHEDULED_TASK_PARAM_THRESHOLD: '3',
       SCHEDULED_TASK_PARAM_DRYRUN: 'false',
@@ -717,18 +721,17 @@ describe('parameters (§12)', () => {
     await startTaskRun(makeTask()).done;
 
     const [prompt, options] = queryClaudeSDK.mock.calls[0];
-    // §13.4: no SCHEDULED_TASK_PARAM_* / SCHEDULED_TASK_PARAMS, but the built-ins
-    // are exported to the agent on every run.
+    // §13.4: no SCHEDULED_TASK_PARAM_* / SCHEDULED_TASK_PARAMS, but every
+    // predefined variable is exported to the agent on every run (§13.3).
     expect(options.env).toEqual({
+      SCHEDULED_TASK_ID: 't1',
       SCHEDULED_TASK_TITLE: 'Nightly docs',
       SCHEDULED_TASK_CWD: '/tmp/scheduled-project',
       SCHEDULED_TASK_PROJECT: '/tmp/scheduled-project',
+      SCHEDULED_TASK_DIR: taskDir('t1'),
+      SCHEDULED_TASK_RUN_ID: 'run-1',
+      SCHEDULED_TASK_RUN_DIR: runDir('t1', 'run-1'),
     });
-    // §13.3: the workspace group and SCHEDULED_TASK_ID stay script-gate-only; the
-    // agent reads them as text in the workspace block, never from its env.
-    for (const key of ['SCHEDULED_TASK_ID', 'SCHEDULED_TASK_DIR', 'SCHEDULED_TASK_STATE_DIR', 'SCHEDULED_TASK_RUN_ID']) {
-      expect(options.env).not.toHaveProperty(key);
-    }
     expect(prompt).toContain('## Predefined scheduled-task variables');
     expect(prompt).not.toContain('Scheduled task parameters');
     expect(scheduledTasksDb.createRun).toHaveBeenCalledWith(
@@ -744,15 +747,43 @@ describe('built-in parameters (§13)', () => {
 
     try {
       const command =
-        'printf "%s" "$SCHEDULED_TASK_TITLE|$SCHEDULED_TASK_CWD|$SCHEDULED_TASK_PROJECT" > "$SCHEDULED_TASK_TMP_DIR/builtins.txt"; ' +
+        'printf "%s" "$SCHEDULED_TASK_TITLE|$SCHEDULED_TASK_CWD|$SCHEDULED_TASK_PROJECT" > "$SCHEDULED_TASK_RUN_DIR/builtins.txt"; ' +
         'printf \'{"skip":true,"reason":"gated"}\'';
       const result = await startTaskRun(makeTask({ project_path: projectDir, command })).done;
 
       expect(result.status).toBe('skipped');
-      expect(fs.readFileSync(path.join(taskTmpDir('t1'), 'builtins.txt'), 'utf8')).toBe(
+      expect(fs.readFileSync(path.join(runDir('t1', 'run-1'), 'builtins.txt'), 'utf8')).toBe(
         'Nightly docs|' + projectDir + '|' + projectDir
       );
       expect(queryClaudeSDK).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('hands the script gate and the agent identical workspace values for one run', async () => {
+    queryClaudeSDK.mockResolvedValue(undefined);
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scheduled-runner-same-'));
+
+    try {
+      const command =
+        'printf "%s" "$SCHEDULED_TASK_DIR|$SCHEDULED_TASK_RUN_ID|$SCHEDULED_TASK_RUN_DIR" > "$SCHEDULED_TASK_RUN_DIR/gate-workspace.txt"; ' +
+        'printf \'{"prompt":"gated prompt"}\'';
+      await startTaskRun(makeTask({ project_path: projectDir, command })).done;
+
+      const gate = fs
+        .readFileSync(path.join(runDir('t1', 'run-1'), 'gate-workspace.txt'), 'utf8')
+        .split('|');
+      const [, options] = queryClaudeSDK.mock.calls[0];
+      // §13.3: one predefinedVarsEnv() object feeds both environments, so the
+      // gate and the agent must agree byte for byte on the same runId.
+      expect(gate).toEqual([
+        options.env.SCHEDULED_TASK_DIR,
+        options.env.SCHEDULED_TASK_RUN_ID,
+        options.env.SCHEDULED_TASK_RUN_DIR,
+      ]);
+      expect(options.env.SCHEDULED_TASK_RUN_ID).toBe('run-1');
+      expect(options.env.SCHEDULED_TASK_RUN_DIR).toBe(runDir('t1', 'run-1'));
     } finally {
       fs.rmSync(projectDir, { recursive: true, force: true });
     }
@@ -765,12 +796,11 @@ describe('built-in parameters (§13)', () => {
 
     const [prompt] = queryClaudeSDK.mock.calls[0];
     expect(prompt).toContain('## Predefined scheduled-task variables');
-    // §13.5: every predefined variable is named, grouped, with the id note.
+    // §13.5: every predefined variable is named, with the root/id note.
     for (const envName of PREDEFINED_ENV_NAMES) {
       expect(prompt).toContain('$' + envName);
     }
-    expect(prompt).toContain('Built-in parameters');
-    expect(prompt).toContain('Workspace variables');
+    expect(prompt).toContain('belongs to the task');
     expect(prompt).toMatch(/never hardcode/i);
     expect(prompt).toContain('NOT a chat session id');
     expect(prompt).toContain('run history');
@@ -784,13 +814,13 @@ describe('built-in parameters (§13)', () => {
 
     try {
       const gateCommand =
-        'printf "%s" "$SCHEDULED_TASK_TITLE|$SCHEDULED_TASK_PARAM_TITLE" > "$SCHEDULED_TASK_TMP_DIR/shadow.txt"; ' +
+        'printf "%s" "$SCHEDULED_TASK_TITLE|$SCHEDULED_TASK_PARAM_TITLE" > "$SCHEDULED_TASK_RUN_DIR/shadow.txt"; ' +
         'printf \'{"skip":true,"reason":"gated"}\'';
       const gated = await startTaskRun(
         makeTask({ project_path: projectDir, params_json: shadowDefs, command: gateCommand })
       ).done;
       expect(gated.status).toBe('skipped');
-      expect(fs.readFileSync(path.join(taskTmpDir('t1'), 'shadow.txt'), 'utf8')).toBe(
+      expect(fs.readFileSync(path.join(runDir('t1', 'run-1'), 'shadow.txt'), 'utf8')).toBe(
         'Nightly docs|shadow'
       );
 

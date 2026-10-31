@@ -751,11 +751,13 @@ describe('preset tools (§10.6)', () => {
 
     for (const name of ['schedule_create', 'schedule_preset_install']) {
       const description = byName[name].description;
-      expect(description, name).toMatch(/state\//);
       expect(description, name).toMatch(/runs\/<runId>\//);
-      expect(description, name).toContain('SCHEDULED_TASK_STATE_DIR');
-      expect(description, name).toMatch(/wiped at the start of every run/);
-      expect(description, name).toMatch(/Never write outside the task root/);
+      expect(description, name).toContain('SCHEDULED_TASK_DIR');
+      // §10.4: the root belongs to the task; no state/ or tmp/ is prescribed.
+      expect(description, name).toMatch(/belongs to the task/);
+      expect(description, name).toMatch(/Prefer keeping files the task generates/);
+      expect(description, name).not.toContain('SCHEDULED_TASK_STATE_DIR');
+      expect(description, name).not.toContain('SCHEDULED_TASK_TMP_DIR');
     }
   });
 });
@@ -849,7 +851,7 @@ describe('params (§12)', () => {
   it('lists every §13 predefined variable and the id clarification on all twelve tools', () => {
     const { byName } = setup();
 
-    expect(PREDEFINED_ENV_NAMES).toHaveLength(9);
+    expect(PREDEFINED_ENV_NAMES).toHaveLength(7);
     expect(Object.keys(byName)).toHaveLength(12);
 
     for (const name of Object.keys(byName)) {
@@ -878,5 +880,10 @@ describe('params (§12)', () => {
     // variable from PREDEFINED_TASK_VARS would remove it from every description.
     expect(byName.schedule_create.description).toContain(PREDEFINED_TASK_VARS[3].envName);
     expect(byName.schedule_list.description).toContain('SCHEDULED_TASK_RUN_DIR');
+    // §10.4: the retired state/tmp variables must not reappear in the MCP text.
+    for (const name of Object.keys(byName)) {
+      expect(byName[name].description, name).not.toContain('SCHEDULED_TASK_STATE_DIR');
+      expect(byName[name].description, name).not.toContain('SCHEDULED_TASK_TMP_DIR');
+    }
   });
 });

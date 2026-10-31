@@ -445,7 +445,12 @@ async function main() {
     assert(autoDocTask.presetTaskId === 'auto-doc-docs-refresh', 'presetTaskId mismatch');
     assert(autoDocTask.nextRunAt && Date.parse(autoDocTask.nextRunAt) > Date.now(), 'nextRunAt not computed');
     const taskDir = path.join(DATA_DIR, autoDocTask.id);
-    assert(fs.existsSync(path.join(taskDir, 'state')), 'task state dir missing after install');
+    // §10.4 (per-task root): the framework materializes the root plus its own files only — it
+    // no longer prescribes a state/ (or tmp/) layout, so assert those are NOT created.
+    assert(fs.existsSync(taskDir), 'task root missing after install');
+    assert(fs.existsSync(path.join(taskDir, 'task.json')), 'task.json missing after install');
+    assert(fs.existsSync(path.join(taskDir, 'README.md')), 'README.md missing after install');
+    assert(!fs.existsSync(path.join(taskDir, 'state')), 'framework must not create a state/ dir: state layout is the task\'s own choice');
     return autoDocTask.id + ' enabled, run ' + autoDocTask.nextRunAt;
   });
 

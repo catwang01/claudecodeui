@@ -661,16 +661,20 @@ describe('mapCliOptionsToSDK — §12.5 options.env allowlist (security)', () =>
     mapCliOptionsToSDK = mod.mapCliOptionsToSDK;
   });
 
-  it('merges only SCHEDULED_TASK_PARAM_*, SCHEDULED_TASK_PARAMS and the §13.1 built-ins', () => {
+  it('merges only SCHEDULED_TASK_PARAM_*, SCHEDULED_TASK_PARAMS and the §13.1 predefined names', () => {
     const sdkOptions = mapCliOptionsToSDK({
       env: {
         SCHEDULED_TASK_PARAM_REGION: 'eu',
         SCHEDULED_TASK_PARAM_THRESHOLD: 3,
         SCHEDULED_TASK_PARAMS: '{"region":"eu","threshold":3}',
         SCHEDULED_TASK_PARAMETER_X: 'not-ours',
+        SCHEDULED_TASK_ID: 't1',
         SCHEDULED_TASK_TITLE: 'nightly',
         SCHEDULED_TASK_CWD: '/proj',
         SCHEDULED_TASK_PROJECT: '/proj',
+        SCHEDULED_TASK_DIR: '/data/t1',
+        SCHEDULED_TASK_RUN_ID: 'run-1',
+        SCHEDULED_TASK_RUN_DIR: '/data/t1/runs/run-1',
         OTHER: 'dropped',
       },
     });
@@ -678,30 +682,34 @@ describe('mapCliOptionsToSDK — §12.5 options.env allowlist (security)', () =>
     expect(sdkOptions.env.SCHEDULED_TASK_PARAM_REGION).toBe('eu');
     expect(sdkOptions.env.SCHEDULED_TASK_PARAM_THRESHOLD).toBe('3');
     expect(sdkOptions.env.SCHEDULED_TASK_PARAMS).toBe('{"region":"eu","threshold":3}');
+    expect(sdkOptions.env.SCHEDULED_TASK_ID).toBe('t1');
     expect(sdkOptions.env.SCHEDULED_TASK_TITLE).toBe('nightly');
     expect(sdkOptions.env.SCHEDULED_TASK_CWD).toBe('/proj');
     expect(sdkOptions.env.SCHEDULED_TASK_PROJECT).toBe('/proj');
+    expect(sdkOptions.env.SCHEDULED_TASK_DIR).toBe('/data/t1');
+    expect(sdkOptions.env.SCHEDULED_TASK_RUN_ID).toBe('run-1');
+    expect(sdkOptions.env.SCHEDULED_TASK_RUN_DIR).toBe('/data/t1/runs/run-1');
     expect(sdkOptions.env).not.toHaveProperty('SCHEDULED_TASK_PARAMETER_X');
     expect(sdkOptions.env).not.toHaveProperty('OTHER');
   });
 
-  it('still drops reserved variables that are not §13.1 built-ins', () => {
-    // Only the three built-in names are allowed through; the rest of the
-    // reserved namespace (workspace dirs, ids) must keep being rejected.
+  it('rejects the retired and unknown SCHEDULED_TASK_* names', () => {
+    // §10.4: STATE_DIR/TMP_DIR were removed with the per-task-root change, and
+    // nothing outside the §13.1 table may leak through options.env.
     const sdkOptions = mapCliOptionsToSDK({
       env: {
-        SCHEDULED_TASK_ID: 't1',
-        SCHEDULED_TASK_DIR: '/tmp/task',
+        SCHEDULED_TASK_STATE_DIR: '/tmp/task/state',
         SCHEDULED_TASK_TMP_DIR: '/tmp/task/tmp',
-        SCHEDULED_TASK_RUN_DIR: '/tmp/task/runs/run-1',
+        SCHEDULED_TASK_DATA_DIR: '/tmp/data',
+        SCHEDULED_TASK_FOO: 'nope',
       },
     });
 
     for (const key of [
-      'SCHEDULED_TASK_ID',
-      'SCHEDULED_TASK_DIR',
+      'SCHEDULED_TASK_STATE_DIR',
       'SCHEDULED_TASK_TMP_DIR',
-      'SCHEDULED_TASK_RUN_DIR',
+      'SCHEDULED_TASK_DATA_DIR',
+      'SCHEDULED_TASK_FOO',
     ]) {
       expect(sdkOptions.env).not.toHaveProperty(key);
     }

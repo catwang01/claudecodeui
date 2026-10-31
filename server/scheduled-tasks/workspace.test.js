@@ -5,27 +5,19 @@ import path from 'node:path';
 
 import {
   SCHEDULED_TASK_SCHEMA_VERSION,
-  clearTaskTmp,
   ensureRunWorkspace,
   ensureTaskWorkspace,
   finalizeRunWorkspace,
   isWorkspaceEnabled,
   runDir,
-  runTmpDir,
   taskDir,
   taskRunsDir,
-  taskStateDir,
-  taskTmpDir,
   tasksRoot,
   workspaceEnv,
   workspacePromptBlock,
 } from './workspace.js';
 
-const ENV_KEYS = [
-  'SCHEDULED_TASK_DATA_DIR',
-  'SCHEDULED_TASKS_WORKSPACE',
-  'SCHEDULED_TASK_KEEP_RUN_TMP',
-];
+const ENV_KEYS = ['SCHEDULED_TASK_DATA_DIR', 'SCHEDULED_TASKS_WORKSPACE'];
 
 let dataDir;
 
@@ -74,7 +66,6 @@ beforeEach(() => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scheduled-ws-'));
   process.env.SCHEDULED_TASK_DATA_DIR = dataDir;
   delete process.env.SCHEDULED_TASKS_WORKSPACE;
-  delete process.env.SCHEDULED_TASK_KEEP_RUN_TMP;
 });
 
 afterEach(() => {
@@ -93,13 +84,10 @@ describe('root and path helpers', () => {
     expect(tasksRoot()).toBe(path.join(os.homedir(), '.claudecodeui', 'scheduled-tasks'));
   });
 
-  it('builds the documented layout', () => {
+  it('builds the documented layout (one task root + the run dirs)', () => {
     expect(taskDir('task-1')).toBe(path.join(path.resolve(dataDir), 'task-1'));
-    expect(taskStateDir('task-1')).toBe(path.join(taskDir('task-1'), 'state'));
-    expect(taskTmpDir('task-1')).toBe(path.join(taskDir('task-1'), 'tmp'));
     expect(taskRunsDir('task-1')).toBe(path.join(taskDir('task-1'), 'runs'));
     expect(runDir('task-1', 'run-1')).toBe(path.join(taskRunsDir('task-1'), 'run-1'));
-    expect(runTmpDir('task-1', 'run-1')).toBe(path.join(runDir('task-1', 'run-1'), 'tmp'));
   });
 
   it('refuses path segments that would escape the root', () => {
@@ -130,14 +118,10 @@ describe('isWorkspaceEnabled', () => {
 
     expect(tasksRoot()).toBeNull();
     expect(taskDir('task-1')).toBeNull();
-    expect(taskStateDir('task-1')).toBeNull();
-    expect(taskTmpDir('task-1')).toBeNull();
     expect(taskRunsDir('task-1')).toBeNull();
     expect(runDir('task-1', 'run-1')).toBeNull();
-    expect(runTmpDir('task-1', 'run-1')).toBeNull();
     expect(ensureTaskWorkspace(task)).toBeNull();
     expect(ensureRunWorkspace(task, run)).toBeNull();
-    expect(clearTaskTmp('task-1')).toBeNull();
     expect(finalizeRunWorkspace(task, run, { status: 'success' })).toBeNull();
     expect(workspaceEnv(task, { runId: 'run-1' })).toBeNull();
     expect(workspacePromptBlock(task, { runId: 'run-1' })).toBeNull();
@@ -148,19 +132,19 @@ describe('isWorkspaceEnabled', () => {
 });
 
 describe('ensureTaskWorkspace', () => {
-  it('creates the directories and the three task files', () => {
+  it('creates the task root and the three framework files only', () => {
     const result = ensureTaskWorkspace(makeTask());
 
     expect(result).toEqual({
       root: path.resolve(dataDir),
       taskDir: taskDir('task-1'),
-      stateDir: taskStateDir('task-1'),
-      tmpDir: taskTmpDir('task-1'),
       runDir: null,
     });
-    expect(fs.statSync(taskStateDir('task-1')).isDirectory()).toBe(true);
-    expect(fs.statSync(taskTmpDir('task-1')).isDirectory()).toBe(true);
-    expect(fs.statSync(taskRunsDir('task-1')).isDirectory()).toBe(true);
+    expect(fs.statSync(taskDir('task-1')).isDirectory()).toBe(true);
+    // §10.4: no state/ or tmp/ is prescribed or created.
+    expect(fs.existsSync(path.join(taskDir('task-1'), 'state'))).toBe(false);
+    expect(fs.existsSync(path.join(taskDir('task-1'), 'tmp'))).toBe(false);
+    expect(fs.existsSync(path.join(taskDir('task-1'), 'runs'))).toBe(false);
     expect(fs.existsSync(path.join(taskDir('task-1'), 'task.json'))).toBe(true);
     expect(fs.existsSync(path.join(taskDir('task-1'), 'prompt.md'))).toBe(true);
     expect(fs.existsSync(path.join(taskDir('task-1'), 'README.md'))).toBe(true);
@@ -221,21 +205,21 @@ describe('ensureTaskWorkspace', () => {
     expect(fs.readFileSync(path.join(taskDir('task-1'), 'prompt.md'), 'utf8')).toBe('do stuff');
     const readme = fs.readFileSync(path.join(taskDir('task-1'), 'README.md'), 'utf8');
     expect(readme).toContain(taskDir('task-1'));
-    expect(readme).toContain(taskStateDir('task-1'));
-    expect(readme).toContain(taskTmpDir('task-1'));
     expect(readme).toContain('/tmp/scheduled-project');
-    expect(readme).toContain('wiped at the start of every run');
-    expect(readme).toContain('never keep anything you need across runs there');
-    expect(readme).toContain('Never write outside the task root and the project directory.');
+    expect(readme).toContain('belongs to the task');
+    expect(readme).toContain('task.json, prompt.md and README.md');
+    expect(readme).toContain('Prefer keeping files the task generates');
+    expect(readme).not.toContain('state/');
+    expect(readme).not.toMatch(/wiped at the start of every run|Task scratch/);
   });
 
-  it('is idempotent and returns null without a usable task id', () => {
+  it('is idempotent, never wipes task files, and returns null without a usable task id', () => {
     ensureTaskWorkspace(makeTask());
-    fs.writeFileSync(path.join(taskTmpDir('task-1'), 'scratch.txt'), 'x');
+    fs.writeFileSync(path.join(taskDir('task-1'), 'task-owned.txt'), 'x');
 
     expect(ensureTaskWorkspace(makeTask())).not.toBeNull();
-    // Re-running must not wipe scratch data; only clearTaskTmp does that.
-    expect(fs.existsSync(path.join(taskTmpDir('task-1'), 'scratch.txt'))).toBe(true);
+    // Re-running must not wipe the task's own files (nothing does, §10.4).
+    expect(fs.existsSync(path.join(taskDir('task-1'), 'task-owned.txt'))).toBe(true);
 
     expect(ensureTaskWorkspace({ title: 'no id' })).toBeNull();
     expect(ensureTaskWorkspace(null)).toBeNull();
@@ -243,7 +227,7 @@ describe('ensureTaskWorkspace', () => {
 });
 
 describe('ensureRunWorkspace', () => {
-  it('creates run.json, prompt.md, logs/ and tmp/', () => {
+  it('creates run.json, prompt.md and logs/ (no tmp/)', () => {
     const task = makeTask();
     const run = makeRun();
     const result = ensureRunWorkspace(task, run);
@@ -252,12 +236,10 @@ describe('ensureRunWorkspace', () => {
     expect(result).toEqual({
       root: path.resolve(dataDir),
       taskDir: taskDir('task-1'),
-      stateDir: taskStateDir('task-1'),
-      tmpDir: taskTmpDir('task-1'),
       runDir: dir,
     });
     expect(fs.statSync(path.join(dir, 'logs')).isDirectory()).toBe(true);
-    expect(fs.statSync(path.join(dir, 'tmp')).isDirectory()).toBe(true);
+    expect(fs.existsSync(path.join(dir, 'tmp'))).toBe(false);
   });
 
   it('writes every documented run.json field plus the workspace paths', () => {
@@ -281,8 +263,6 @@ describe('ensureRunWorkspace', () => {
       workspace: {
         root: path.resolve(dataDir),
         taskDir: taskDir('task-1'),
-        stateDir: taskStateDir('task-1'),
-        tmpDir: taskTmpDir('task-1'),
         runDir: runDir('task-1', 'run-1'),
       },
     });
@@ -323,19 +303,6 @@ describe('ensureRunWorkspace', () => {
   });
 });
 
-describe('clearTaskTmp', () => {
-  it('wipes the task scratch dir but keeps state/', () => {
-    ensureTaskWorkspace(makeTask());
-    fs.writeFileSync(path.join(taskStateDir('task-1'), 'counter.json'), '1');
-    fs.writeFileSync(path.join(taskTmpDir('task-1'), 'scratch.txt'), 'x');
-
-    expect(clearTaskTmp('task-1')).toBe(taskTmpDir('task-1'));
-
-    expect(fs.statSync(taskTmpDir('task-1')).isDirectory()).toBe(true);
-    expect(fs.readdirSync(taskTmpDir('task-1'))).toEqual([]);
-    expect(fs.readFileSync(path.join(taskStateDir('task-1'), 'counter.json'), 'utf8')).toBe('1');
-  });
-});
 
 describe('finalizeRunWorkspace', () => {
   it('writes output.md and the final run.json status', () => {
@@ -364,7 +331,7 @@ describe('finalizeRunWorkspace', () => {
     expect(record.trigger).toBe('schedule');
     expect(record.startedAt).toBe('2026-01-01T00:00:01.000Z');
     expect(Date.parse(record.finishedAt)).not.toBeNaN();
-    // Per-run scratch is removed when the run finishes.
+    // §10.4: the framework never creates (or removes) a per-run tmp/.
     expect(fs.existsSync(path.join(dir, 'tmp'))).toBe(false);
   });
 
@@ -380,15 +347,16 @@ describe('finalizeRunWorkspace', () => {
     expect(readJson(path.join(dir, 'run.json')).error).toBe('caput');
   });
 
-  it('keeps the per-run tmp with SCHEDULED_TASK_KEEP_RUN_TMP=1', () => {
+  it('never creates a tmp/ dir anywhere under the task tree', () => {
     const task = makeTask();
     const run = makeRun();
+    ensureTaskWorkspace(task);
     ensureRunWorkspace(task, run);
-    process.env.SCHEDULED_TASK_KEEP_RUN_TMP = '1';
 
     finalizeRunWorkspace(task, run, { status: 'success', output: 'ok' });
 
-    expect(fs.statSync(path.join(runDir('task-1', 'run-1'), 'tmp')).isDirectory()).toBe(true);
+    expect(fs.existsSync(path.join(taskDir('task-1'), 'tmp'))).toBe(false);
+    expect(fs.existsSync(path.join(runDir('task-1', 'run-1'), 'tmp'))).toBe(false);
   });
 
   it('saves the script-gate stdout under logs/', () => {
@@ -424,13 +392,11 @@ describe('finalizeRunWorkspace', () => {
 });
 
 describe('workspaceEnv', () => {
-  it('exposes the five SCHEDULED_TASK_* variables', () => {
+  it('exposes the three SCHEDULED_TASK_* workspace variables', () => {
     const env = workspaceEnv(makeTask(), { runId: 'run-1' });
 
     expect(env).toEqual({
       SCHEDULED_TASK_DIR: taskDir('task-1'),
-      SCHEDULED_TASK_STATE_DIR: taskStateDir('task-1'),
-      SCHEDULED_TASK_TMP_DIR: taskTmpDir('task-1'),
       SCHEDULED_TASK_RUN_ID: 'run-1',
       SCHEDULED_TASK_RUN_DIR: runDir('task-1', 'run-1'),
     });
@@ -446,7 +412,7 @@ describe('workspaceEnv', () => {
 });
 
 describe('workspacePromptBlock', () => {
-  it('states the task, project, task root, state/, tmp/ and the run directory', () => {
+  it('states the project directory, the task root and this run directory', () => {
     const block = workspacePromptBlock(makeTask(), { runId: 'run-1' });
 
     expect(block).toContain('Nightly docs');
@@ -454,15 +420,14 @@ describe('workspacePromptBlock', () => {
     expect(block).toContain('run id: run-1');
     expect(block).toContain('/tmp/scheduled-project');
     expect(block).toContain(taskDir('task-1'));
-    expect(block).toContain(taskStateDir('task-1'));
-    expect(block).toContain(taskTmpDir('task-1'));
     expect(block).toContain(runDir('task-1', 'run-1'));
     expect(block).toContain('output.md');
     expect(block).toContain('logs/');
-    expect(block).toContain('keep every long-lived cache, counter or note here');
-    expect(block).toContain('wiped at the start of every run');
-    expect(block).toContain('never keep anything you need across runs there');
-    expect(block).toContain('Never write outside the task root and the project directory.');
+    expect(block).toContain('belongs to the task');
+    expect(block).toContain('task.json, prompt.md and README.md');
+    expect(block).toContain('Prefer keeping files the task generates');
+    expect(block).not.toContain('state/');
+    expect(block).not.toMatch(/wiped at the start of every run|Task scratch|Durable task state/);
     expect(block.startsWith('## Scheduled task workspace')).toBe(true);
   });
 
@@ -473,8 +438,9 @@ describe('workspacePromptBlock', () => {
     expect(block).toContain('<task title>');
     expect(block).toContain('<project directory>');
     expect(block).toContain('<runId>');
-    expect(block).toContain('<task root>/state');
-    expect(block).toContain('Never write outside the task root and the project directory.');
+    expect(block).toContain('belongs to the task');
+    expect(block).toContain('Prefer keeping files the task generates');
+    expect(block).not.toContain('state/');
   });
 
   it('never throws when a task id cannot be used as a path segment', () => {
