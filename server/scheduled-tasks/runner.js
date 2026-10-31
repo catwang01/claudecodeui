@@ -49,6 +49,8 @@
 
 import { spawn as nodeSpawn } from 'child_process';
 import { scheduledTasksDb } from '../modules/database/index.js';
+// §15: the run state events the server forwards over /ws (never throws).
+import { emitScheduledTaskRunState } from './events.js';
 import { addProjectManually } from '../projects.js';
 import { queryClaudeSDK, abortClaudeSDKSession } from '../claude-sdk.js';
 import {
@@ -218,6 +220,14 @@ export function createTaskRunner(deps = {}) {
 
     // §10.4 step 4: record the outcome on disk (best-effort, never throws).
     finalizeRunWorkspace(task, run, { status, output, error, sessionId, scriptExitCode, scriptOutput });
+
+    // §15: a finished run always changes the running count, whatever the status.
+    emitScheduledTaskRunState({
+      phase: 'finished',
+      runId: run.id,
+      taskId: task?.id ?? run.task_id ?? null,
+      status,
+    });
 
     return {
       run: finished,
@@ -456,6 +466,8 @@ export function createTaskRunner(deps = {}) {
       } catch (err) {
         console.warn('[scheduled-tasks] markRunAgentStarted failed:', errorMessage(err));
       }
+      // §15: push the new count to open UIs the moment the agent starts.
+      emitScheduledTaskRunState({ phase: 'agent_started', runId: run.id, taskId: task?.id ?? null });
     };
 
     // Dry-run replaces only the agent call: the gate above has already run and

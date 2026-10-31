@@ -1,10 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
 
-const { runningCount } = vi.hoisted(() => ({ runningCount: vi.fn() }));
+const { runningCount, wsListeners } = vi.hoisted(() => ({
+  runningCount: vi.fn(),
+  wsListeners: new Set<(message: unknown) => void>(),
+}));
 
 vi.mock('../api', () => ({
   scheduledTasksApi: { runningCount: () => runningCount() },
+}));
+
+// Section 15: the hook applies counts pushed over /ws before it polls again.
+vi.mock('../../../contexts/WebSocketContext', () => ({
+  useWebSocket: () => ({
+    subscribeMessages: (listener: (message: unknown) => void) => {
+      wsListeners.add(listener);
+      return () => {
+        wsListeners.delete(listener);
+      };
+    },
+  }),
 }));
 
 import { useRunningScheduledTasks } from './useRunningScheduledTasks';
@@ -20,6 +35,7 @@ function setHidden(value: boolean) {
 describe('useRunningScheduledTasks', () => {
   beforeEach(() => {
     runningCount.mockReset();
+    wsListeners.clear();
   });
 
   afterEach(() => {
@@ -88,6 +104,43 @@ describe('useRunningScheduledTasks', () => {
     });
 
     expect(result.current.count).toBe(4);
+  });
+
+  it('applies the server push immediately and drops an older in-flight poll', async () => {
+    let resolvePoll: ((value: number) => void) | null = null;
+    runningCount.mockImplementationOnce(
+      () =>
+        new Promise<number>((resolve) => {
+          resolvePoll = resolve;
+        }),
+    );
+
+    const { result } = renderHook(() => useRunningScheduledTasks({ intervalMs: 60000 }));
+    await waitFor(() => expect(runningCount).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      wsListeners.forEach((listener) => listener({ type: 'scheduled_task_running_count', count: 3 }));
+    });
+    expect(result.current.count).toBe(3);
+
+    // The poll that was already in flight resolves later with the old value.
+    await act(async () => {
+      resolvePoll?.(0);
+      await Promise.resolve();
+    });
+    expect(result.current.count).toBe(3);
+    expect(runningCount).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores unrelated websocket messages', async () => {
+    runningCount.mockResolvedValue(1);
+    const { result } = renderHook(() => useRunningScheduledTasks({ intervalMs: 60000 }));
+    await waitFor(() => expect(result.current.count).toBe(1));
+
+    await act(async () => {
+      wsListeners.forEach((listener) => listener({ type: 'projects_updated' }));
+    });
+    expect(result.current.count).toBe(1);
   });
 
   it('drops a stale response that resolves after a newer one', async () => {

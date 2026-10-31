@@ -434,6 +434,63 @@ async function main() {
     assert(called === 0, 'queryClaudeSDK must not be called on any error path, called ' + called + ' times');
     return cases.length + 1 + ' no-agent paths stayed NULL and counted 0';
   });
+
+  // ── §15: the run-state events the /ws broadcaster turns into a live count ───
+  await check('runner emits agent_started then finished, and the count follows (§15)', async () => {
+    const { onScheduledTaskRunState } = await import(url('server/scheduled-tasks/events.js'));
+    const seen = [];
+    const off = onScheduledTaskRunState((event) => seen.push(event));
+    try {
+      const task = await makeTask({ command: emit({ prompt: 'push check' }) });
+      let release;
+      const blocked = new Promise((resolve) => {
+        release = resolve;
+      });
+      const runner = runnerFor(() => blocked);
+      const { done } = runner.startTaskRun(task, { trigger: 'manual' });
+
+      await waitFor(() => seen.some((event) => event.phase === 'agent_started'), 8000, 'agent_started event');
+      assert((await runningCount()) === 1, 'count must be 1 after the agent_started event');
+      assert(
+        seen[0].phase === 'agent_started' && seen[0].taskId === task.id,
+        'first event must be agent_started for this task, got ' + JSON.stringify(seen[0])
+      );
+
+      release();
+      const result = await withTimeout(done, 10000, 'the push-check run to finish');
+      assert(result.status === 'success', 'expected success, got ' + result.status + ' err=' + result.error);
+      const phases = seen.map((event) => event.phase);
+      assert(phases[0] === 'agent_started', 'event order must start with agent_started, got ' + JSON.stringify(phases));
+      assert(phases[phases.length - 1] === 'finished', 'event order must end with finished, got ' + JSON.stringify(phases));
+      assert(seen[seen.length - 1].status === 'success', 'finished event must carry the status');
+      assert((await runningCount()) === 0, 'count must be 0 after the finished event');
+    } finally {
+      off();
+    }
+    return 'agent_started -> finished';
+  });
+
+  await check('a skipped run emits finished only — never agent_started (§15)', async () => {
+    const { onScheduledTaskRunState } = await import(url('server/scheduled-tasks/events.js'));
+    const seen = [];
+    const off = onScheduledTaskRunState((event) => seen.push(event));
+    try {
+      const task = await makeTask({ command: emit({ skip: true }) });
+      const runner = runnerFor(async () => {
+        throw new Error('the agent must not run for a skipped task');
+      });
+      const result = await runner.startTaskRun(task, { trigger: 'manual' }).done;
+      assert(result.status === 'skipped', 'expected skipped, got ' + result.status);
+      assert(
+        seen.length === 1 && seen[0].phase === 'finished' && seen[0].status === 'skipped',
+        'a skipped run must emit exactly one finished event, got ' + JSON.stringify(seen.map((event) => event.phase))
+      );
+      assert((await runningCount()) === 0, 'count must stay 0 for a skipped run');
+    } finally {
+      off();
+    }
+    return 'finished only';
+  });
 }
 
 main()

@@ -330,3 +330,32 @@ describe('interrupted-run sweep (§14.1)', () => {
     expect(logger.warn).toHaveBeenCalled();
   });
 });
+
+describe('runningCount (§15)', () => {
+  it('reads the repository count on demand', async () => {
+    const repo = makeRepo([]);
+    repo.countRunningAgentRuns = vi.fn(() => 2);
+    const scheduler = createScheduler({ repo, runner: makeRunner(null), now, tickMs: 1000 });
+
+    await expect(scheduler.runningCount()).resolves.toBe(2);
+    expect(repo.countRunningAgentRuns).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads as 0 when the repository cannot count (older fakes)', async () => {
+    const scheduler = createScheduler({ repo: makeRepo([]), runner: makeRunner(null), now, tickMs: 1000 });
+
+    await expect(scheduler.runningCount()).resolves.toBe(0);
+  });
+
+  it('never throws when the count query fails', async () => {
+    const repo = makeRepo([]);
+    repo.countRunningAgentRuns = vi.fn(() => {
+      throw new Error('database is locked');
+    });
+    const logger = { warn: vi.fn(), error: vi.fn() };
+    const scheduler = createScheduler({ repo, runner: makeRunner(null), now, tickMs: 1000, logger });
+
+    await expect(scheduler.runningCount()).resolves.toBe(0);
+    expect(logger.warn).toHaveBeenCalled();
+  });
+});

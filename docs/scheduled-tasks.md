@@ -1084,3 +1084,50 @@ failInterruptedRuns(finishedAt: string, error: string): number    // status='run
   - 门控 `{"skip":true}` 的 run 全程 count 为 0，且 `agent_started_at` 为 NULL；
   - 门控放行、注入的 fake query 挂起期间 count 为 1 且 `agentStartedAt` 非空，query resolve 后回 0；
   - `failInterruptedRuns` 收掉残留 `running` 行后计数归零。
+
+## 15. Live running count over WebSocket（第十三轮）
+
+§14 的徽标最初靠前端每 10s 轮询，最长有 10s 延迟。这一轮改成**服务端主动推送**：agent 启动或 run 结束的瞬间，
+服务端就把新计数通过已有的 `/ws` 推给所有打开的页面；轮询退化为 15s 兜底（掉线 / 漏消息 / 刷新竞态时自愈）。
+
+### 15.1 Event seam（`server/scheduled-tasks/events.js`，新文件）
+
+```js
+export function onScheduledTaskRunState(listener)   // -> unsubscribe；runner/service 不依赖 http/ws
+export function emitScheduledTaskRunState(event)    // 永不抛：订阅者出错不影响 run
+```
+
+- 事件形状：`{ phase: 'agent_started' | 'finished', runId, taskId, status? }`。
+- `markAgentStarted()`（含 dry-run 分支）之后发 `agent_started`；`finishOnce()` 对**任何**状态都发 `finished`
+  （skip / error 也发：计数虽未变，但客户端可能错过了 `agent_started`）。门控阶段不会发 `agent_started`。
+
+### 15.2 Broadcast（`server/index.js`）
+
+- 启动时注册 `onScheduledTaskRunState(() => void broadcastScheduledTaskRunningCount())`。
+- `broadcastScheduledTaskRunningCount()` 用 `getRunningTaskCount()`（`service.js` → `countRunningAgentRuns()`）
+  只算一次，再向 `connectedClients` 发 `{ type: 'scheduled_task_running_count', count }`；客户端无需再请求。
+- 计数/发送失败只记日志，绝不影响 run。
+
+### 15.3 Frontend
+
+- `useRunningScheduledTasks` 用 `useWebSocket().subscribeMessages` 订阅：收到 `scheduled_task_running_count`
+  立即 `setCount`，同时让在途的轮询响应失效（request id 自增），避免旧值覆盖新推送。
+- 兜底轮询 10s → **15s**；`visibilitychange` 与 `window.focus` 都会立刻补一次。
+- 其余语义不变：`>0` 才显示徽标、失败保留上次值。
+
+### 15.4 Write scopes
+
+| Owner | Files |
+|---|---|
+| backend | `server/scheduled-tasks/events.js` (new), `runner.js` (+test), `service.js` (+test), `server/index.js` |
+| frontend | `src/components/scheduled-tasks/hooks/useRunningScheduledTasks.ts` (+test) |
+| verify | `scripts/verify-scheduled-tasks-running-count.mjs` |
+| lead | `docs/scheduled-tasks.md` |
+
+### 15.5 Acceptance
+
+- `npx vitest run`（仅 base 上既有的 2 个 copilot 失败）、`npm run typecheck`、`eslint src/ server/`。
+- `npx tsx --tsconfig server/tsconfig.json scripts/verify-scheduled-tasks-running-count.mjs` 新增两条：
+  runner 在 agent 启动 / 结束时各发一次事件（顺序 `agent_started` → `finished`，计数 1 → 0），
+  以及 skip 路径只发 `finished`（永不发 `agent_started`）。
+- 端到端：重启服务后连 `ws://…/ws?token=…`，触发一次 run，客户端应秒级收到 `scheduled_task_running_count`。

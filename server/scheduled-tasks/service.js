@@ -321,7 +321,23 @@ export function createScheduler(deps = {}) {
     }
   }
 
-  return { tick, start, stop, runNow, state, whenIdle, reconcileInterrupted };
+  /**
+   * docs §15: the running-task count, read on the server so a /ws notification
+   * can carry the exact number instead of making every client refetch.
+   */
+  async function runningCount() {
+    const repo = await getRepo();
+    if (typeof repo.countRunningAgentRuns !== 'function') return 0;
+    try {
+      const count = repo.countRunningAgentRuns();
+      return Number.isFinite(count) ? count : 0;
+    } catch (err) {
+      logger.warn?.(`[scheduled-tasks] countRunningAgentRuns failed: ${errorMessage(err)}`);
+      return 0;
+    }
+  }
+
+  return { tick, start, stop, runNow, state, whenIdle, reconcileInterrupted, runningCount };
 }
 
 // ─── Module-level default scheduler ────────────────────────────────────────────
@@ -369,6 +385,14 @@ export function stopScheduledTaskService() {
  */
 export async function runScheduledTaskNow(taskId, options = {}) {
   return getDefaultScheduler().runNow(taskId, options);
+}
+
+/**
+ * docs §15: used by the /ws broadcaster in server/index.js. Never rejects.
+ * @returns {Promise<number>}
+ */
+export async function getRunningTaskCount() {
+  return getDefaultScheduler().runningCount();
 }
 
 export function getSchedulerState() {

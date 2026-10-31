@@ -142,7 +142,8 @@ import { createNormalizedMessage } from './providers/types.js';
 import { getProvider } from './providers/registry.js';
 import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
 import { initializeDatabase, sessionNamesDb, sessionDb, sessionFileCache, sessionsDb, applyCustomSessionNames, applyHiddenFromRecents, applyReadState } from './database/db.js';
-import { startScheduledTaskService, stopScheduledTaskService } from './scheduled-tasks/service.js';
+import { startScheduledTaskService, stopScheduledTaskService, getRunningTaskCount } from './scheduled-tasks/service.js';
+import { onScheduledTaskRunState } from './scheduled-tasks/events.js';
 import { stopAllTapSessions, tapViewerProxyForSession } from './tap.js';
 import { sessionSynchronizerService, initializeSessionsWatcher } from './modules/providers/index.js';
 import { configureWebPush } from './services/vapid-keys.js';
@@ -184,6 +185,25 @@ function broadcastProgress(progress) {
             client.send(message);
         }
     });
+}
+
+/**
+ * docs §15: push the running-task count to every open UI as soon as an agent starts
+ * or a run finishes, so the badge is live instead of waiting for its poll. The count
+ * is computed once here rather than by every client. Best-effort by design.
+ */
+async function broadcastScheduledTaskRunningCount() {
+    try {
+        const count = await getRunningTaskCount();
+        const message = JSON.stringify({ type: 'scheduled_task_running_count', count });
+        connectedClients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(message);
+            }
+        });
+    } catch (err) {
+        console.error('[scheduled-tasks] running-count broadcast failed:', err && err.message ? err.message : err);
+    }
 }
 
 // Setup file system watchers for Claude, Cursor, and Codex project/session folders
@@ -3178,6 +3198,9 @@ async function startServer() {
                 console.error('[sessions-sync] Initial sync failed:', err);
                 console.error('[sessions-sync] Error stack:', err.stack);
             }
+
+            // docs §15: live running-count push for the sidebar badge (no-op without clients)
+            onScheduledTaskRunState(() => { void broadcastScheduledTaskRunningCount(); });
 
             // Start the scheduled-tasks tick loop (no-op when SCHEDULED_TASKS_ENABLED is off)
             startScheduledTaskService();

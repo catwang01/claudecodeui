@@ -21,10 +21,14 @@ vi.mock('../claude-sdk.js', () => ({
   abortClaudeSDKSession: vi.fn(),
 }));
 
+// §15: the run-state events broadcast by the server.
+vi.mock('./events.js', () => ({ emitScheduledTaskRunState: vi.fn() }));
+
 import { scheduledTasksDb } from '../modules/database/index.js';
 import { addProjectManually } from '../projects.js';
 import { queryClaudeSDK, abortClaudeSDKSession } from '../claude-sdk.js';
 import { createTaskRunner, startTaskRun } from './runner.js';
+import { emitScheduledTaskRunState } from './events.js';
 import { runDir, taskDir, workspacePromptBlock } from './workspace.js';
 import { PREDEFINED_ENV_NAMES, predefinedVarsPromptBlock } from './params.js';
 
@@ -79,6 +83,7 @@ beforeEach(() => {
   }));
   scheduledTasksDb.attachRunSession.mockReset().mockReturnValue({});
   scheduledTasksDb.markRunAgentStarted.mockReset().mockReturnValue({});
+  emitScheduledTaskRunState.mockReset();
   scheduledTasksDb.finishRun.mockReset().mockImplementation((id, patch) => ({
     id,
     task_id: 't1',
@@ -934,6 +939,27 @@ describe('agent-started tracking (§14.2)', () => {
     expect(result.status).toBe('success');
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+
+  it('emits agent_started when the agent starts and finished when the run ends (§15)', async () => {
+    queryClaudeSDK.mockResolvedValue(undefined);
+
+    const result = await startTaskRun(makeTask({ project_path: PROJECT_DIR })).done;
+
+    expect(result.status).toBe('success');
+    expect(emitScheduledTaskRunState.mock.calls.map(([event]) => event.phase)).toEqual([
+      'agent_started',
+      'finished',
+    ]);
+    expect(emitScheduledTaskRunState.mock.calls[0][0]).toMatchObject({ runId: 'run-1', taskId: 't1' });
+    expect(emitScheduledTaskRunState.mock.calls[1][0]).toMatchObject({ status: 'success' });
+  });
+
+  it('emits finished only for a run the gate skips (§15)', async () => {
+    await startTaskRun(makeTask({ project_path: PROJECT_DIR, command: emit('{"skip":true}') })).done;
+
+    expect(emitScheduledTaskRunState.mock.calls.map(([event]) => event.phase)).toEqual(['finished']);
+    expect(emitScheduledTaskRunState.mock.calls[0][0]).toMatchObject({ status: 'skipped' });
   });
 });
 
