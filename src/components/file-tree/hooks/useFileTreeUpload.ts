@@ -2,6 +2,7 @@ import { useCallback, useState, useRef } from 'react';
 import type { Project } from '../../../types/app';
 import { api } from '../../../utils/api';
 import { logger } from '../../../utils/logger';
+import { bumpProjectFileListRevision } from '../../../utils/projectFileListRevision';
 
 type UseFileTreeUploadOptions = {
   selectedProject: Project | null;
@@ -164,6 +165,7 @@ export const useFileTreeUpload = ({
         throw new Error(data.error || 'Upload failed');
       }
 
+      bumpProjectFileListRevision(selectedProject!.name);
       showToast(
         `Uploaded ${files.length} file(s)`,
         'success'

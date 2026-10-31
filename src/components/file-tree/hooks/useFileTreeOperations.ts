@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import JSZip from 'jszip';
 import { api } from '../../../utils/api';
+import { bumpProjectFileListRevision } from '../../../utils/projectFileListRevision';
 import type { FileTreeNode } from '../types/types';
 import type { Project } from '../../../types/app';
 
@@ -136,6 +137,7 @@ export function useFileTreeOperations({
         throw new Error(data.error || 'Failed to rename');
       }
 
+      bumpProjectFileListRevision(selectedProject.name);
       showToast(t('fileTree.toast.renamed', 'Renamed successfully'), 'success');
       onRefresh();
       handleCancelRename();
@@ -171,6 +173,8 @@ export function useFileTreeOperations({
         throw new Error(data.error || 'Failed to delete');
       }
 
+      // A deleted folder must stop being suggested as an @-mention right away.
+      bumpProjectFileListRevision(selectedProject.name);
       showToast(
         item.type === 'directory'
           ? t('fileTree.toast.folderDeleted', 'Folder deleted')
@@ -223,6 +227,7 @@ export function useFileTreeOperations({
         throw new Error(data.error || 'Failed to create');
       }
 
+      bumpProjectFileListRevision(selectedProject.name);
       showToast(
         newItemType === 'file'
           ? t('fileTree.toast.fileCreated', 'File created successfully')

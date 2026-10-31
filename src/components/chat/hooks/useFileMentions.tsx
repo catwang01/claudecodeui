@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, KeyboardEvent, RefObject, SetStateAction } from 'react';
 import { api } from '../../../utils/api';
+import { getProjectFileListRevision, subscribeProjectFileListRevision } from '../../../utils/projectFileListRevision';
 import { escapeRegExp } from '../utils/chatFormatting';
 import type { Project } from '../../../types/app';
 import { logger } from '../../../utils/logger';
@@ -61,7 +62,36 @@ export function useFileMentions({ selectedProject, allProjects, input, setInput,
   const [atSymbolPosition, setAtSymbolPosition] = useState(-1);
 
   const fileListProjectRef = useRef<string | undefined>(undefined);
+  const fileListRevisionRef = useRef(0);
   const fetchAbortRef = useRef<AbortController | null>(null);
+
+  /**
+   * Fetch (or refetch) this project's file listing. The revision captured before
+   * the request lets us drop a response that a concurrent file-tree mutation made
+   * obsolete, instead of resurrecting a path that no longer exists.
+   */
+  const loadFileList = useCallback((projectName: string) => {
+    fileListProjectRef.current = projectName;
+    const revisionAtFetch = getProjectFileListRevision(projectName);
+    fileListRevisionRef.current = revisionAtFetch;
+    fetchAbortRef.current?.abort();
+    const abortController = new AbortController();
+    fetchAbortRef.current = abortController;
+
+    return api
+      .getFiles(projectName, { depth: 3, signal: abortController.signal })
+      .then(async (response) => {
+        if (!response.ok) return;
+        const files = (await response.json()) as ProjectFileNode[];
+        if (fileListRevisionRef.current !== revisionAtFetch) return; // mutated mid-flight
+        setFileList(flattenFileTree(files));
+      })
+      .catch((error) => {
+        if ((error as { name?: string })?.name === 'AbortError') return;
+        logger.error('Error fetching files:', error);
+        fileListProjectRef.current = undefined; // allow retry on next @
+      });
+  }, []);
 
   // Reset file list when project changes
   useEffect(() => {
@@ -76,6 +106,22 @@ export function useFileMentions({ selectedProject, allProjects, input, setInput,
       fetchAbortRef.current?.abort();
     };
   }, []);
+
+  // The Files tree deletes/renames/creates/uploads files and only refreshes its
+  // own listing, so a cached mention list would keep suggesting paths that no
+  // longer exist. Drop and refetch as soon as the tree reports a mutation.
+  useEffect(() => {
+    const projectName = selectedProject?.name;
+    if (!projectName) return;
+
+    return subscribeProjectFileListRevision((changedProject) => {
+      if (changedProject !== projectName) return;
+      if (fileListProjectRef.current !== projectName) return; // nothing cached yet
+      setFileList([]);
+      fileListProjectRef.current = undefined;
+      void loadFileList(projectName);
+    });
+  }, [selectedProject?.name, loadFileList]);
 
   useEffect(() => {
     const textBeforeCursor = input.slice(0, cursorPosition);
@@ -98,26 +144,20 @@ export function useFileMentions({ selectedProject, allProjects, input, setInput,
     setShowFileDropdown(true);
     setSelectedFileIndex(-1);
 
-    // Lazy fetch: load files on first @ use for this project
+    // Lazy fetch: load files on first @ use for this project, or refetch when the
+    // file tree mutated the project since we last fetched.
     const projectName = selectedProject?.name;
-    if (projectName && fileListProjectRef.current !== projectName) {
-      fileListProjectRef.current = projectName;
-      fetchAbortRef.current?.abort();
-      const abortController = new AbortController();
-      fetchAbortRef.current = abortController;
-
-      api
-        .getFiles(projectName, { depth: 3, signal: abortController.signal })
-        .then(async (response) => {
-          if (!response.ok) return;
-          const files = (await response.json()) as ProjectFileNode[];
-          setFileList(flattenFileTree(files));
-        })
-        .catch((error) => {
-          if ((error as { name?: string })?.name === 'AbortError') return;
-          logger.error('Error fetching files:', error);
-          fileListProjectRef.current = undefined; // allow retry on next @
-        });
+    if (projectName) {
+      if (
+        fileListProjectRef.current === projectName &&
+        fileListRevisionRef.current !== getProjectFileListRevision(projectName)
+      ) {
+        setFileList([]);
+        fileListProjectRef.current = undefined;
+      }
+      if (fileListProjectRef.current !== projectName) {
+        void loadFileList(projectName);
+      }
     }
 
     const excludePatterns = readProjectExcludePatterns();
@@ -145,7 +185,7 @@ export function useFileMentions({ selectedProject, allProjects, input, setInput,
       .map((file) => ({ ...file, type: 'file' as const }));
 
     setFilteredFiles([...matchingProjects, ...matchingFiles]);
-  }, [input, cursorPosition, fileList, selectedProject?.name, allProjects]);
+  }, [input, cursorPosition, fileList, selectedProject?.name, allProjects, loadFileList]);
 
   const activeFileMentions = useMemo(() => {
     if (!input || fileMentions.length === 0) {
