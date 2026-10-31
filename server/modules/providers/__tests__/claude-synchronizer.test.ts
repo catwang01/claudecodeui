@@ -81,6 +81,107 @@ describe('claudeSessionSynchronizer', () => {
 
     (claudeSessionSynchronizer as any).watchPaths = original;
   });
+
+  // Regression: subagent transcripts live at
+  // <project-dir>/<sessionId>/subagents/agent-<id>.jsonl. The sessions file
+  // watcher calls synchronizeFile() directly for every .jsonl/.json file
+  // (without the agent- filter that synchronize() applies), so the derived
+  // "project dir name" used to become "subagents". That value was persisted to
+  // projects.claude_dir_name, which made every message lookup read
+  // ~/.claude/projects/subagents/<sessionId>.jsonl and return an empty history.
+  describe('subagent transcripts', () => {
+    async function writeSubagentFile(): Promise<string> {
+      const projectDir = join(tmpDir, 'projects', 'Users-foo-bar-myproject');
+      const subagentsDir = join(projectDir, 'session-abc', 'subagents');
+      await mkdir(subagentsDir, { recursive: true });
+      const agentFile = join(subagentsDir, 'agent-abc123.jsonl');
+      await writeFile(
+        agentFile,
+        '{"sessionId":"session-abc","cwd":"/home/foo/bar/myproject","type":"user","message":{"role":"user","content":"hi from subagent"}}\n'
+      );
+      return agentFile;
+    }
+
+    it('synchronizeFile ignores an agent-*.jsonl and writes nothing to the DB', async () => {
+      const agentFile = await writeSubagentFile();
+
+      const result = await claudeSessionSynchronizer.synchronizeFile(agentFile);
+
+      expect(result).toBeNull();
+      expect(projectsDb.createProjectPath).not.toHaveBeenCalled();
+      expect(projectsDb.updateClaudeDirName).not.toHaveBeenCalled();
+      expect(sessionsDb.createSession).not.toHaveBeenCalled();
+    });
+
+    it('synchronizeFile ignores any file under a subagents/ directory, even without the agent- prefix', async () => {
+      const projectDir = join(tmpDir, 'projects', 'Users-foo-bar-myproject');
+      const subagentsDir = join(projectDir, 'session-abc', 'subagents');
+      await mkdir(subagentsDir, { recursive: true });
+      const transcript = join(subagentsDir, 'transcript.jsonl');
+      await writeFile(
+        transcript,
+        '{"sessionId":"session-abc","cwd":"/home/foo/bar/myproject","type":"user","message":{"role":"user","content":"hi"}}\n'
+      );
+
+      expect(await claudeSessionSynchronizer.synchronizeFile(transcript)).toBeNull();
+      expect(projectsDb.updateClaudeDirName).not.toHaveBeenCalled();
+      expect(sessionsDb.createSession).not.toHaveBeenCalled();
+    });
+
+    it('synchronizeFile ignores an agent-*.meta.json', async () => {
+      const agentFile = await writeSubagentFile();
+      const metaFile = agentFile.replace(/\.jsonl$/, '.meta.json');
+      await writeFile(metaFile, '{"agentType":"general-purpose","description":"demo"}\n');
+
+      expect(await claudeSessionSynchronizer.synchronizeFile(metaFile)).toBeNull();
+      expect(projectsDb.updateClaudeDirName).not.toHaveBeenCalled();
+      expect(sessionsDb.createSession).not.toHaveBeenCalled();
+    });
+
+    it('keeps the real project dir name when a parent write is followed by a subagent write', async () => {
+      const projectDir = join(tmpDir, 'projects', 'Users-foo-bar-myproject');
+      const parentFile = join(projectDir, 'session-abc.jsonl');
+      await writeFile(
+        parentFile,
+        '{"sessionId":"session-abc","cwd":"/home/foo/bar/myproject","type":"user","message":{"role":"user","content":"hello"}}\n'
+      );
+      const agentFile = await writeSubagentFile();
+
+      await claudeSessionSynchronizer.synchronizeFile(parentFile);
+      expect(projectsDb.updateClaudeDirName).toHaveBeenLastCalledWith(
+        '/home/foo/bar/myproject',
+        'Users-foo-bar-myproject'
+      );
+
+      // The watcher would fire this next; it must not overwrite the real name.
+      await claudeSessionSynchronizer.synchronizeFile(agentFile);
+
+      expect(projectsDb.updateClaudeDirName).toHaveBeenLastCalledWith(
+        '/home/foo/bar/myproject',
+        'Users-foo-bar-myproject'
+      );
+      expect(projectsDb.updateClaudeDirName).not.toHaveBeenCalledWith(expect.anything(), 'subagents');
+    });
+
+    it('synchronize() skips subagent transcripts and only counts real sessions', async () => {
+      const projectDir = join(tmpDir, 'projects', 'Users-foo-bar-myproject');
+      await writeFile(
+        join(projectDir, 'session-abc.jsonl'),
+        '{"sessionId":"session-abc","cwd":"/home/foo/bar/myproject","type":"user","message":{"role":"user","content":"hello"}}\n'
+      );
+      await writeSubagentFile();
+
+      const original = claudeSessionSynchronizer.watchPaths;
+      (claudeSessionSynchronizer as any).watchPaths = [join(tmpDir, 'projects')];
+      const count = await claudeSessionSynchronizer.synchronize(null);
+      (claudeSessionSynchronizer as any).watchPaths = original;
+
+      expect(count).toBe(1);
+      expect(sessionsDb.createSession).toHaveBeenCalledTimes(1);
+      expect(projectsDb.updateClaudeDirName).toHaveBeenCalledTimes(1);
+      expect(projectsDb.updateClaudeDirName).not.toHaveBeenCalledWith(expect.anything(), 'subagents');
+    });
+  });
 });
 
 describe('matchesExcludePattern', () => {
