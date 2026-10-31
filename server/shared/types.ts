@@ -35,7 +35,10 @@ export type ProjectRepositoryRow = {
 export type CreateProjectPathOutcome =
   | 'created'
   | 'reactivated_archived'
-  | 'active_conflict';
+  | 'active_conflict'
+  // The path already has a row that is archived. Auto-sync hits this instead of
+  // reactivating the row, so archiving a deleted folder stays sticky (issue #16).
+  | 'archived_conflict';
 
 export type CreateProjectPathResult = {
   outcome: CreateProjectPathOutcome;

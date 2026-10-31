@@ -89,7 +89,8 @@ import pty from 'node-pty';
 import fetch from 'node-fetch';
 import mime from 'mime-types';
 
-import { getProjects, getProject, refreshProjectSessions, surgicallyUpdateSession, getSessions, getRecentSessions, renameProject, deleteSession, forkSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, clearSessionMessagesCache, searchConversations, getSessionFileMeta, invalidateExcludedSessionIdsCache } from './projects.js';
+import { getProjects, getProject, refreshProjectSessions, surgicallyUpdateSession, getSessions, getRecentSessions, renameProject, deleteSession, forkSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, clearSessionMessagesCache, searchConversations, getSessionFileMeta, invalidateExcludedSessionIdsCache, getProjectPathAvailability, archiveProjectByName, archiveProjectsUnderPath } from './projects.js';
+import { projectsDb } from './modules/database/index.js';
 import { clearFetchHistoryCache } from './providers/claude/adapter.js';
 import { queryClaudeSDK, abortClaudeSDKSession, isClaudeSDKSessionActive, getClaudeSDKSessionStartTime, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
 let queryCopilotSDK, abortCopilotSession, isCopilotSessionActive, getCopilotSessionStartTime, getActiveCopilotSessions, listCopilotModels, resolveCopilotSessionId;
@@ -260,6 +261,43 @@ async function resolveLocalIdIfPending(filePath) {
 // updated list — avoiding a full 15-project getProjects() rebuild on every file write.
 let _cachedProjectsList = null;
 
+/**
+ * Drop every cached view of the project list and push a fresh `projects_updated` payload to all
+ * connected WS clients. Called after an explicit project delete/archive so a subsequent
+ * fast-path flush cannot re-broadcast the stale cached reference (issue #16).
+ */
+async function refreshProjectsCacheAndBroadcast(changeType = 'change', watchProvider = 'claude') {
+    _cachedProjectsList = null;
+    clearProjectDirectoryCache();
+    try {
+        let projects = await getProjects();
+        // getProjects() dedups concurrent rebuilds, so a rebuild that started before this
+        // delete/archive may still contain the removed row. Detect that against the live DB and
+        // rebuild once more — the second call cannot join a stale in-flight promise.
+        const activePaths = new Set(projectsDb.getAllProjects().map((row) => row.project_path));
+        if (projects.some((project) => project.path && !activePaths.has(project.path))) {
+            projects = await getProjects();
+        }
+        _cachedProjectsList = projects;
+        const message = JSON.stringify({
+            type: 'projects_updated',
+            projects,
+            timestamp: new Date().toISOString(),
+            changeType,
+            watchProvider,
+            updatedSessionIds: [],
+            batched: false,
+        });
+        connectedClients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) client.send(message);
+        });
+        return projects;
+    } catch (error) {
+        console.error('[ERROR] refreshProjectsCacheAndBroadcast failed:', error);
+        return null;
+    }
+}
+
 async function setupProjectsWatcher() {
     const chokidar = (await import('chokidar')).default;
 
@@ -344,6 +382,14 @@ async function setupProjectsWatcher() {
                     const idx = cachedRef.findIndex(p => p.path === projectPath);
                     if (idx < 0) {
                         // New project not in cache — fall back to full rebuild
+                        fastPathViable = false;
+                        break;
+                    }
+                    // Guard against a project row archived/deleted after this cache was built:
+                    // the fast path re-broadcasts the cached reference, which would revive a
+                    // deleted project (issue #16). Fall back to a full rebuild that reads the DB.
+                    const liveDbRow = projectsDb.getProjectPath(projectPath);
+                    if (!liveDbRow || liveDbRow.isArchived) {
                         fastPathViable = false;
                         break;
                     }
@@ -458,15 +504,19 @@ async function setupProjectsWatcher() {
             });
 
             // Set up event listeners
-            // NOTE: addDir/unlinkDir are intentionally NOT handled here. They always produce
-            // sessionId=null → scheduleBroadcast(..., null) → sessionIds=[] → full getProjects()
-            // rebuild on every new project/subagent directory creation. The 'add'/'unlink'
-            // events for the .jsonl files inside those directories are sufficient to trigger
-            // the broadcast with the correct sessionId, enabling the fast-path rebuild.
+            // NOTE: addDir is intentionally NOT handled here. It produces sessionId=null →
+            // scheduleBroadcast(..., null) → sessionIds=[] → a full getProjects() rebuild on every
+            // new project/subagent directory creation. The 'add'/'unlink' events for the .jsonl
+            // files inside those directories are sufficient to trigger the broadcast with the
+            // correct sessionId, enabling the fast-path rebuild.
+            // unlinkDir IS handled: directory removal is rare and deleting a project directory
+            // must invalidate the extracted-directory cache and push a fresh list, otherwise a
+            // stale _cachedProjectsList entry could be re-broadcast (issue #16).
             watcher
                 .on('add', (filePath) => { resolveLocalIdIfPending(filePath); if (filePath.endsWith('.jsonl')) handle('add', filePath); })
                 .on('change', (filePath) => { resolveLocalIdIfPending(filePath); if (filePath.endsWith('.jsonl')) { const sid = path.basename(filePath, '.jsonl'); clearSessionMessagesCache(sid); clearFetchHistoryCache(sid); getSessionFileMeta(filePath).catch(() => {}); handle('change', filePath); } })
                 .on('unlink', (filePath) => { if (filePath.endsWith('.jsonl')) { const sid = path.basename(filePath, '.jsonl'); clearSessionMessagesCache(sid); clearFetchHistoryCache(sid); handle('unlink', filePath); } })
+                .on('unlinkDir', () => { clearProjectDirectoryCache(); scheduleBroadcast('unlinkDir', provider, null); })
                 .on('error', (error) => {
                     console.error(`[ERROR] ${provider} watcher error:`, error);
                 })
@@ -952,6 +1002,11 @@ app.delete('/api/projects/:projectName', authenticateToken, async (req, res) => 
         const { projectName } = req.params;
         const force = req.query.force === 'true';
         await deleteProject(projectName, force);
+        // Issue #16: invalidating _cachedProjectsList is what stops the next fast-path flush from
+        // re-broadcasting the deleted project. The fresh list is pushed over WS immediately.
+        _cachedProjectsList = null;
+        clearProjectDirectoryCache();
+        await refreshProjectsCacheAndBroadcast('project-deleted', 'claude');
         res.json({ success: true });
     } catch (error) {
         if (error.code === 'PROJECT_HAS_SESSIONS') {
@@ -963,6 +1018,41 @@ app.delete('/api/projects/:projectName', authenticateToken, async (req, res) => 
                 sessionCount: error.sessionCount ?? null,
             });
         }
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Archive project endpoint — non-destructive hide (issue #16).
+// Only projects.isArchived flips to 1: session files, session rows and ~/.claude/projects/<name>
+// are untouched. Idempotent: an already-archived project returns 200 with alreadyArchived=true.
+app.post('/api/projects/:projectName/archive', authenticateToken, async (req, res) => {
+    try {
+        const { projectName } = req.params;
+        // Optional exact directory. The API name is lossy (/ : space ~ _ all become '-'), so
+        // x_y and x/y share one name; the sidebar passes the project's path to disambiguate.
+        const requestedPath = typeof req.body?.path === 'string' && req.body.path.trim() ? req.body.path.trim() : null;
+        const result = await archiveProjectByName(projectName, { requestedPath });
+        if (result.ambiguous) {
+            // Fail closed: never guess which of several real directories a lossy name means.
+            return res.status(409).json({
+                error: 'Project name is ambiguous; send an exact path to archive one project',
+                code: 'PROJECT_NAME_AMBIGUOUS',
+                candidatePaths: result.candidatePaths,
+            });
+        }
+        if (!result.found) {
+            return res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
+        }
+        await refreshProjectsCacheAndBroadcast('project-archived', 'claude');
+        res.json({
+            success: true,
+            archived: result.archived,
+            alreadyArchived: result.alreadyArchived,
+            path: result.projectPath,
+            archivedPaths: result.archivedPaths ?? [],
+        });
+    } catch (error) {
+        console.error('[API] Error archiving project:', error);
         res.status(500).json({ error: error.message });
     }
 });
@@ -1377,11 +1467,24 @@ app.get('/api/projects/:projectName/files', authenticateToken, async (req, res) 
             actualPath = req.params.projectName.replace(/-/g, '/');
         }
 
-        // Check if path exists
-        try {
-            await fsPromises.access(actualPath);
-        } catch (e) {
-            return res.status(404).json({ error: `Project path not found: ${actualPath}` });
+        // Availability check (issue #16): only ENOENT/ENOTDIR count as "missing".
+        // Permission or transient stat errors stay available and are reported with their own code
+        // instead of masquerading as "Project path not found".
+        const availability = await getProjectPathAvailability(actualPath);
+        if (availability.status === 'missing') {
+            return res.status(404).json({
+                error: `Project path not found: ${actualPath}`,
+                code: 'PROJECT_PATH_MISSING',
+                availability,
+            });
+        }
+        if (!availability.readable) {
+            const permissionDenied = availability.reason === 'permission_denied';
+            return res.status(permissionDenied ? 403 : 503).json({
+                error: `Project path could not be read: ${actualPath}`,
+                code: permissionDenied ? 'PROJECT_PATH_UNREADABLE' : 'PROJECT_PATH_CHECK_FAILED',
+                availability,
+            });
         }
 
         // Support lazy loading: optional ?path=<subdir>&depth=<n>
@@ -1646,16 +1749,28 @@ app.delete('/api/projects/:projectName/files', authenticateToken, async (req, re
         }
 
         // Delete based on type
+        let archivedProjects = [];
         if (stats.isDirectory()) {
             await fsPromises.rm(resolvedPath, { recursive: true, force: true });
+            // The deleted directory — or any project rooted inside it — can no longer be opened.
+            // Archive those rows now so GET /api/projects stops returning them (issue #16).
+            archivedProjects = archiveProjectsUnderPath(resolvedPath);
         } else {
             await fsPromises.unlink(resolvedPath);
+        }
+
+        if (archivedProjects.length > 0) {
+            // Invalidate _cachedProjectsList / projectDirectoryCache and push the fresh list.
+            await refreshProjectsCacheAndBroadcast('project-archived', 'claude');
+        } else {
+            clearProjectDirectoryCache();
         }
 
         res.json({
             success: true,
             path: resolvedPath,
             type: stats.isDirectory() ? 'directory' : 'file',
+            archivedProjects,
             message: 'Deleted successfully'
         });
     } catch (error) {

@@ -11,6 +11,33 @@ import { matchesExcludePattern } from '../../../../shared/excludePatterns';
 
 export { matchesExcludePattern };
 
+/**
+ * A project is unavailable only when the server proved its directory is gone
+ * (availability.status === 'missing'). Permission/transient stat failures keep
+ * available: true and must never gray out or hide the project (issue #16).
+ */
+export const isProjectUnavailable = (
+  project: Pick<Project, 'availability'> | null | undefined,
+): boolean => project?.availability?.status === 'missing' || project?.availability?.available === false;
+
+/**
+ * The directory exists but could not be read (EACCES/EPERM/IO/timeout). The project
+ * stays openable — the UI only adds a warning hint.
+ */
+export const isProjectAvailabilityDegraded = (
+  project: Pick<Project, 'availability'> | null | undefined,
+): boolean =>
+  Boolean(project?.availability) &&
+  project?.availability?.available !== false &&
+  project?.availability?.readable === false;
+
+/** i18n key (sidebar namespace) for why a project directory is missing. */
+export const getProjectUnavailableReasonKey = (
+  project: Pick<Project, 'availability'> | null | undefined,
+): string => (project?.availability?.reason === 'not_a_directory'
+  ? 'projects.directoryNotADirectory'
+  : 'projects.directoryMissing');
+
 export const readProjectSortOrder = (): ProjectSortOrder => {
   try {
     const rawSettings = localStorage.getItem('claude-settings');

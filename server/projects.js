@@ -69,6 +69,7 @@ import os from 'os';
 import sessionManager from './sessionManager.js';
 import { applyCustomSessionNames, applyHiddenFromRecents, applyScheduledTaskOrigin, applyReadState, applyForkParent, sessionDb, sessionFileCache, userDb, userSettingsDb } from './database/db.js';
 import { projectsDb, sessionsDb } from './modules/database/index.js';
+import { canonicalizeProjectPath } from './modules/database/repositories/projects.db.js';
 import { claudeSessionSynchronizer } from './modules/providers/list/claude/claude-session-synchronizer.provider.js';
 import { matchesExcludePattern } from '../shared/excludePatterns.js';
 
@@ -351,6 +352,67 @@ function clearProjectDirectoryCache() {
   projectDirectoryCache.clear();
 }
 
+// ── Project path availability (issue #16) ────────────────────────────────────
+// A DB project row can point at a directory the user deleted. We surface that as
+// project.availability instead of hiding or deleting the project, and only errors
+// that prove the path is gone (ENOENT/ENOTDIR) downgrade it to 'missing'.
+// Permission/transient errors (EACCES/EPERM/EBUSY/ENOTCONN/EIO/EMFILE/timeout)
+// keep the project available with a reason the UI can show, so an unmounted
+// external disk or a permissions problem can never make a project disappear or be
+// archived by mistake.
+const PROJECT_PATH_MISSING_ERROR_CODES = new Set(['ENOENT', 'ENOTDIR']);
+const PROJECT_AVAILABILITY_TIMEOUT_MS = 1500;
+
+function statWithTimeout(targetPath, timeoutMs) {
+  if (!timeoutMs || timeoutMs <= 0) return fs.stat(targetPath);
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const err = new Error(`Path check timed out after ${timeoutMs}ms: ${targetPath}`);
+      err.code = 'ETIMEDOUT';
+      reject(err);
+    }, timeoutMs);
+  });
+  return Promise.race([fs.stat(targetPath), timeout]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Classify a project path without ever treating a non-ENOENT error as "missing".
+ * @param {string} projectPath
+ * @param {{timeoutMs?: number}} [options]
+ * @returns {Promise<{status: 'available'|'missing', available: boolean, readable: boolean|null, reason: string|null, errorCode: string|null}>}
+ */
+async function getProjectPathAvailability(projectPath, { timeoutMs = PROJECT_AVAILABILITY_TIMEOUT_MS } = {}) {
+  if (!projectPath || typeof projectPath !== 'string') {
+    return { status: 'missing', available: false, readable: false, reason: 'empty_path', errorCode: null };
+  }
+
+  try {
+    const stats = await statWithTimeout(projectPath, timeoutMs);
+    if (!stats.isDirectory()) {
+      return { status: 'missing', available: false, readable: false, reason: 'not_a_directory', errorCode: 'ENOTDIR' };
+    }
+    return { status: 'available', available: true, readable: true, reason: null, errorCode: null };
+  } catch (error) {
+    if (PROJECT_PATH_MISSING_ERROR_CODES.has(error.code)) {
+      return {
+        status: 'missing',
+        available: false,
+        readable: false,
+        reason: error.code === 'ENOTDIR' ? 'not_a_directory' : 'not_found',
+        errorCode: error.code,
+      };
+    }
+
+    // The path may still exist — an unmounted volume, a permission problem, an I/O error or a
+    // hung stat must NOT hide or archive the project. Keep it available and report the reason.
+    const reason = error.code === 'EACCES' || error.code === 'EPERM'
+      ? 'permission_denied'
+      : (error.code === 'ETIMEDOUT' ? 'check_timeout' : 'check_failed');
+    return { status: 'available', available: true, readable: false, reason, errorCode: error.code || null };
+  }
+}
+
 // Module-level cache for the Codex sessions index.
 // buildCodexSessionsIndex() recursively scans and parses all ~/.codex/sessions files,
 // which is expensive (can be 10-60s on cold disk). Cache it with a short TTL so
@@ -587,6 +649,10 @@ async function getProjectData(dbProject, codexSessionsIndexRef, sessionExclusion
   const projectPath = dbProject.project_path;
   const claudeDirName = dbProject.claude_dir_name || pathToClaudeProjectName(projectPath);
 
+  // Cheap stat on every rebuild so deleting/restoring a directory shows up without a restart.
+  // Never throws: unavailable paths degrade to status 'missing', everything else stays available.
+  const availability = await getProjectPathAvailability(projectPath);
+
   // generateDisplayName reads package.json — cache it
   let autoDisplayName = _displayNameCache.get(projectPath);
   if (autoDisplayName === undefined) {
@@ -600,6 +666,7 @@ async function getProjectData(dbProject, codexSessionsIndexRef, sessionExclusion
     displayName: dbProject.custom_project_name || autoDisplayName,
     fullPath: projectPath,
     isCustomName: !!dbProject.custom_project_name,
+    availability,
     sessions: [],
     geminiSessions: [],
     cursorSessions: [],
@@ -873,14 +940,22 @@ async function _getProjectsImpl(progressCallback = null) {
     : null;
 
   let dbProjects = [];
+  let hasAnyProjectRows = false;
   try {
     dbProjects = projectsDb.getAllProjects();
+    // Issue #16 blocker: the legacy filesystem scan may only be used when the projects table
+    // is *completely* empty (no active AND no archived rows). getAllProjects() filters
+    // isArchived = 0, so an all-archived table looks empty and the scan would resurrect every
+    // archived project whose ~/.claude/projects directory still exists. Archive is
+    // non-destructive by design, so those directories normally do exist.
+    hasAnyProjectRows = dbProjects.length > 0 || projectsDb.getAllProjectRows().length > 0;
   } catch (err) {
     console.warn('[getProjects] Failed to load DB projects:', err.message);
   }
 
-  // If DB is empty (synchronizer hasn't run yet), fall back to filesystem scan
-  if (dbProjects.length === 0) {
+  // Fall back to the filesystem scan only when the DB has no project rows at all
+  // (e.g. the synchronizer has not run yet on a fresh install).
+  if (!hasAnyProjectRows) {
     return getProjectsLegacy(progressCallback);
   }
 
@@ -930,7 +1005,16 @@ async function getProjectsLegacy(progressCallback = null) {
   const serverExcludePatterns = getServerExcludePatterns();
 
   let dbProjects = [];
-  try { dbProjects = projectsDb.getAllProjects(); } catch { /* ignore */ }
+  // Defense in depth for the legacy scan: never list a path that has an archived row
+  // (compare canonical/realpath forms so /var vs /private/var aliases match too).
+  let archivedCanonicalPaths = new Set();
+  try {
+    const allRows = projectsDb.getAllProjectRows();
+    dbProjects = allRows.filter((row) => !row.isArchived);
+    archivedCanonicalPaths = new Set(
+      allRows.filter((row) => row.isArchived).map((row) => canonicalizeProjectPath(row.project_path))
+    );
+  } catch { /* ignore */ }
 
   try {
     await fs.access(claudeDir);
@@ -949,6 +1033,9 @@ async function getProjectsLegacy(progressCallback = null) {
 
       const actualProjectDir = await extractProjectDirectory(entry.name);
 
+      // Skip paths that were explicitly archived/removed (issue #16 blocker).
+      if (archivedCanonicalPaths.has(canonicalizeProjectPath(actualProjectDir))) continue;
+
       // Skip projects whose decoded path matches a user-configured exclude pattern.
       if (matchesExcludePattern(actualProjectDir, serverExcludePatterns)) continue;
 
@@ -961,6 +1048,7 @@ async function getProjectsLegacy(progressCallback = null) {
         displayName: customName || autoDisplayName,
         fullPath: actualProjectDir,
         isCustomName: !!customName,
+        availability: await getProjectPathAvailability(actualProjectDir),
         sessions: [],
         geminiSessions: [],
         cursorSessions: [],
@@ -1051,6 +1139,7 @@ async function getProjectsLegacy(progressCallback = null) {
         fullPath: actualProjectDir,
         isCustomName: !!dbProject.custom_project_name,
         isManuallyAdded: true,
+        availability: await getProjectPathAvailability(actualProjectDir),
         sessions: [],
         geminiSessions: [],
         sessionMeta: { hasMore: false, total: 0 },
@@ -2054,7 +2143,11 @@ async function deleteProject(projectName, force = false) {
         // Cursor dir may not exist, ignore
       }
 
-      projectsDb.archiveProject(projectPath);
+      // Archive the project row and every alias row of the same real directory, so a
+      // different spelling (/var vs /private/var) cannot keep it in the list.
+      const archivedAliases = projectsDb.archiveProjectAliases(projectPath);
+      if (archivedAliases.length === 0) projectsDb.archiveProject(projectPath);
+      clearProjectDirectoryCache();
     }
 
     return true;
@@ -2062,6 +2155,123 @@ async function deleteProject(projectName, force = false) {
     console.error(`Error deleting project ${projectName}:`, error);
     throw error;
   }
+}
+
+/**
+ * Archive (hide) every active project rooted at `rootPath` or inside it.
+ * Called when the file tree deletes a directory: the DB rows must stop being listed
+ * immediately (issue #16), otherwise GET /api/projects keeps returning the project and
+ * the sidebar re-broadcasts it from _cachedProjectsList.
+ * @returns {string[]} archived project paths
+ */
+function archiveProjectsUnderPath(rootPath) {
+  const archived = projectsDb.archiveProjectsUnderPath(rootPath);
+  if (archived.length > 0) clearProjectDirectoryCache();
+  return archived;
+}
+
+/**
+ * Archive a single project by its API name (the encoded Claude project dir name).
+ *
+ * Non-destructive: only projects.isArchived flips to 1 — no session files, no sessions rows
+ * and no ~/.claude/projects directory are touched. Idempotent: archiving an already-archived
+ * project reports alreadyArchived instead of resurrecting or double-archiving it.
+ *
+ * The API name is lossy: / : space ~ _ all encode to '-', so one name can match several
+ * different real directories (e.g. x_y and x/y). We never guess in that case — the call fails
+ * closed with ambiguous: true plus the candidate paths and archives nothing. Callers that know
+ * the directory pass requestedPath (exact canonical match); the sidebar always does.
+ *
+ * Rows for the *same real directory* under different spellings (macOS /var vs /private/var)
+ * are archived together, so a removed project cannot linger in the list under another alias.
+ *
+ * @returns {Promise<{found: boolean, archived: boolean, alreadyArchived: boolean, projectPath: string|null, archivedPaths: string[], ambiguous: boolean, candidatePaths: string[]}>}
+ */
+async function archiveProjectByName(projectName, { requestedPath = null } = {}) {
+  const notFound = {
+    found: false, archived: false, alreadyArchived: false,
+    projectPath: null, archivedPaths: [], ambiguous: false, candidatePaths: [],
+  };
+
+  const rows = projectsDb.getAllProjectRows();
+
+  const archiveActive = (targetRows) => {
+    const archivedPaths = [];
+    for (const row of targetRows) {
+      if (row.isArchived) continue;
+      if (projectsDb.archiveProject(row.project_path) > 0) archivedPaths.push(row.project_path);
+    }
+    clearProjectDirectoryCache();
+    return archivedPaths;
+  };
+  const result = (targetRows, archivedPaths, projectPath) => ({
+    found: true,
+    archived: archivedPaths.length > 0,
+    alreadyArchived: archivedPaths.length === 0,
+    projectPath,
+    archivedPaths,
+    ambiguous: false,
+    candidatePaths: [...new Set(targetRows.map((row) => row.project_path))].sort(),
+  });
+
+  // Exact directory supplied by the caller: no name-based guessing at all.
+  if (typeof requestedPath === 'string' && requestedPath.trim()) {
+    const canonical = canonicalizeProjectPath(requestedPath.trim());
+    const exactRows = rows.filter((row) => canonicalizeProjectPath(row.project_path) === canonical);
+    if (exactRows.length > 0) {
+      return result(exactRows, archiveActive(exactRows), exactRows[0].project_path);
+    }
+    // No row for that directory: fall through to the name path rather than 404 on a stale path.
+  }
+
+  const encodedName = typeof projectName === 'string' ? projectName : '';
+  if (!encodedName) return notFound;
+
+  // 1) exact claude_dir_name match first, then the encoded project_path (see the docblock).
+  let candidates = rows.filter((candidate) => candidate.claude_dir_name === encodedName);
+  if (candidates.length === 0) {
+    candidates = rows.filter((candidate) => pathToClaudeProjectName(candidate.project_path) === encodedName);
+  }
+  if (candidates.length === 0) {
+    const resolvedPath = await extractProjectDirectory(encodedName).catch(() => null);
+    if (resolvedPath) {
+      const canonical = canonicalizeProjectPath(resolvedPath);
+      candidates = rows.filter((candidate) => canonicalizeProjectPath(candidate.project_path) === canonical);
+      if (candidates.length === 0) {
+        const exact = projectsDb.getProjectPath(resolvedPath);
+        if (exact) candidates = [exact];
+      }
+    }
+  }
+  if (candidates.length === 0) return notFound;
+
+  // 2) Ambiguity is judged on the rows the user can actually see (active ones): an archived
+  //    sibling under the same lossy name must not turn a valid removal into a 409.
+  const activeCandidates = candidates.filter((candidate) => !candidate.isArchived);
+  const activeCanonicalKeys = new Set(activeCandidates.map((candidate) => canonicalizeProjectPath(candidate.project_path)));
+
+  if (activeCanonicalKeys.size > 1) {
+    return {
+      found: true,
+      archived: false,
+      alreadyArchived: false,
+      projectPath: null,
+      archivedPaths: [],
+      ambiguous: true,
+      candidatePaths: [...new Set(activeCandidates.map((candidate) => candidate.project_path))].sort(),
+    };
+  }
+
+  if (activeCandidates.length === 0) {
+    // Everything matching is already archived — idempotent success.
+    return result(candidates, [], candidates[0].project_path);
+  }
+
+  // 3) Exactly one real directory: expand to every alias row of that directory, then archive.
+  const canonicalKeys = new Set(activeCandidates.map((candidate) => canonicalizeProjectPath(candidate.project_path)));
+  const aliasRows = rows.filter((candidate) => canonicalKeys.has(canonicalizeProjectPath(candidate.project_path)));
+  const targetRows = aliasRows.length > 0 ? aliasRows : activeCandidates;
+  return result(targetRows, archiveActive(targetRows), activeCandidates[0].project_path);
 }
 
 // Add a project manually to the config (without creating folders)
@@ -2082,10 +2292,12 @@ async function addProjectManually(projectPath, displayName = null) {
     throw new Error(`Project already configured for path: ${absolutePath}`);
   }
 
-  const result = projectsDb.createProjectPath(absolutePath, displayName);
-  if (result.outcome === 'active_conflict') {
+  // Explicit user action: reactivating an archived row is allowed here (and only here).
+  const result = projectsDb.createProjectPath(absolutePath, displayName, { reactivateArchived: true });
+  if (result.outcome !== 'created' && result.outcome !== 'reactivated_archived') {
     throw new Error(`Project already configured for path: ${absolutePath}`);
   }
+  clearProjectDirectoryCache();
 
   return {
     name: projectName,
@@ -2093,6 +2305,8 @@ async function addProjectManually(projectPath, displayName = null) {
     fullPath: absolutePath,
     displayName: displayName || await generateDisplayName(projectName, absolutePath),
     isManuallyAdded: true,
+    // Same availability shape as GET /api/projects so the create response is consistent.
+    availability: await getProjectPathAvailability(absolutePath),
     sessions: [],
     cursorSessions: []
   };
@@ -3479,6 +3693,10 @@ export {
   saveProjectConfig,
   extractProjectDirectory,
   clearProjectDirectoryCache,
+  getProjectPathAvailability,
+  PROJECT_PATH_MISSING_ERROR_CODES,
+  archiveProjectByName,
+  archiveProjectsUnderPath,
   clearSessionMessagesCache,
   getCodexSessions,
   getCodexSessionMessages,

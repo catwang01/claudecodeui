@@ -124,6 +124,7 @@ export function useSidebarController({
   const [forkingSessionId, setForkingSessionId] = useState<string | null>(null);
   const [searchFilter, setSearchFilter] = useState('');
   const [deletingProjects, setDeletingProjects] = useState<Set<string>>(new Set());
+  const [archivingProjects, setArchivingProjects] = useState<Set<string>>(new Set());
   const [deleteConfirmation, setDeleteConfirmation] = useState<DeleteProjectConfirmation | null>(null);
   const [sessionDeleteConfirmation, setSessionDeleteConfirmation] = useState<SessionDeleteConfirmation | null>(null);
   const [isDeletingSession, setIsDeletingSession] = useState(false);
@@ -629,6 +630,50 @@ export function useSidebarController({
     }
   }, [deleteConfirmation, getProjectSessions, onProjectDelete, t]);
 
+  // Refs keep archiveProject identity stable so memoized project rows do not re-render
+  // just because a callback dependency changed (single-flight guard lives in the ref).
+  const archiveProjectDepsRef = useRef({ onProjectDelete, onRefresh, t });
+  archiveProjectDepsRef.current = { onProjectDelete, onRefresh, t };
+  const archivingProjectsRef = useRef<Set<string>>(new Set());
+
+  /**
+   * Non-destructive removal of an unavailable project (issue #16): POST
+   * /api/projects/:name/archive only flips projects.isArchived — session files/history are kept.
+   * The row is then removed from local state and the server list is refreshed.
+   */
+  const archiveProject = useCallback(async (project: Project) => {
+    if (archivingProjectsRef.current.has(project.name)) {
+      return;
+    }
+    archivingProjectsRef.current.add(project.name);
+    setArchivingProjects((prev) => new Set([...prev, project.name]));
+
+    const { onProjectDelete: notifyProjectDeleted, onRefresh: refreshProjects, t: translate } = archiveProjectDepsRef.current;
+
+    try {
+      // Send the exact directory so a lossy name (x_y vs x/y) can never archive the wrong project.
+      const response = await api.archiveProject(project.name, project.path || project.fullPath);
+      if (!response.ok) {
+        const error = (await response.json().catch(() => ({}))) as { error?: string };
+        alert(error.error || translate('messages.archiveProjectFailed'));
+        return;
+      }
+
+      notifyProjectDeleted?.(project.name);
+      await refreshProjects();
+    } catch (error) {
+      logger.error('[Sidebar] Error archiving project:', error);
+      alert(translate('messages.archiveProjectError'));
+    } finally {
+      archivingProjectsRef.current.delete(project.name);
+      setArchivingProjects((prev) => {
+        const next = new Set(prev);
+        next.delete(project.name);
+        return next;
+      });
+    }
+  }, []);
+
   const loadMoreSessions = useCallback(
     async (project: Project) => {
       const hasMoreOverride = projectHasMoreOverrides[project.name];
@@ -743,6 +788,8 @@ export function useSidebarController({
     editingSessionName,
     searchFilter,
     deletingProjects,
+    archivingProjects,
+    archiveProject,
     deleteConfirmation,
     sessionDeleteConfirmation,
     isDeletingSession,

@@ -6,6 +6,7 @@ import type {
   MCPServerStatus,
   SessionWithProvider,
 } from '../../types/types';
+import { isProjectUnavailable } from '../../utils/utils';
 import SidebarProjectItem from './SidebarProjectItem';
 import SidebarProjectsState from './SidebarProjectsState';
 
@@ -28,6 +29,7 @@ const SidebarProjectItemMemo = memo(SidebarProjectItem, (prev, next) =>
   prev.isLoadingSessions === next.isLoadingSessions &&
   prev.editingSession === next.editingSession &&
   prev.editingSessionName === next.editingSessionName &&
+  prev.isArchiving === next.isArchiving &&
   prev.processingSessions === next.processingSessions &&
   prev.readSessionIds === next.readSessionIds &&
   prev.forkingSessionId === next.forkingSessionId &&
@@ -50,6 +52,7 @@ export type SidebarProjectListProps = {
   editingSession: string | null;
   editingSessionName: string;
   deletingProjects: Set<string>;
+  archivingProjects: Set<string>;
   tasksEnabled: boolean;
   mcpServerStatus: MCPServerStatus;
   getProjectSessions: (project: Project) => SessionWithProvider[];
@@ -62,6 +65,7 @@ export type SidebarProjectListProps = {
   onCancelEditingProject: () => void;
   onSaveProjectName: (projectName: string) => void;
   onDeleteProject: (project: Project) => void;
+  onArchiveProject: (project: Project) => void;
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
   onDeleteSession: (
     projectName: string,
@@ -99,6 +103,7 @@ export default function SidebarProjectList({
   editingSession,
   editingSessionName,
   deletingProjects,
+  archivingProjects,
   tasksEnabled,
   mcpServerStatus,
   getProjectSessions,
@@ -111,6 +116,7 @@ export default function SidebarProjectList({
   onCancelEditingProject,
   onSaveProjectName,
   onDeleteProject,
+  onArchiveProject,
   onSessionSelect,
   onDeleteSession,
   onForkSession,
@@ -156,8 +162,9 @@ export default function SidebarProjectList({
               project={project}
               selectedProject={selectedProject}
               selectedSession={selectedSession}
-              isExpanded={expandedProjects.has(project.name)}
+              isExpanded={!isProjectUnavailable(project) && expandedProjects.has(project.name)}
               isDeleting={deletingProjects.has(project.name)}
+              isArchiving={archivingProjects.has(project.name)}
               isStarred={isProjectStarred(project.name)}
               editingProject={editingProject}
               editingName={editingName}
@@ -177,6 +184,7 @@ export default function SidebarProjectList({
               onCancelEditingProject={onCancelEditingProject}
               onSaveProjectName={onSaveProjectName}
               onDeleteProject={onDeleteProject}
+              onArchiveProject={onArchiveProject}
               onSessionSelect={onSessionSelect}
               onDeleteSession={onDeleteSession}
               onForkSession={onForkSession}

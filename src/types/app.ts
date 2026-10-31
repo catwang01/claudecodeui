@@ -36,11 +36,35 @@ export interface ProjectTaskmasterInfo {
   [key: string]: unknown;
 }
 
+export type ProjectAvailabilityStatus = 'available' | 'missing';
+
+export type ProjectAvailabilityReason =
+  | 'not_found'
+  | 'not_a_directory'
+  | 'empty_path'
+  | 'permission_denied'
+  | 'check_failed'
+  | 'check_timeout';
+
+/**
+ * Server-computed availability of a project's directory (issue #16).
+ * `status === 'missing'` is the only state that blocks opening the project; permission /
+ * transient stat failures keep the project available and only set `reason`/`readable`.
+ */
+export interface ProjectAvailability {
+  status: ProjectAvailabilityStatus;
+  available: boolean;
+  readable: boolean | null;
+  reason: ProjectAvailabilityReason | null;
+  errorCode: string | null;
+}
+
 export interface Project {
   name: string;
   displayName: string;
   fullPath: string;
   path?: string;
+  availability?: ProjectAvailability;
   sessions?: ProjectSession[];
   cursorSessions?: ProjectSession[];
   codexSessions?: ProjectSession[];

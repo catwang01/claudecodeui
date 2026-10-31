@@ -17,7 +17,10 @@
     "projects": "projects",
     "noMatchingProjects": "No matching projects",
     "tryDifferentSearch": "Try adjusting your search term",
-    "runClaudeCli": "Run Claude CLI in a project directory to get started"
+    "runClaudeCli": "Run Claude CLI in a project directory to get started",
+    "directoryMissing": "Directory not found",
+    "directoryNotADirectory": "Path is not a directory",
+    "directoryUnreadable": "Directory not readable"
   },
   "app": {
     "title": "CloudCLI",
@@ -49,7 +52,8 @@
     "deleteSession": "Delete this session permanently",
     "save": "Save",
     "cancel": "Cancel",
-    "clearSearch": "Clear search"
+    "clearSearch": "Clear search",
+    "archiveProject": "Remove from list (keeps session history)"
   },
   "scheduledTaskSession": {
     "badge": "Started by scheduled task \"{{title}}\"",
@@ -115,7 +119,9 @@
     "deleteProjectFailed": "Failed to delete project. Please try again.",
     "deleteProjectError": "Error deleting project. Please try again.",
     "createProjectFailed": "Failed to create project. Please try again.",
-    "createProjectError": "Error creating project. Please try again."
+    "createProjectError": "Error creating project. Please try again.",
+    "archiveProjectFailed": "Failed to remove project from the list. Please try again.",
+    "archiveProjectError": "Error removing project from the list. Please try again."
   },
   "version": {
     "updateAvailable": "Update available"

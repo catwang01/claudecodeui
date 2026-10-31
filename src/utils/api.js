@@ -154,6 +154,13 @@ export const api = {
     authenticatedFetch(`/api/projects/${projectName}${force ? '?force=true' : ''}`, {
       method: 'DELETE',
     }),
+  // Non-destructive hide (issue #16): archives the project row only, no session files touched.
+  // `projectPath` disambiguates lossy names (/ : space ~ _ all encode to '-').
+  archiveProject: (projectName, projectPath) =>
+    authenticatedFetch(`/api/projects/${encodeURIComponent(projectName)}/archive`, {
+      method: 'POST',
+      body: JSON.stringify(projectPath ? { path: projectPath } : {}),
+    }),
   searchConversationsUrl: (query, limit = 50, excludePatterns = []) => {
     const token = localStorage.getItem('auth-token');
     const params = new URLSearchParams({ q: query, limit: String(limit) });

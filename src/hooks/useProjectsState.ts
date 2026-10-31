@@ -31,10 +31,23 @@ export const projectHasChanges = (
   nextProject: Project,
   includeExternalSessions: boolean,
 ): boolean => {
+  // Compare only the stable availability fields (status/reason/errorCode). The payload has no
+  // timestamps, so an unchanged project still serializes identically and mergeProjects can keep
+  // the previous reference.
+  const prevAvailability = prevProject.availability;
+  const nextAvailability = nextProject.availability;
+  const availabilityChanged =
+    (prevAvailability?.status ?? null) !== (nextAvailability?.status ?? null) ||
+    (prevAvailability?.available ?? null) !== (nextAvailability?.available ?? null) ||
+    (prevAvailability?.readable ?? null) !== (nextAvailability?.readable ?? null) ||
+    (prevAvailability?.reason ?? null) !== (nextAvailability?.reason ?? null) ||
+    (prevAvailability?.errorCode ?? null) !== (nextAvailability?.errorCode ?? null);
+
   const baseChanged =
     nextProject.name !== prevProject.name ||
     nextProject.displayName !== prevProject.displayName ||
     nextProject.fullPath !== prevProject.fullPath ||
+    availabilityChanged ||
     serialize(nextProject.sessionMeta) !== serialize(prevProject.sessionMeta) ||
     serialize(nextProject.sessions) !== serialize(prevProject.sessions) ||
     serialize(nextProject.taskmaster) !== serialize(prevProject.taskmaster);
@@ -489,6 +502,10 @@ export function useProjectsState({
 
   const handleProjectSelect = useCallback(
     (project: Project) => {
+      // Issue #16: a project whose directory is gone stays visible but cannot be opened.
+      // Guard here as well so recent/quick-search entries cannot bypass the sidebar block.
+      if (project?.availability?.available === false) return;
+
       setSelectedProject(project);
       setSelectedSession(null);
       navigate('/');

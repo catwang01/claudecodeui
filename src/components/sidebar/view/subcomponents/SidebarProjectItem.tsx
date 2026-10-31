@@ -1,4 +1,6 @@
 import {
+  AlertTriangle,
+  Archive,
   Check,
   ChevronDown,
   ChevronRight,
@@ -18,7 +20,12 @@ import type {
   SessionProvider,
 } from "../../../../types/app";
 import type { MCPServerStatus, SessionWithProvider } from "../../types/types";
-import { getTaskIndicatorStatus } from "../../utils/utils";
+import {
+  getProjectUnavailableReasonKey,
+  getTaskIndicatorStatus,
+  isProjectAvailabilityDegraded,
+  isProjectUnavailable,
+} from "../../utils/utils";
 import TaskIndicator from "./TaskIndicator";
 import SidebarProjectSessions from "./SidebarProjectSessions";
 import EditorOpenMenu from "./EditorOpenMenu";
@@ -29,6 +36,7 @@ type SidebarProjectItemProps = {
   selectedSession: ProjectSession | null;
   isExpanded: boolean;
   isDeleting: boolean;
+  isArchiving: boolean;
   isStarred: boolean;
   editingProject: string | null;
   editingName: string;
@@ -48,6 +56,7 @@ type SidebarProjectItemProps = {
   onCancelEditingProject: () => void;
   onSaveProjectName: (projectName: string) => void;
   onDeleteProject: (project: Project) => void;
+  onArchiveProject: (project: Project) => void;
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
   onDeleteSession: (
     projectName: string,
@@ -95,6 +104,7 @@ export default function SidebarProjectItem({
   selectedSession,
   isExpanded,
   isDeleting,
+  isArchiving,
   isStarred,
   editingProject,
   editingName,
@@ -114,6 +124,7 @@ export default function SidebarProjectItem({
   onCancelEditingProject,
   onSaveProjectName,
   onDeleteProject,
+  onArchiveProject,
   onSessionSelect,
   onDeleteSession,
   onForkSession,
@@ -135,7 +146,21 @@ export default function SidebarProjectItem({
   const sessionCountLabel = `${sessionCountDisplay} session${sessions.length === 1 ? "" : "s"}`;
   const taskStatus = getTaskIndicatorStatus(project, mcpServerStatus);
 
-  const toggleProject = () => onToggleProject(project.name);
+  // Issue #16: a project whose directory is gone must stay visible (never hidden/deleted
+  // automatically) but cannot be opened or expanded — only explicitly removed (archived).
+  // Permission/transient stat failures keep available=true and only add a warning hint.
+  const unavailable = isProjectUnavailable(project);
+  const degraded = isProjectAvailabilityDegraded(project);
+  const availabilityHint = unavailable
+    ? t(getProjectUnavailableReasonKey(project))
+    : degraded
+      ? t("projects.directoryUnreadable")
+      : null;
+
+  const toggleProject = () => {
+    if (unavailable) return;
+    onToggleProject(project.name);
+  };
   const toggleStarProject = () => onToggleStarProject(project.name);
 
   const saveProjectName = () => {
@@ -143,6 +168,8 @@ export default function SidebarProjectItem({
   };
 
   const selectAndToggleProject = () => {
+    if (unavailable) return;
+
     if (selectedProject?.name !== project.name) {
       onProjectSelect(project);
     }
@@ -157,6 +184,7 @@ export default function SidebarProjectItem({
         isDeleting && "opacity-50 pointer-events-none",
       )}
       data-project-name={project.name}
+      data-project-availability={project.availability?.status ?? "unknown"}
     >
       <div className="md:group group">
         <div className="md:hidden">
@@ -167,8 +195,10 @@ export default function SidebarProjectItem({
               isStarred &&
                 !isSelected &&
                 "bg-yellow-50/50 dark:bg-yellow-900/5 border-yellow-200/30 dark:border-yellow-800/30",
+              unavailable && "border-dashed opacity-70",
             )}
-            onClick={toggleProject}
+            onClick={unavailable ? undefined : toggleProject}
+            aria-disabled={unavailable || undefined}
           >
             <div className="flex items-center justify-between">
               <div className="flex min-w-0 flex-1 items-center gap-3">
@@ -230,6 +260,19 @@ export default function SidebarProjectItem({
                       <p className="text-xs text-muted-foreground">
                         {sessionCountLabel}
                       </p>
+                      {availabilityHint && (
+                        <p
+                          className={cn(
+                            "mt-0.5 flex items-center gap-1 text-[11px]",
+                            unavailable
+                              ? "text-amber-600 dark:text-amber-400"
+                              : "text-muted-foreground",
+                          )}
+                        >
+                          <AlertTriangle className="h-3 w-3 flex-shrink-0" />
+                          {availabilityHint}
+                        </p>
+                      )}
                     </>
                   )}
                 </div>
@@ -259,7 +302,9 @@ export default function SidebarProjectItem({
                   </>
                 ) : (
                   <>
-                    <EditorOpenMenu directory={project.fullPath} mobile t={t} />
+                    {!unavailable && (
+                      <EditorOpenMenu directory={project.fullPath} mobile t={t} />
+                    )}
 
                     <button
                       className={cn(
@@ -288,25 +333,41 @@ export default function SidebarProjectItem({
                       />
                     </button>
 
-                    <button
-                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-500/10 active:scale-90 dark:border-red-800 dark:bg-red-900/30"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onDeleteProject(project);
-                      }}
-                    >
-                      <Trash2 className="h-4 w-4 text-red-600 dark:text-red-400" />
-                    </button>
+                    {unavailable ? (
+                      <button
+                        className="flex h-8 w-8 items-center justify-center rounded-lg border border-amber-300 bg-amber-500/10 active:scale-90 disabled:opacity-50 dark:border-amber-700 dark:bg-amber-900/30"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onArchiveProject(project);
+                        }}
+                        disabled={isArchiving}
+                        title={t("tooltips.archiveProject")}
+                      >
+                        <Archive className="h-4 w-4 text-amber-700 dark:text-amber-400" />
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          className="flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-500/10 active:scale-90 dark:border-red-800 dark:bg-red-900/30"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onDeleteProject(project);
+                          }}
+                        >
+                          <Trash2 className="h-4 w-4 text-red-600 dark:text-red-400" />
+                        </button>
 
-                    <button
-                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 active:scale-90 dark:border-primary/30 dark:bg-primary/20"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onStartEditingProject(project);
-                      }}
-                    >
-                      <Edit3 className="h-4 w-4 text-primary" />
-                    </button>
+                        <button
+                          className="flex h-8 w-8 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 active:scale-90 dark:border-primary/30 dark:bg-primary/20"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onStartEditingProject(project);
+                          }}
+                        >
+                          <Edit3 className="h-4 w-4 text-primary" />
+                        </button>
+                      </>
+                    )}
 
                     <div className="flex h-6 w-6 items-center justify-center rounded-md bg-muted/30">
                       {isExpanded ? (
@@ -330,8 +391,10 @@ export default function SidebarProjectItem({
             isStarred &&
               !isSelected &&
               "bg-yellow-50/50 dark:bg-yellow-900/10 hover:bg-yellow-100/50 dark:hover:bg-yellow-900/20",
+            unavailable && "border border-dashed opacity-70",
           )}
           onClick={selectAndToggleProject}
+          aria-disabled={unavailable || undefined}
         >
           <div className="flex min-w-0 flex-1 items-center gap-3">
             {isExpanded ? (
@@ -377,6 +440,19 @@ export default function SidebarProjectItem({
                   </div>
                   <div className="text-xs text-muted-foreground">
                     {sessionCountDisplay}
+                    {availabilityHint && (
+                      <span
+                        className={cn(
+                          "ml-1 inline-flex items-center gap-0.5",
+                          unavailable
+                            ? "text-amber-600 dark:text-amber-400"
+                            : "opacity-70",
+                        )}
+                      >
+                        <AlertTriangle className="h-3 w-3" />
+                        {availabilityHint}
+                      </span>
+                    )}
                     {project.fullPath !== project.displayName && (
                       <span
                         className="ml-1 opacity-60"
@@ -418,7 +494,9 @@ export default function SidebarProjectItem({
               </>
             ) : (
               <>
-                <EditorOpenMenu directory={project.fullPath} t={t} />
+                {!unavailable && (
+                  <EditorOpenMenu directory={project.fullPath} t={t} />
+                )}
 
                 <div
                   className={cn(
@@ -446,26 +524,47 @@ export default function SidebarProjectItem({
                     )}
                   />
                 </div>
-                <div
-                  className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-accent group-hover:opacity-100"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onStartEditingProject(project);
-                  }}
-                  title={t("tooltips.renameProject")}
-                >
-                  <Edit3 className="h-3 w-3" />
-                </div>
-                <div
-                  className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-red-50 group-hover:opacity-100 dark:hover:bg-red-900/20"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onDeleteProject(project);
-                  }}
-                  title={t("tooltips.deleteProject")}
-                >
-                  <Trash2 className="h-3 w-3 text-red-600 dark:text-red-400" />
-                </div>
+                {!unavailable && (
+                  <div
+                    className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-accent group-hover:opacity-100"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onStartEditingProject(project);
+                    }}
+                    title={t("tooltips.renameProject")}
+                  >
+                    <Edit3 className="h-3 w-3" />
+                  </div>
+                )}
+                {unavailable ? (
+                  <div
+                    className={cn(
+                      "touch:opacity-100 flex h-6 w-6 items-center justify-center rounded transition-all duration-200",
+                      isArchiving
+                        ? "opacity-40"
+                        : "cursor-pointer opacity-0 hover:bg-amber-50 group-hover:opacity-100 dark:hover:bg-amber-900/20",
+                    )}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (isArchiving) return;
+                      onArchiveProject(project);
+                    }}
+                    title={t("tooltips.archiveProject")}
+                  >
+                    <Archive className="h-3 w-3 text-amber-600 dark:text-amber-400" />
+                  </div>
+                ) : (
+                  <div
+                    className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-red-50 group-hover:opacity-100 dark:hover:bg-red-900/20"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onDeleteProject(project);
+                    }}
+                    title={t("tooltips.deleteProject")}
+                  >
+                    <Trash2 className="h-3 w-3 text-red-600 dark:text-red-400" />
+                  </div>
+                )}
                 {isExpanded ? (
                   <ChevronDown className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-foreground" />
                 ) : (

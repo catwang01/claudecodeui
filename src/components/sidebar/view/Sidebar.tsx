@@ -97,6 +97,8 @@ function Sidebar({
     forkingSessionId,
     requestProjectDelete,
     confirmDeleteProject,
+    archivingProjects,
+    archiveProject,
     loadMoreSessions,
     handleProjectSelect,
     refreshProjects,
@@ -194,6 +196,7 @@ function Sidebar({
     editingSession,
     editingSessionName,
     deletingProjects,
+    archivingProjects,
     tasksEnabled,
     mcpServerStatus,
     getProjectSessions,
@@ -208,6 +211,9 @@ function Sidebar({
       void saveProjectName(projectName);
     },
     onDeleteProject: requestProjectDelete,
+    onArchiveProject: (project) => {
+      void archiveProject(project);
+    },
     onSessionSelect: (session, projectName) => {
       if (session.id) {
         const provider = session.__provider || 'claude';
