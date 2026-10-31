@@ -264,13 +264,17 @@ function isEnvFlagOn(raw) {
 }
 
 /**
- * §6.1: deny Claude Code's built-in CronCreate/CronList/CronDelete unless the user
- * opted out (SCHEDULED_TASKS_KEEP_BUILTIN_CRON=1) or our own tools are disabled
- * (SCHEDULED_TASKS_TOOLS=0 — then the built-ins are left alone so the agent still
- * has a scheduler).
+ * §6.2: the app's scheduler is a **soft** preference. The tool descriptions tell the model to
+ * prefer the schedule_* tools and to use a built-in scheduler only when the user explicitly
+ * asks for that one; by default the built-in Cron tools therefore stay available, so such a
+ * request can actually be honoured.
+ *
+ * Operators who want the hard guarantee set SCHEDULED_TASKS_BLOCK_BUILTIN_CRON=1, which removes
+ * CronCreate/CronList/CronDelete from the model's context. SCHEDULED_TASKS_TOOLS=0 always leaves
+ * the built-ins alone, so an agent is never left without any scheduler.
  */
-function shouldSuppressBuiltinCron() {
-  if (isEnvFlagOn(process.env.SCHEDULED_TASKS_KEEP_BUILTIN_CRON)) return false;
+function shouldBlockBuiltinCron() {
+  if (!isEnvFlagOn(process.env.SCHEDULED_TASKS_BLOCK_BUILTIN_CRON)) return false;
   if (!isScheduleToolsEnabled()) return false;
   return true;
 }
@@ -278,7 +282,7 @@ function shouldSuppressBuiltinCron() {
 /** Merge (never replace) the configured deny list, de-duplicating. */
 function mergeDisallowedTools(configured) {
   const list = Array.isArray(configured) ? [...configured] : [];
-  if (shouldSuppressBuiltinCron()) {
+  if (shouldBlockBuiltinCron()) {
     for (const name of BUILTIN_CRON_TOOLS) {
       if (!list.includes(name)) list.push(name);
     }
@@ -353,8 +357,8 @@ export function mapCliOptionsToSDK(options = {}) {
   // but being explicit ensures forward compatibility and clarity.
   sdkOptions.tools = { type: 'preset', preset: 'claude_code' };
 
-  // §6.1: shadow Claude Code's built-in Cron tools by default (merged with the
-  // user's configured deny list); SCHEDULED_TASKS_KEEP_BUILTIN_CRON=1 opts out.
+  // §6.2: soft preference. The configured deny list is passed through untouched unless
+  // SCHEDULED_TASKS_BLOCK_BUILTIN_CRON=1 asks for the built-in Cron tools to be blocked as well.
   sdkOptions.disallowedTools = mergeDisallowedTools(settings.disallowedTools);
 
   // Map model (default to claude-sonnet-4.6)

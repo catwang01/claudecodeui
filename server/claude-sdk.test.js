@@ -576,18 +576,18 @@ describe('queryClaudeSDK — idle session reaper', () => {
   });
 });
 
-describe('mapCliOptionsToSDK — §6.1 built-in Cron precedence', () => {
+describe('mapCliOptionsToSDK — §6.2 soft built-in Cron preference', () => {
   let mapCliOptionsToSDK;
-  let savedKeepBuiltinCron;
+  let savedBlockBuiltinCron;
   let savedScheduleTools;
 
   beforeEach(async () => {
     vi.clearAllMocks();
     vi.resetModules();
 
-    savedKeepBuiltinCron = process.env.SCHEDULED_TASKS_KEEP_BUILTIN_CRON;
+    savedBlockBuiltinCron = process.env.SCHEDULED_TASKS_BLOCK_BUILTIN_CRON;
     savedScheduleTools = process.env.SCHEDULED_TASKS_TOOLS;
-    delete process.env.SCHEDULED_TASKS_KEEP_BUILTIN_CRON;
+    delete process.env.SCHEDULED_TASKS_BLOCK_BUILTIN_CRON;
     delete process.env.SCHEDULED_TASKS_TOOLS;
 
     const mod = await import('./claude-sdk.js');
@@ -595,46 +595,45 @@ describe('mapCliOptionsToSDK — §6.1 built-in Cron precedence', () => {
   });
 
   afterEach(() => {
-    if (savedKeepBuiltinCron === undefined) delete process.env.SCHEDULED_TASKS_KEEP_BUILTIN_CRON;
-    else process.env.SCHEDULED_TASKS_KEEP_BUILTIN_CRON = savedKeepBuiltinCron;
+    if (savedBlockBuiltinCron === undefined) delete process.env.SCHEDULED_TASKS_BLOCK_BUILTIN_CRON;
+    else process.env.SCHEDULED_TASKS_BLOCK_BUILTIN_CRON = savedBlockBuiltinCron;
 
     if (savedScheduleTools === undefined) delete process.env.SCHEDULED_TASKS_TOOLS;
     else process.env.SCHEDULED_TASKS_TOOLS = savedScheduleTools;
   });
 
-  it('denies the built-in Cron tools by default', () => {
+  it('leaves the built-in Cron tools available by default (soft preference)', () => {
     const sdkOptions = mapCliOptionsToSDK({});
 
-    expect(sdkOptions.disallowedTools).toEqual(['CronCreate', 'CronList', 'CronDelete']);
+    expect(sdkOptions.disallowedTools).toEqual([]);
   });
 
-  it('preserves and de-duplicates the user-configured deny list', () => {
+  it('passes the user-configured deny list through untouched', () => {
     const sdkOptions = mapCliOptionsToSDK({
       toolsSettings: { allowedTools: [], disallowedTools: ['Bash(rm:*)', 'CronCreate'] },
+    });
+
+    expect(sdkOptions.disallowedTools).toEqual(['Bash(rm:*)', 'CronCreate']);
+  });
+
+  it('blocks them only when SCHEDULED_TASKS_BLOCK_BUILTIN_CRON=1, without duplicating', () => {
+    process.env.SCHEDULED_TASKS_BLOCK_BUILTIN_CRON = '1';
+
+    const sdkOptions = mapCliOptionsToSDK({
+      toolsSettings: { disallowedTools: ['Bash(rm:*)', 'CronCreate'] },
     });
 
     expect(sdkOptions.disallowedTools).toEqual(['Bash(rm:*)', 'CronCreate', 'CronList', 'CronDelete']);
   });
 
-  it('does not duplicate a user entry that already lists all three', () => {
-    const sdkOptions = mapCliOptionsToSDK({
-      toolsSettings: { disallowedTools: ['CronDelete', 'CronList', 'CronCreate'] },
-    });
+  it('accepts true/yes/on for the block flag', () => {
+    process.env.SCHEDULED_TASKS_BLOCK_BUILTIN_CRON = 'yes';
 
-    expect(sdkOptions.disallowedTools).toEqual(['CronDelete', 'CronList', 'CronCreate']);
+    expect(mapCliOptionsToSDK({}).disallowedTools).toEqual(['CronCreate', 'CronList', 'CronDelete']);
   });
 
-  it('leaves the deny list untouched when SCHEDULED_TASKS_KEEP_BUILTIN_CRON=1', () => {
-    process.env.SCHEDULED_TASKS_KEEP_BUILTIN_CRON = '1';
-
-    const sdkOptions = mapCliOptionsToSDK({
-      toolsSettings: { disallowedTools: ['Bash(rm:*)'] },
-    });
-
-    expect(sdkOptions.disallowedTools).toEqual(['Bash(rm:*)']);
-  });
-
-  it('leaves the deny list untouched when SCHEDULED_TASKS_TOOLS=0', () => {
+  it('never blocks them when SCHEDULED_TASKS_TOOLS=0, even with the flag set', () => {
+    process.env.SCHEDULED_TASKS_BLOCK_BUILTIN_CRON = '1';
     process.env.SCHEDULED_TASKS_TOOLS = '0';
 
     const sdkOptions = mapCliOptionsToSDK({
@@ -642,13 +641,6 @@ describe('mapCliOptionsToSDK — §6.1 built-in Cron precedence', () => {
     });
 
     expect(sdkOptions.disallowedTools).toEqual(['Bash(rm:*)']);
-  });
-
-  it('keeps the built-ins when both escape hatches are set', () => {
-    process.env.SCHEDULED_TASKS_KEEP_BUILTIN_CRON = '1';
-    process.env.SCHEDULED_TASKS_TOOLS = '0';
-
-    expect(mapCliOptionsToSDK({}).disallowedTools).toEqual([]);
   });
 
   it('still pre-allows our own schedule tools by default', () => {
@@ -656,6 +648,5 @@ describe('mapCliOptionsToSDK — §6.1 built-in Cron precedence', () => {
     const allowed = sdkOptions.allowedTools || [];
 
     expect(allowed).toContain('mcp__internal__schedule_create');
-    expect(allowed).not.toContain('CronCreate');
   });
 });

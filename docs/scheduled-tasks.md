@@ -254,12 +254,11 @@ Two mechanisms, both required:
    that the built-in `CronCreate` / `CronList` / `CronDelete` must not be used. The
    `schedule_create` description additionally explains why (separate store, not visible in
    the UI, 7-day expiry).
-2. **Default enforcement.** `mapCliOptionsToSDK` appends `CronCreate`, `CronList` and
-   `CronDelete` to `sdkOptions.disallowedTools` (merging with, never replacing, the user's
-   configured list and de-duplicating) so the model cannot reach them. Exceptions:
-   - `SCHEDULED_TASKS_KEEP_BUILTIN_CRON=1` restores the built-in tools (escape hatch);
-   - when `SCHEDULED_TASKS_TOOLS=0` (our tools are absent) the built-ins are left alone, so
-     the agent is never left without any scheduler.
+2. **Soft by default, blockable on request (superseded by §6.3).** The descriptions carry the
+   preference; the runtime does **not** remove the built-in tools unless
+   `SCHEDULED_TASKS_BLOCK_BUILTIN_CRON=1` is set, so an explicit user request for a built-in
+   scheduler can still be honoured. `SCHEDULED_TASKS_TOOLS=0` (our tools absent) never blocks the
+   built-ins, so an agent is never left without any scheduler.
 
 ### §6.2 Precedence wording against every runtime, and the storage map (fifth iteration)
 
@@ -278,8 +277,24 @@ model never has to guess (or invent) a store.
   `~/.claude/projects/<project>/<sessionId>.jsonl`. A built-in scheduler keeps its jobs in a
   separate store (Claude Code: `<project>/.claude/scheduled_tasks.json`), which is why they never
   appear in `schedule_list` or in the app's panel, and why they expire after 7 days.
-- **Enforcement vs. the exception.** `disallowedTools` removes the Claude Code Cron tools from the
-  model's context by default, so an in-conversation request for them cannot be honoured while that
-  default stands; the documented escape hatch (`SCHEDULED_TASKS_KEEP_BUILTIN_CRON=1`) restores
-  them. Codex, Cursor, Gemini and Copilot are separate CLIs with no equivalent deny hook in this
-  app, so for those providers the description is guidance only.
+- **Soft preference, with an opt-in hard block (superseded by §6.3).** By default
+  `disallowedTools` is passed through untouched, so the model can honour a user who explicitly
+  asks for a built-in scheduler; the descriptions are what steer it to ours. Setting
+  `SCHEDULED_TASKS_BLOCK_BUILTIN_CRON=1` merges `CronCreate`/`CronList`/`CronDelete` into
+  `disallowedTools` (de-duplicated, the configured list preserved) for operators who want the
+  hard guarantee. Codex, Cursor, Gemini and Copilot are separate CLIs with no equivalent hook in
+  this app, so for those providers the description is guidance only.
+
+### §6.3 Soft preference by default (sixth iteration)
+
+The hard block introduced in §6.1 contradicted the exception §6.2 states: with the Cron tools
+removed from its context, the model cannot honour a user who explicitly asks for them. The
+default is therefore reversed:
+
+- `mapCliOptionsToSDK` passes the configured `disallowedTools` through **untouched** by default;
+  the tool descriptions are the only steering.
+- `SCHEDULED_TASKS_BLOCK_BUILTIN_CRON=1` opts into the old hard behaviour (merge
+  `CronCreate`/`CronList`/`CronDelete` in, de-duplicated, configured entries preserved).
+- `SCHEDULED_TASKS_TOOLS=0` still never blocks the built-ins.
+- `SCHEDULED_TASKS_KEEP_BUILTIN_CRON` is removed: keeping the built-ins is now the default, so the
+  flag has no meaning.
