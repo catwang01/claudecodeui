@@ -94,14 +94,29 @@ describe('ParamsEditor', () => {
     expect(screen.getByText('editor.params.envPlaceholder')).toBeTruthy();
   });
 
-  it('shows the section 13.1 built-ins and the no-hardcode hint', () => {
+  it('shows every section 13.1 predefined variable, grouped, plus the no-hardcode hint', () => {
     render(<Harness />);
 
     expect(screen.getByText('editor.params.builtins.title')).toBeTruthy();
     expect(screen.getByText('editor.params.builtins.hint')).toBeTruthy();
-    expect(screen.getByText('editor.params.builtins.CWD')).toBeTruthy();
-    expect(screen.getByText('SCHEDULED_TASK_TITLE')).toBeTruthy();
-    expect(screen.getByText('SCHEDULED_TASK_CWD')).toBeTruthy();
-    expect(screen.getByText('SCHEDULED_TASK_PROJECT')).toBeTruthy();
+    for (const group of ['task', 'workspace', 'params']) {
+      expect(screen.getByText('editor.params.builtins.group.' + group)).toBeTruthy();
+    }
+    for (const env of [
+      'SCHEDULED_TASK_ID',
+      'SCHEDULED_TASK_TITLE',
+      'SCHEDULED_TASK_PROJECT',
+      'SCHEDULED_TASK_CWD',
+      'SCHEDULED_TASK_DIR',
+      'SCHEDULED_TASK_RUN_ID',
+      'SCHEDULED_TASK_RUN_DIR',
+      'SCHEDULED_TASK_PARAM_<NAME>',
+      'SCHEDULED_TASK_PARAMS',
+    ]) {
+      expect(screen.getByText(env), env).toBeTruthy();
+    }
+    expect(screen.getByText('editor.params.builtins.DIR')).toBeTruthy();
+    expect(screen.queryByText('SCHEDULED_TASK_STATE_DIR')).toBeNull();
+    expect(screen.queryByText('SCHEDULED_TASK_TMP_DIR')).toBeNull();
   });
 });

@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { ParamDef } from '../types';
 import {
-  BUILTIN_PARAMS,
   MAX_PARAMS,
+  PREDEFINED_PARAMS,
+  PREDEFINED_PARAM_GROUPS,
   coerceParamValue,
   createParamDraft,
   draftsToParams,
@@ -320,22 +321,38 @@ describe('__proto__-named parameters (review N2)', () => {
   });
 });
 
-describe('built-in params (section 13.1)', () => {
-  it('lists TITLE, CWD and PROJECT in the reserved namespace', () => {
-    expect(BUILTIN_PARAMS.map((param) => param.envName)).toEqual([
+describe('predefined params (section 13.1)', () => {
+  it('lists every predefined variable the server exports, in table order', () => {
+    expect(PREDEFINED_PARAMS.map((param) => param.envName)).toEqual([
+      'SCHEDULED_TASK_ID',
       'SCHEDULED_TASK_TITLE',
-      'SCHEDULED_TASK_CWD',
       'SCHEDULED_TASK_PROJECT',
+      'SCHEDULED_TASK_CWD',
+      'SCHEDULED_TASK_DIR',
+      'SCHEDULED_TASK_RUN_ID',
+      'SCHEDULED_TASK_RUN_DIR',
+      'SCHEDULED_TASK_PARAM_<NAME>',
+      'SCHEDULED_TASK_PARAMS',
     ]);
+    expect(PREDEFINED_PARAM_GROUPS).toEqual(['task', 'workspace', 'params']);
+    expect(PREDEFINED_PARAMS.every((param) => PREDEFINED_PARAM_GROUPS.includes(param.group))).toBe(true);
   });
 
-  it('keeps the declared-parameter namespace disjoint from every built-in (13.2)', () => {
-    for (const param of BUILTIN_PARAMS) {
+  it('keeps the declared-parameter namespace disjoint from every reserved variable (13.2)', () => {
+    for (const param of PREDEFINED_PARAMS) {
+      // The 'params' group IS the declared-parameter namespace.
+      if (param.group === 'params') continue;
       expect(paramEnvName(param.name)).toBe('SCHEDULED_TASK_PARAM_' + param.name);
       expect(paramEnvName(param.name)).not.toBe(param.envName);
       expect(param.envName).not.toContain('SCHEDULED_TASK_PARAM_');
     }
     expect(paramEnvName('title')).toBe('SCHEDULED_TASK_PARAM_TITLE');
-    expect(BUILTIN_PARAMS.map((param) => param.envName)).not.toContain(paramEnvName('title'));
+    expect(PREDEFINED_PARAMS.map((param) => param.envName)).not.toContain(paramEnvName('title'));
+  });
+
+  it('removed state/tmp presets (13.4: the framework does not prescribe state layout)', () => {
+    const names = PREDEFINED_PARAMS.map((param) => param.envName);
+    expect(names).not.toContain('SCHEDULED_TASK_STATE_DIR');
+    expect(names).not.toContain('SCHEDULED_TASK_TMP_DIR');
   });
 });

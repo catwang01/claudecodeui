@@ -21,23 +21,41 @@ export const PARAMS_JSON_MAX_BYTES = 16 * 1024;
 export const PARAM_ENV_PREFIX = 'SCHEDULED_TASK_PARAM_';
 export const PARAMS_ENV_NAME = 'SCHEDULED_TASK_PARAMS';
 
-/** One of the section 13.1 built-in parameters. */
-export type BuiltinParam = {
+export type PredefinedParamGroup = 'task' | 'workspace' | 'params';
+
+/** One of the section 13.1 predefined variables every run exports. */
+export type PredefinedParam = {
   /** Short name; also the i18n key suffix under editor.params.builtins. */
   name: string;
   /** The environment variable every run exports. */
   envName: string;
+  /** Which block of the editor list this variable belongs to. */
+  group: PredefinedParamGroup;
 };
 
+/** Render order of the groups in the editor list. */
+export const PREDEFINED_PARAM_GROUPS: PredefinedParamGroup[] = ['task', 'workspace', 'params'];
+
 /**
- * Section 13.1: built-in parameters exported on every run, in the reserved
- * SCHEDULED_TASK_* namespace. A declared parameter is always
- * SCHEDULED_TASK_PARAM_<NAME>, so it can never replace one (section 13.2).
+ * Section 13.1: every variable a run exports, in the reserved SCHEDULED_TASK_*
+ * namespace. Declared parameters are the 'params' group (SCHEDULED_TASK_PARAM_<NAME>
+ * and SCHEDULED_TASK_PARAMS), so a declared parameter can never replace a
+ * predefined one (section 13.2).
+ *
+ * Mirrors the server's single source of truth
+ * (server/scheduled-tasks/params.js PREDEFINED_TASK_VARS), which also renders the
+ * MCP tool descriptions and the agent prompt block.
  */
-export const BUILTIN_PARAMS: BuiltinParam[] = [
-  { name: 'TITLE', envName: 'SCHEDULED_TASK_TITLE' },
-  { name: 'CWD', envName: 'SCHEDULED_TASK_CWD' },
-  { name: 'PROJECT', envName: 'SCHEDULED_TASK_PROJECT' },
+export const PREDEFINED_PARAMS: PredefinedParam[] = [
+  { name: 'ID', envName: 'SCHEDULED_TASK_ID', group: 'task' },
+  { name: 'TITLE', envName: 'SCHEDULED_TASK_TITLE', group: 'task' },
+  { name: 'PROJECT', envName: 'SCHEDULED_TASK_PROJECT', group: 'task' },
+  { name: 'CWD', envName: 'SCHEDULED_TASK_CWD', group: 'task' },
+  { name: 'DIR', envName: 'SCHEDULED_TASK_DIR', group: 'workspace' },
+  { name: 'RUN_ID', envName: 'SCHEDULED_TASK_RUN_ID', group: 'workspace' },
+  { name: 'RUN_DIR', envName: 'SCHEDULED_TASK_RUN_DIR', group: 'workspace' },
+  { name: 'PARAM_NAME', envName: 'SCHEDULED_TASK_PARAM_<NAME>', group: 'params' },
+  { name: 'PARAMS', envName: 'SCHEDULED_TASK_PARAMS', group: 'params' },
 ];
 
 export const PARAM_TYPES: ParamType[] = ['string', 'number', 'boolean'];

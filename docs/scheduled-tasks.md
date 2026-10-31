@@ -962,11 +962,16 @@ the session id is recorded on the run.
 
 ### 13.7 Frontend
 
-* The Parameters section of the task editor shows a *Built-in parameters (always available)* list with the
-  three built-in variables and their meaning, plus the no-hardcode hint.
-* Run history shows a one-line reminder of the built-in variables.
-* i18n keys `editor.params.builtins.*` and `runs.builtinsHint` in `en` and `zh-CN`.
-* `src/components/scheduled-tasks/utils/params.ts` exports `BUILTIN_PARAMS` to the UI.
+* The Parameters section of the task editor shows a *Predefined variables (always available)* list with
+  **every** variable a run exports, grouped into task & run (`ID`, `TITLE`, `PROJECT`, `CWD`), task workspace
+  (`DIR`, `RUN_ID`, `RUN_DIR`) and declared parameters (`SCHEDULED_TASK_PARAM_<NAME>`, `SCHEDULED_TASK_PARAMS`),
+  each with its meaning, plus the no-hardcode hint. This mirrors §13.1 exactly, including the removal of
+  `SCHEDULED_TASK_STATE_DIR`/`SCHEDULED_TASK_TMP_DIR` (§13.4).
+* Run history shows a one-line reminder of the predefined variables.
+* i18n keys `editor.params.builtins.*` (including `group.task`/`group.workspace`/`group.params`) and
+  `runs.builtinsHint` in `en` and `zh-CN`.
+* `src/components/scheduled-tasks/utils/params.ts` exports `PREDEFINED_PARAMS` and
+  `PREDEFINED_PARAM_GROUPS` to the UI; the server's `PREDEFINED_TASK_VARS` stays the single source of truth.
 
 ### 13.8 Write scopes（第十一轮）
 

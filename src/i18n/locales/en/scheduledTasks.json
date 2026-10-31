@@ -229,11 +229,22 @@
       "required": "Required",
       "requiredNoDefault": "Required parameters must be supplied at run time.",
       "builtins": {
-        "title": "Built-in parameters (always available)",
-        "hint": "Every run exports these variables too, so never hardcode paths in the prompt or in the script gate — read them from the environment instead.",
+        "title": "Predefined variables (always available)",
+        "hint": "Every run exports these to both the script gate and the agent session. Read them from the environment instead of hardcoding paths.",
+        "group": {
+          "task": "Task & run",
+          "workspace": "Task workspace",
+          "params": "Declared parameters"
+        },
+        "ID": "Scheduled task id (stable across runs — not a chat session id)",
         "TITLE": "Task name",
+        "PROJECT": "Project root that owns the task",
         "CWD": "Working directory of this run",
-        "PROJECT": "Project root that owns the task"
+        "DIR": "Task root directory — the task owns it and organizes it however it wants",
+        "RUN_ID": "Id of this run",
+        "RUN_DIR": "This run's directory (run.json, prompt.md, output.md, logs/)",
+        "PARAM_NAME": "One variable per declared parameter",
+        "PARAMS": "All resolved parameter values as compact JSON"
       },
       "errors": {
         "nameRequired": "Every parameter needs a name.",
@@ -328,7 +339,7 @@
     "scriptOutput": "Script output",
     "exitCode": "Exit code",
     "params": "Parameters",
-    "builtinsHint": "Every run also exports SCHEDULED_TASK_TITLE, SCHEDULED_TASK_CWD and SCHEDULED_TASK_PROJECT; read them instead of hardcoding paths."
+    "builtinsHint": "Every run also exports the predefined variables (SCHEDULED_TASK_ID, TITLE, PROJECT, CWD, DIR, RUN_ID, RUN_DIR); read them instead of hardcoding paths."
   },
   "time": {
     "unknown": "Unknown"

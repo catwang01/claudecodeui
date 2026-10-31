@@ -4,8 +4,9 @@ import { Button } from '../../../shared/view/ui';
 import { cn } from '../../../lib/utils';
 import type { ParamType } from '../types';
 import {
-  BUILTIN_PARAMS,
   MAX_PARAMS,
+  PREDEFINED_PARAMS,
+  PREDEFINED_PARAM_GROUPS,
   PARAM_DESCRIPTION_MAX_LENGTH,
   PARAM_NAME_MAX_LENGTH,
   PARAM_NAME_PATTERN,
@@ -69,15 +70,28 @@ export default function ParamsEditor({ drafts, onChange, disabled = false }: Par
       <div className="rounded-lg border border-dashed border-border/60 bg-muted/10 p-3">
         <p className="text-xs font-medium text-foreground">{t('editor.params.builtins.title')}</p>
         <p className="mt-0.5 text-xs text-muted-foreground">{t('editor.params.builtins.hint')}</p>
-        <ul className="mt-2 space-y-1">
-          {BUILTIN_PARAMS.map((param) => (
-            <li key={param.envName} className="flex flex-wrap items-baseline gap-x-2 text-xs">
-              <code className="font-mono text-[11px] text-foreground/80">{param.envName}</code>
-              <span className="text-muted-foreground">
-                {t('editor.params.builtins.' + param.name)}
-              </span>
-            </li>
-          ))}
+        <ul className="mt-2 space-y-2">
+          {PREDEFINED_PARAM_GROUPS.map((group) => {
+            const entries = PREDEFINED_PARAMS.filter((param) => param.group === group);
+            if (entries.length === 0) return null;
+            return (
+              <li key={group}>
+                <p className="text-[11px] font-medium text-muted-foreground">
+                  {t('editor.params.builtins.group.' + group)}
+                </p>
+                <ul className="mt-1 space-y-1">
+                  {entries.map((param) => (
+                    <li key={param.envName} className="flex flex-wrap items-baseline gap-x-2 text-xs">
+                      <code className="font-mono text-[11px] text-foreground/80">{param.envName}</code>
+                      <span className="text-muted-foreground">
+                        {t('editor.params.builtins.' + param.name)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            );
+          })}
         </ul>
       </div>
 
