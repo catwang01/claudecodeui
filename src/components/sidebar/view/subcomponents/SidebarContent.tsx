@@ -423,37 +423,11 @@ export default function SidebarContent({
         isRefreshing={isRefreshing}
         onCreateProject={onCreateProject}
         onCollapseSidebar={onCollapseSidebar}
+        hideScheduledTaskSessions={hideScheduledTaskSessions}
+        onToggleScheduledTaskSessions={() => { void toggleScheduledTaskSessions(); }}
         cleanMode={cleanMode}
         t={t}
       />
-
-      {searchMode !== 'conversations' && !showConversationSearch && (
-        <div className="flex items-center justify-end px-3 pt-1 md:px-2">
-          <button
-            type="button"
-            onClick={() => { void toggleScheduledTaskSessions(); }}
-            aria-pressed={!hideScheduledTaskSessions}
-            aria-label={
-              hideScheduledTaskSessions
-                ? t('scheduledTaskSession.show')
-                : t('scheduledTaskSession.hide')
-            }
-            title={
-              hideScheduledTaskSessions
-                ? t('scheduledTaskSession.show')
-                : t('scheduledTaskSession.hide')
-            }
-            className={cn(
-              'inline-flex h-5 w-5 items-center justify-center rounded transition-colors',
-              hideScheduledTaskSessions
-                ? 'text-muted-foreground/60 hover:bg-accent hover:text-foreground'
-                : 'bg-primary/10 text-foreground hover:bg-primary/20',
-            )}
-          >
-            <Clock className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      )}
 
       <ScrollArea ref={scrollAreaRef} className="flex-1 overflow-y-auto overscroll-contain md:px-1.5 md:py-2">
         {searchMode === 'recent' && !showConversationSearch ? (
