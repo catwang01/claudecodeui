@@ -133,6 +133,9 @@ const gateFields = {
  */
 export function createScheduleTools(options = {}) {
   const projectPath = options.projectPath ?? null;
+  // Session owner, when the caller knows it; keeps agent-created tasks attributed
+  // to the logged-in user instead of leaving user_id NULL (docs §6).
+  const userId = options.userId ?? null;
   const scope = projectPath ? { projectPath } : {};
   const management = options.management ?? createManagement(options.deps ?? {});
 
@@ -147,7 +150,7 @@ export function createScheduleTools(options = {}) {
       command: args.command,
       commandTimeoutSeconds: args.command_timeout_seconds,
       rule: selector.rule,
-      userId: null,
+      userId,
     });
     // The tool returns the bare task view (docs §6).
     return result.ok ? result.task : result;

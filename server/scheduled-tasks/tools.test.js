@@ -160,6 +160,21 @@ describe('tool registration', () => {
 });
 
 describe('schedule_create', () => {
+  it('attributes the task to the session user when one is known', async () => {
+    const repo = makeRepo();
+    const tools = createScheduleTools({
+      projectPath: PROJECT,
+      userId: 7,
+      deps: { repo, runNow: vi.fn(async (taskId) => ({ run: makeRunRow(taskId) })), rules, now: () => NOW },
+    });
+    const create = tools.find((definition) => definition.name === 'schedule_create');
+
+    await create.handler({ title: 'attributed', prompt: 'p', every_seconds: 300 });
+
+    expect(repo.createTask).toHaveBeenCalledTimes(1);
+    expect(repo.createTask.mock.calls[0][0].userId).toBe(7);
+  });
+
   it('creates a task for every selector form', async () => {
     const { call, repo } = setup();
 

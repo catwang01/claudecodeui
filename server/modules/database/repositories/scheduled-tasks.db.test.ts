@@ -174,6 +174,22 @@ describe('scheduledTasksDb', () => {
     expect(scheduledTasksDb.listTasks({ search: 'no-such-term-' + id })).toHaveLength(0);
   });
 
+  it('keeps unowned tasks visible to any signed-in user', () => {
+    const id = tag();
+    makeTask({ title: 'Unowned ' + id, userId: null });
+    makeTask({ title: 'Mine ' + id, userId: 1 });
+    makeTask({ title: 'Theirs ' + id, userId: 2 });
+
+    const forOne = scheduledTasksDb.listTasks({ search: id, userId: 1 }).map((row) => row.title);
+    expect(forOne).toContain('Unowned ' + id);
+    expect(forOne).toContain('Mine ' + id);
+    expect(forOne).not.toContain('Theirs ' + id);
+
+    const forTwo = scheduledTasksDb.listTasks({ search: id, userId: 2 }).map((row) => row.title);
+    expect(forTwo).toContain('Unowned ' + id);
+    expect(forTwo).not.toContain('Mine ' + id);
+  });
+
   it('escapes LIKE wildcards in the search filter', () => {
     const id = tag();
     makeTask({ title: 'under_score ' + id });

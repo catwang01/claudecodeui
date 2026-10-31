@@ -122,10 +122,10 @@ export function getInternalToolNames() {
   return names;
 }
 
-function createInternalToolsServer({ projectPath } = {}) {
+function createInternalToolsServer({ projectPath, userId } = {}) {
   const names = getInternalToolNames();
   const scheduleNames = names.filter((name) => SCHEDULE_TOOL_NAMES.includes(name));
-  const scheduleTools = scheduleNames.length ? createScheduleTools({ projectPath }) : [];
+  const scheduleTools = scheduleNames.length ? createScheduleTools({ projectPath, userId }) : [];
   const tools = names
     .map((name) => {
       if (BASE_INTERNAL_TOOLS[name]) return BASE_INTERNAL_TOOLS[name];
@@ -837,7 +837,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
     // Load MCP configuration
     const mcpServers = await loadMcpConfig(options.cwd);
-    sdkOptions.mcpServers = { ...(mcpServers || {}), internal: createInternalToolsServer({ projectPath: options.cwd }) };
+    sdkOptions.mcpServers = { ...(mcpServers || {}), internal: createInternalToolsServer({ projectPath: options.cwd, userId: ws?.userId ?? null }) };
 
     // Handle images - save to temp files and modify prompt
     const imageResult = await handleImages(command, options.images, options.cwd);

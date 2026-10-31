@@ -185,7 +185,10 @@ export const scheduledTasksDb = {
     const values: ColumnValue[] = [];
 
     if (typeof options.userId === 'number') {
-      where.push('user_id = ?');
+      // Unowned rows belong to whoever created them without an HTTP user context
+      // (the agent tools). They must stay visible to the authenticated user;
+      // only another user's tasks are filtered out.
+      where.push('(user_id = ? OR user_id IS NULL)');
       values.push(options.userId);
     }
     if (options.status === 'active') where.push('enabled = 1');
