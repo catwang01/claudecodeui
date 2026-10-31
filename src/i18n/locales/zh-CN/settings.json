@@ -229,6 +229,8 @@
     "saving": "保存中...",
     "hideAutoDocLabel": "隐藏自动生成的 Session",
     "hideAutoDocDescription": "自动生成的 Session 将不会出现在侧边栏中。",
+    "hideScheduledTaskSessionsLabel": "隐藏定时任务 Session",
+    "hideScheduledTaskSessionsDescription": "由定时任务启动的 Session 将不会出现在侧边栏中。",
     "intervalOptions": {
       "5min": "5 分钟",
       "10min": "10 分钟",

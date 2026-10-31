@@ -250,5 +250,6 @@ CREATE TABLE IF NOT EXISTS scheduled_task_runs (
   script_output TEXT,
   prompt_used TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_scheduled_task_runs_task ON scheduled_task_runs(task_id, started_at DESC);`;
+CREATE INDEX IF NOT EXISTS idx_scheduled_task_runs_task ON scheduled_task_runs(task_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_scheduled_task_runs_session ON scheduled_task_runs(session_id);`;
 

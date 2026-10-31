@@ -284,78 +284,101 @@ const AUTO_DOC_DEFAULT_PROMPT = 'Based on this conversation, please organize and
 const AUTO_DOC_DEFAULT_MIN_MESSAGE_COUNT = 20;
 const AUTO_DOC_DEFAULT_MODEL = 'claude-opus-4.7';
 
-router.get('/auto-doc', async (req, res) => {
-  try {
-    const intervalMs = parseInt(appConfigDb.get('auto_doc_interval_ms'), 10) || AUTO_DOC_DEFAULT_INTERVAL_MS;
-    const prompt = appConfigDb.get('auto_doc_prompt') || AUTO_DOC_DEFAULT_PROMPT;
-    const minMessageCount = parseInt(appConfigDb.get('auto_doc_min_message_count'), 10) || AUTO_DOC_DEFAULT_MIN_MESSAGE_COUNT;
-    const hideAutoDocRaw = appConfigDb.get('auto_doc_hide_sessions');
-    const hideAutoDoc = hideAutoDocRaw === null ? true : hideAutoDocRaw === 'true';
-    const model = appConfigDb.get('auto_doc_model') || AUTO_DOC_DEFAULT_MODEL;
-    const enabledRaw = appConfigDb.get('auto_doc_enabled');
-    const enabled = enabledRaw === null ? true : enabledRaw === 'true';
-    res.json({ intervalMs, prompt, minMessageCount, hideAutoDoc, model, enabled });
-  } catch (error) {
-    console.error('Error fetching auto-doc config:', error);
-    res.status(500).json({ error: 'Failed to fetch auto-doc config' });
+// docs/scheduled-tasks.md section 9.3: the automations settings group. The legacy /auto-doc
+// routes (GET+PUT) and the group-level /automations routes (GET+POST) read and write the same
+// app_config keys through these helpers, so the two surfaces cannot drift.
+function readAutomationsConfig() {
+  const intervalMs = parseInt(appConfigDb.get('auto_doc_interval_ms'), 10) || AUTO_DOC_DEFAULT_INTERVAL_MS;
+  const prompt = appConfigDb.get('auto_doc_prompt') || AUTO_DOC_DEFAULT_PROMPT;
+  const minMessageCount = parseInt(appConfigDb.get('auto_doc_min_message_count'), 10) || AUTO_DOC_DEFAULT_MIN_MESSAGE_COUNT;
+  const hideAutoDocRaw = appConfigDb.get('auto_doc_hide_sessions');
+  const hideAutoDoc = hideAutoDocRaw === null ? true : hideAutoDocRaw === 'true';
+  const hideScheduledTaskSessionsRaw = appConfigDb.get('scheduled_task_hide_sessions');
+  const hideScheduledTaskSessions = hideScheduledTaskSessionsRaw === null ? true : hideScheduledTaskSessionsRaw === 'true';
+  const model = appConfigDb.get('auto_doc_model') || AUTO_DOC_DEFAULT_MODEL;
+  const enabledRaw = appConfigDb.get('auto_doc_enabled');
+  const enabled = enabledRaw === null ? true : enabledRaw === 'true';
+  return { intervalMs, prompt, minMessageCount, hideAutoDoc, hideScheduledTaskSessions, model, enabled };
+}
+
+// Applies a partial automations patch. Returns an error message when a field is invalid,
+// otherwise null (fields left out are untouched).
+function applyAutomationsConfig(body = {}) {
+  const { intervalMs, prompt, minMessageCount, hideAutoDoc, hideScheduledTaskSessions, model, enabled } = body || {};
+
+  if (intervalMs != null) {
+    const ms = parseInt(intervalMs, 10);
+    if (isNaN(ms) || ms < 60000) {
+      return 'intervalMs must be at least 60000 (1 minute)';
+    }
+    appConfigDb.set('auto_doc_interval_ms', String(ms));
   }
-});
 
-router.put('/auto-doc', async (req, res) => {
-  try {
-    const { intervalMs, prompt, minMessageCount, hideAutoDoc, model, enabled } = req.body;
-
-    if (intervalMs != null) {
-      const ms = parseInt(intervalMs, 10);
-      if (isNaN(ms) || ms < 60000) {
-        return res.status(400).json({ error: 'intervalMs must be at least 60000 (1 minute)' });
-      }
-      appConfigDb.set('auto_doc_interval_ms', String(ms));
+  if (prompt != null) {
+    if (typeof prompt !== 'string' || !prompt.trim()) {
+      return 'prompt must be a non-empty string';
     }
-
-    if (prompt != null) {
-      if (typeof prompt !== 'string' || !prompt.trim()) {
-        return res.status(400).json({ error: 'prompt must be a non-empty string' });
-      }
-      appConfigDb.set('auto_doc_prompt', prompt.trim());
-    }
-
-    if (minMessageCount != null) {
-      const n = parseInt(minMessageCount, 10);
-      if (isNaN(n) || n < 1 || n > 10000) {
-        return res.status(400).json({ error: 'minMessageCount must be between 1 and 10000' });
-      }
-      appConfigDb.set('auto_doc_min_message_count', String(n));
-    }
-
-    if (hideAutoDoc != null) {
-      appConfigDb.set('auto_doc_hide_sessions', hideAutoDoc ? 'true' : 'false');
-    }
-
-    if (enabled != null) {
-      appConfigDb.set('auto_doc_enabled', enabled ? 'true' : 'false');
-    }
-
-    if (model != null) {
-      if (typeof model !== 'string' || !model.trim()) {
-        return res.status(400).json({ error: 'model must be a non-empty string' });
-      }
-      appConfigDb.set('auto_doc_model', model.trim());
-    }
-
-    const savedIntervalMs = parseInt(appConfigDb.get('auto_doc_interval_ms'), 10) || AUTO_DOC_DEFAULT_INTERVAL_MS;
-    const savedPrompt = appConfigDb.get('auto_doc_prompt') || AUTO_DOC_DEFAULT_PROMPT;
-    const savedMinMessageCount = parseInt(appConfigDb.get('auto_doc_min_message_count'), 10) || AUTO_DOC_DEFAULT_MIN_MESSAGE_COUNT;
-    const savedHideAutoDoc = appConfigDb.get('auto_doc_hide_sessions') === 'true';
-    const savedModel = appConfigDb.get('auto_doc_model') || AUTO_DOC_DEFAULT_MODEL;
-    const savedEnabledRaw = appConfigDb.get('auto_doc_enabled');
-    const savedEnabled = savedEnabledRaw === null ? true : savedEnabledRaw === 'true';
-    res.json({ success: true, intervalMs: savedIntervalMs, prompt: savedPrompt, minMessageCount: savedMinMessageCount, hideAutoDoc: savedHideAutoDoc, model: savedModel, enabled: savedEnabled });
-  } catch (error) {
-    console.error('Error saving auto-doc config:', error);
-    res.status(500).json({ error: 'Failed to save auto-doc config' });
+    appConfigDb.set('auto_doc_prompt', prompt.trim());
   }
-});
+
+  if (minMessageCount != null) {
+    const n = parseInt(minMessageCount, 10);
+    if (isNaN(n) || n < 1 || n > 10000) {
+      return 'minMessageCount must be between 1 and 10000';
+    }
+    appConfigDb.set('auto_doc_min_message_count', String(n));
+  }
+
+  if (hideAutoDoc != null) {
+    appConfigDb.set('auto_doc_hide_sessions', hideAutoDoc ? 'true' : 'false');
+  }
+
+  if (hideScheduledTaskSessions != null) {
+    appConfigDb.set('scheduled_task_hide_sessions', hideScheduledTaskSessions ? 'true' : 'false');
+  }
+
+  if (enabled != null) {
+    appConfigDb.set('auto_doc_enabled', enabled ? 'true' : 'false');
+  }
+
+  if (model != null) {
+    if (typeof model !== 'string' || !model.trim()) {
+      return 'model must be a non-empty string';
+    }
+    appConfigDb.set('auto_doc_model', model.trim());
+  }
+
+  return null;
+}
+
+function handleGetAutomations(req, res) {
+  try {
+    res.json(readAutomationsConfig());
+  } catch (error) {
+    console.error('Error fetching automations config:', error);
+    res.status(500).json({ error: 'Failed to fetch automations config' });
+  }
+}
+
+function handleUpdateAutomations(req, res) {
+  try {
+    const error = applyAutomationsConfig(req.body);
+    if (error) return res.status(400).json({ error });
+    res.json({ success: true, ...readAutomationsConfig() });
+  } catch (error) {
+    console.error('Error saving automations config:', error);
+    res.status(500).json({ error: 'Failed to save automations config' });
+  }
+}
+
+// Legacy auto-doc surface (kept for existing clients: settings tab, older bundles).
+router.get('/auto-doc', handleGetAutomations);
+router.put('/auto-doc', handleUpdateAutomations);
+
+// Group-level aliases per docs/scheduled-tasks.md section 9.3: GET additionally returns
+// hideScheduledTaskSessions, POST accepts it exactly like hideAutoDoc.
+router.get('/automations', handleGetAutomations);
+router.post('/automations', handleUpdateAutomations);
 
 // ===============================
 // Claude-tap (API traffic inspector) — per-session

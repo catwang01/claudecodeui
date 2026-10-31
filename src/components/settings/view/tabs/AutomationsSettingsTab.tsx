@@ -24,6 +24,7 @@ export default function AutomationsSettingsTab() {
   const [prompt, setPrompt] = useState(DEFAULT_PROMPT);
   const [minMessageCount, setMinMessageCount] = useState(DEFAULT_MIN_MESSAGE_COUNT);
   const [hideAutoDoc, setHideAutoDoc] = useState(true);
+  const [hideScheduledTaskSessions, setHideScheduledTaskSessions] = useState(true);
   const [model, setModel] = useState(DEFAULT_MODEL);
   const [enabled, setEnabled] = useState(true);
   const [loading, setLoading] = useState(true);
@@ -39,6 +40,7 @@ export default function AutomationsSettingsTab() {
         if (data.minMessageCount) setMinMessageCount(data.minMessageCount);
         if (data.model) setModel(data.model);
         setHideAutoDoc(!!data.hideAutoDoc);
+        setHideScheduledTaskSessions(data.hideScheduledTaskSessions !== false);
         setEnabled(data.enabled !== false);
       })
       .catch(() => {/* use defaults */})
@@ -52,7 +54,15 @@ export default function AutomationsSettingsTab() {
       const res = await authenticatedFetch('/api/settings/auto-doc', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ intervalMs, prompt, minMessageCount, hideAutoDoc, model, enabled }),
+        body: JSON.stringify({
+          intervalMs,
+          prompt,
+          minMessageCount,
+          hideAutoDoc,
+          hideScheduledTaskSessions,
+          model,
+          enabled,
+        }),
       });
       if (res.ok) {
         setSaveStatus('success');
@@ -198,6 +208,31 @@ export default function AutomationsSettingsTab() {
             <span
               className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-background shadow-lg transition-transform ${
                 hideAutoDoc ? 'translate-x-4' : 'translate-x-0'
+              }`}
+            />
+          </button>
+        </div>
+
+        <div className="flex items-center justify-between gap-4">
+          <div className="space-y-1 flex-1">
+            <label className="text-sm font-medium text-foreground" htmlFor="scheduled-task-hide">
+              {t('autoDoc.hideScheduledTaskSessionsLabel')}
+            </label>
+            <p className="text-xs text-muted-foreground">{t('autoDoc.hideScheduledTaskSessionsDescription')}</p>
+          </div>
+          <button
+            id="scheduled-task-hide"
+            type="button"
+            role="switch"
+            aria-checked={hideScheduledTaskSessions}
+            onClick={() => setHideScheduledTaskSessions(prev => !prev)}
+            className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${
+              hideScheduledTaskSessions ? 'bg-primary' : 'bg-input'
+            }`}
+          >
+            <span
+              className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-background shadow-lg transition-transform ${
+                hideScheduledTaskSessions ? 'translate-x-4' : 'translate-x-0'
               }`}
             />
           </button>

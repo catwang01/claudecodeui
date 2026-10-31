@@ -1,6 +1,7 @@
 import { getConnection } from '../modules/database/connection.js';
 import { initializeDatabase } from '../modules/database/init-db.js';
 import { runMigrations } from '../modules/database/migrations.js';
+import { scheduledTasksDb } from '../modules/database/index.js';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
@@ -664,6 +665,47 @@ function filterHiddenAutoDocSessions(sessions) {
   }
 }
 
+// Tag sessions that were started by a scheduled task run.
+// docs/scheduled-tasks.md section 9.2: mirrors applyAutoDocFlag; claude-only because the
+// scheduler always starts Claude sessions. Must run before filterHiddenScheduledTaskSessions.
+function applyScheduledTaskOrigin(sessions, provider = 'claude') {
+  if (!sessions?.length || provider !== 'claude') return;
+  try {
+    const ids = sessions.map(s => s.id).filter(Boolean);
+    if (!ids.length) return;
+    const origins = scheduledTasksDb.getSessionOrigins(ids);
+    if (!origins?.size) return;
+    for (const session of sessions) {
+      const origin = origins.get(session.id);
+      if (origin) {
+        session.scheduledTaskOrigin = {
+          taskId: origin.taskId,
+          taskTitle: origin.taskTitle,
+        };
+      }
+    }
+  } catch (error) {
+    console.warn(`[DB] Failed to apply scheduled-task origin for ${provider}:`, error.message);
+  }
+}
+
+// Remove scheduled-task sessions from the array when the hide setting is enabled.
+// docs/scheduled-tasks.md section 9.2: hidden when app_config 'scheduled_task_hide_sessions'
+// is unset (default) or 'true'. Must be called after applyScheduledTaskOrigin.
+function filterHiddenScheduledTaskSessions(sessions) {
+  if (!sessions?.length) return;
+  try {
+    const hideRaw = appConfigDb.get('scheduled_task_hide_sessions');
+    const hide = hideRaw === null ? true : hideRaw === 'true';
+    if (!hide) return;
+    for (let i = sessions.length - 1; i >= 0; i--) {
+      if (sessions[i].scheduledTaskOrigin) sessions.splice(i, 1);
+    }
+  } catch (error) {
+    console.warn('[DB] Failed to filter hidden scheduled-task sessions:', error.message);
+  }
+}
+
 // Apply read state to sessions based on session_read_state table
 function applyReadState(sessions, provider) {
   if (!sessions?.length) return;
@@ -920,6 +962,8 @@ export {
   applyLastAutoDocAt,
   applyForkParent,
   filterHiddenAutoDocSessions,
+  applyScheduledTaskOrigin,
+  filterHiddenScheduledTaskSessions,
   applyReadState,
   appConfigDb,
   userSettingsDb,

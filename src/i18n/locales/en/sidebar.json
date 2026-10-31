@@ -51,6 +51,11 @@
     "cancel": "Cancel",
     "clearSearch": "Clear search"
   },
+  "scheduledTaskSession": {
+    "badge": "Started by scheduled task \"{{title}}\"",
+    "show": "Show scheduled-task sessions",
+    "hide": "Hide scheduled-task sessions"
+  },
   "navigation": {
     "chat": "Chat",
     "files": "Files",

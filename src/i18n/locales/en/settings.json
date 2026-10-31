@@ -229,6 +229,8 @@
     "saving": "Saving...",
     "hideAutoDocLabel": "Hide auto-generated sessions",
     "hideAutoDocDescription": "Auto-generated sessions will not appear in the sidebar.",
+    "hideScheduledTaskSessionsLabel": "Hide scheduled-task sessions",
+    "hideScheduledTaskSessionsDescription": "Sessions started by a scheduled task will not appear in the sidebar.",
     "intervalOptions": {
       "5min": "5 minutes",
       "10min": "10 minutes",

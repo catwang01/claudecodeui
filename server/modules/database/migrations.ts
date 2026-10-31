@@ -119,6 +119,10 @@ export function runMigrations(): void {
     ON session_fork_parents(fork_session_id, provider)
   `);
 
+  // Session origin lookup (docs section 9.1). Databases created before this feature get the
+  // index here as well as through the table schema string above; both are idempotent.
+  db.exec('CREATE INDEX IF NOT EXISTS idx_scheduled_task_runs_session ON scheduled_task_runs(session_id)');
+
   // Column additions (idempotent)
   addColumnIfMissing(db, 'users', 'git_name', 'TEXT');
   addColumnIfMissing(db, 'users', 'git_email', 'TEXT');

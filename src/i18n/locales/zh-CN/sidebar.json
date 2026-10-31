@@ -51,6 +51,11 @@
     "cancel": "取消",
     "clearSearch": "清除搜索"
   },
+  "scheduledTaskSession": {
+    "badge": "由定时任务「{{title}}」启动",
+    "show": "显示定时任务会话",
+    "hide": "隐藏定时任务会话"
+  },
   "navigation": {
     "chat": "聊天",
     "files": "文件",

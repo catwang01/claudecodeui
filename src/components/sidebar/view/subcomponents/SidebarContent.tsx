@@ -130,6 +130,9 @@ export default function SidebarContent({
 
   const [hiddenSessions, setHiddenSessions] = useState<Map<string, string>>(new Map());
   const [hideAutoDoc, setHideAutoDoc] = useState(true);
+  // Server default is "hidden" (app_config.scheduled_task_hide_sessions); keep the same
+  // initial value so the first paint does not flash the scheduled-task sessions.
+  const [hideScheduledTaskSessions, setHideScheduledTaskSessions] = useState(true);
   // Fork-tree state — the toggle now lives in the SidebarHeader (cross-tab),
   // but Recents still reads mode + collapsed set to render its tree.
   const forkTreeMode = useSyncExternalStore(forkTreeStore.subscribe, forkTreeStore.getMode, forkTreeStore.getMode);
@@ -148,6 +151,19 @@ export default function SidebarContent({
       .then((data) => setHideAutoDoc(!!data.hideAutoDoc))
       .catch(() => {
         /* keep default false */
+      });
+  }, []);
+
+  useEffect(() => {
+    authenticatedFetch('/api/settings/automations')
+      .then((res) => res.json())
+      .then((data) => {
+        if (typeof data?.hideScheduledTaskSessions === 'boolean') {
+          setHideScheduledTaskSessions(data.hideScheduledTaskSessions);
+        }
+      })
+      .catch(() => {
+        /* keep the server-matching default (hidden) */
       });
   }, []);
 
@@ -185,6 +201,23 @@ export default function SidebarContent({
       });
     }
   }, []);
+
+  const toggleScheduledTaskSessions = useCallback(async () => {
+    const next = !hideScheduledTaskSessions;
+    setHideScheduledTaskSessions(next);
+    try {
+      await authenticatedFetch('/api/settings/automations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hideScheduledTaskSessions: next }),
+      });
+    } catch {
+      /* keep the optimistic state; the next settings load restores the server value */
+    }
+    // Hidden scheduled-task sessions are dropped server-side, so revealing them needs a
+    // refetch rather than a pure client-side filter.
+    if (!next) onRefresh();
+  }, [hideScheduledTaskSessions, onRefresh]);
 
   const loadGlobalRecents = useCallback(async (offset: number, replace: boolean) => {
     if (isLoadingGlobalRecentsRef.current) return;
@@ -258,6 +291,7 @@ export default function SidebarContent({
     return all
       .filter(({ session }) => {
         if (hideAutoDoc && session.isAutoDoc) return false;
+        if (hideScheduledTaskSessions && session.scheduledTaskOrigin) return false;
         const provider = session.__provider || 'claude';
         const hiddenAt = hiddenSessions.get(`${session.id}:${provider}`);
         const hasNewActivity = hiddenAt
@@ -268,16 +302,20 @@ export default function SidebarContent({
         return true;
       })
       .sort((a, b) => compareSessionActivity(a.session, b.session, projectListProps.processingSessionStartTimes));
-  }, [searchMode, projectListProps, globalRecentSessions, hiddenSessions, hideAutoDoc]);
+  }, [searchMode, projectListProps, globalRecentSessions, hiddenSessions, hideAutoDoc, hideScheduledTaskSessions]);
 
   const filteredProjectListProps = useMemo(() => {
-    if (!hideAutoDoc) return projectListProps;
+    if (!hideAutoDoc && !hideScheduledTaskSessions) return projectListProps;
     return {
       ...projectListProps,
       getProjectSessions: (project: Parameters<typeof projectListProps.getProjectSessions>[0]) =>
-        projectListProps.getProjectSessions(project).filter((s) => !s.isAutoDoc),
+        projectListProps.getProjectSessions(project).filter((s) => {
+          if (hideAutoDoc && s.isAutoDoc) return false;
+          if (hideScheduledTaskSessions && s.scheduledTaskOrigin) return false;
+          return true;
+        }),
     };
-  }, [projectListProps, hideAutoDoc]);
+  }, [projectListProps, hideAutoDoc, hideScheduledTaskSessions]);
 
   const [selectedProjectFilter, setSelectedProjectFilter] = useState<string | null>(null);
 
@@ -388,6 +426,34 @@ export default function SidebarContent({
         cleanMode={cleanMode}
         t={t}
       />
+
+      {searchMode !== 'conversations' && !showConversationSearch && (
+        <div className="flex items-center justify-end px-3 pt-1 md:px-2">
+          <button
+            type="button"
+            onClick={() => { void toggleScheduledTaskSessions(); }}
+            aria-pressed={!hideScheduledTaskSessions}
+            aria-label={
+              hideScheduledTaskSessions
+                ? t('scheduledTaskSession.show')
+                : t('scheduledTaskSession.hide')
+            }
+            title={
+              hideScheduledTaskSessions
+                ? t('scheduledTaskSession.show')
+                : t('scheduledTaskSession.hide')
+            }
+            className={cn(
+              'inline-flex h-5 w-5 items-center justify-center rounded transition-colors',
+              hideScheduledTaskSessions
+                ? 'text-muted-foreground/60 hover:bg-accent hover:text-foreground'
+                : 'bg-primary/10 text-foreground hover:bg-primary/20',
+            )}
+          >
+            <Clock className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
 
       <ScrollArea ref={scrollAreaRef} className="flex-1 overflow-y-auto overscroll-contain md:px-1.5 md:py-2">
         {searchMode === 'recent' && !showConversationSearch ? (

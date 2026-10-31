@@ -298,3 +298,57 @@ default is therefore reversed:
 - `SCHEDULED_TASKS_TOOLS=0` still never blocks the built-ins.
 - `SCHEDULED_TASKS_KEEP_BUILTIN_CRON` is removed: keeping the built-ins is now the default, so the
   flag has no meaning.
+## 9. Scheduled-task sessions: origin tag + hide/show（第七轮）
+
+每次运行都可能在项目里留下一个普通 Claude 会话。这些会话需要（a）可追溯是哪条任务启动的，
+（b）默认从侧栏隐藏，（c）在前端能被识别并自由显示/隐藏。
+
+### 9.1 追溯（权威来源）
+
+`scheduled_task_runs.session_id` 就是唯一权威映射（每次运行一行，含 `task_id`）。新增索引
+`idx_scheduled_task_runs_session ON scheduled_task_runs(session_id)`，并新增仓储 API：
+
+```ts
+getSessionOrigins(sessionIds: string[]): Map<string, { taskId: string; taskTitle: string; startedAt: string | null }>
+getAllScheduledTaskSessionIds(): Set<string>
+```
+
+同一 session 多次出现时取 `started_at` 最新的一条；`taskTitle` 取自 `scheduled_tasks.title`
+（任务已被删除时回退为 task id）。`getAllScheduledTaskSessionIds` 用一条 SQL 返回全部有会话的 id。
+
+### 9.2 会话装饰与过滤（server/database/db.js，照 auto-doc 的写法）
+
+- `applyScheduledTaskOrigin(sessions, provider)`：给匹配的会话加
+  `session.scheduledTaskOrigin = { taskId, taskTitle }`（仅 claude）。
+- `filterHiddenScheduledTaskSessions(sessions)`：`app_config.scheduled_task_hide_sessions`
+  不为 `'false'`（**默认隐藏**）时把这些会话从数组里剔除；必须在 apply 之后调用。
+- `projects.js`：在 `getProjects` 与 `getSessions` 里紧跟 auto-doc 的那两行调用；并把
+  `getAllScheduledTaskSessionIds()` 并入 `buildExcludedSessionIds()`（隐藏开启时），保证
+  `getProjects` / `searchConversations` / 分页口径一致。`buildExcludedSessionIds` 需
+  导出以便验收脚本直接断言。
+
+### 9.3 设置
+
+`app_config.scheduled_task_hide_sessions`（默认 `true`）。自动化设置接口扩展：
+`GET /api/settings/automations` 额外返回 `hideScheduledTaskSessions`，
+`POST` 接受同名字段（与 `hideAutoDoc` 同构）。
+
+### 9.4 前端
+
+- **行内 tag**：会话行在 `session.scheduledTaskOrigin` 存在时渲染一个小 `Clock` 图标
+  （meta 行内），tooltip 为 `由定时任务「<title>」启动`（i18n key
+  `scheduledTaskSession.badge`，en + zh-CN）。tag 与隐藏开关无关——会话出现在哪就标记到哪。
+- **随手开关**：侧栏会话列表头部加一个时钟切换按钮，即时显示/隐藏定时任务会话；选择写入
+  设置接口（跨刷新保留），首次加载的默认值来自服务端设置。
+- **设置页**：`AutomationsSettingsTab` 在 auto-doc 那个开关旁加一个同款开关，绑定
+  `hideScheduledTaskSessions`。
+
+### 9.5 验收
+
+新增 lead 脚本 `scripts/verify-session-origin.mjs`：断言索引存在、两个仓储方法正确（含"最新
+run 胜出"与"任务已删回退 task id"）、装饰函数打标正确、隐藏开关开/关时过滤结果相反、
+`buildExcludedSessionIds()` 在隐藏开启时包含这些会话。
+
+默认隐藏意味着**已存在**的历史会话会立刻从侧栏消失（当前 4 个）；用户可用侧栏开关或设置页
+随时显示。
+

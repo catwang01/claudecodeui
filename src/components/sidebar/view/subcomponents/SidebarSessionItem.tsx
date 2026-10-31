@@ -10,6 +10,19 @@ import { createSessionViewModel } from '../../utils/utils';
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
 import { useAwaitingPermissions } from '../../../../contexts/AwaitingPermissionContext';
 
+/** Set by the server when a session was started by a scheduled task (claude only). */
+type ScheduledTaskOrigin = { taskId: string; taskTitle: string };
+
+// ProjectSession carries an `[key: string]: unknown` index signature, so read the
+// origin defensively rather than trusting the payload shape.
+function readScheduledTaskOrigin(session: ProjectSession): ScheduledTaskOrigin | null {
+  const raw = session.scheduledTaskOrigin;
+  if (!raw || typeof raw !== 'object') return null;
+  const { taskId, taskTitle } = raw as { taskId?: unknown; taskTitle?: unknown };
+  if (typeof taskId !== 'string' || taskId.length === 0) return null;
+  return { taskId, taskTitle: typeof taskTitle === 'string' && taskTitle ? taskTitle : taskId };
+}
+
 type DefaultProps = {
   variant?: 'default';
   project: Project;
@@ -81,6 +94,9 @@ type SidebarSessionItemProps = DefaultProps | RecentsProps;
 // gets a new reference).
 function sessionItemPropsAreEqual(prev: SidebarSessionItemProps, next: SidebarSessionItemProps): boolean {
   if (prev.session !== next.session) return false;
+  // The scheduled-task origin is part of the rendered row, so compare it explicitly:
+  // a stable session ref can still be decorated in place.
+  if (readScheduledTaskOrigin(prev.session)?.taskId !== readScheduledTaskOrigin(next.session)?.taskId) return false;
   if (prev.isForking !== next.isForking) return false;
   if (prev.isProcessing !== next.isProcessing) return false;
   if (prev.processingStartTime !== next.processingStartTime) return false;
@@ -106,6 +122,16 @@ function sessionItemPropsAreEqual(prev: SidebarSessionItemProps, next: SidebarSe
 export default memo(function SidebarSessionItem(props: SidebarSessionItemProps) {
   const { project, session, currentTime, isProcessing = false, processingStartTime, t } = props;
   const sessionView = createSessionViewModel(session, currentTime, t, isProcessing, processingStartTime);
+  const scheduledTaskOrigin = readScheduledTaskOrigin(session);
+  const scheduledTaskBadge = scheduledTaskOrigin ? (
+    <span
+      className="flex flex-shrink-0 items-center text-muted-foreground/70 transition-colors hover:text-foreground"
+      title={t('scheduledTaskSession.badge', { title: scheduledTaskOrigin.taskTitle })}
+      aria-label={t('scheduledTaskSession.badge', { title: scheduledTaskOrigin.taskTitle })}
+    >
+      <Clock className="h-3 w-3" />
+    </span>
+  ) : null;
   const { awaitingPermissionSessions } = useAwaitingPermissions();
   const isAwaitingPermission = awaitingPermissionSessions.has(session.id);
 
@@ -232,6 +258,7 @@ export default memo(function SidebarSessionItem(props: SidebarSessionItemProps) 
                 <span className="truncate text-[10px] text-muted-foreground/60 group-hover/folder:text-foreground/70 group-hover/folder:underline transition-colors">{projectDisplayName}</span>
               </button>
             )}
+            {!isRenaming && scheduledTaskBadge}
             {!isRenaming && sessionView.messageCount > 0 && (
               <Badge variant="secondary" className="ml-auto px-1 py-0 text-xs flex-shrink-0">
                 {sessionView.messageCount}
@@ -418,6 +445,7 @@ export default memo(function SidebarSessionItem(props: SidebarSessionItemProps) 
                 <span className="text-xs text-muted-foreground">
                   {formatTimeAgo(sessionView.sessionTime, currentTime, t)}
                 </span>
+                {scheduledTaskBadge}
                 {sessionView.messageCount > 0 && (
                   <Badge variant="secondary" className="ml-auto px-1 py-0 text-xs">
                     {sessionView.messageCount}
@@ -488,6 +516,7 @@ export default memo(function SidebarSessionItem(props: SidebarSessionItemProps) 
                 <span className="text-xs text-muted-foreground">
                   {formatTimeAgo(sessionView.sessionTime, currentTime, t)}
                 </span>
+                {scheduledTaskBadge}
                 {sessionView.messageCount > 0 && (
                   <Badge
                     variant="secondary"

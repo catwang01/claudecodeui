@@ -509,4 +509,163 @@ describe('scheduledTasksDb', () => {
     expect(runs.map((row) => row.status)).toEqual(['error', 'skipped']);
     expect(runs[1].script_output).toBe('{"skip":true,"reason":"nothing to do"}');
   });
+
+  // ── Session origins (docs section 9.1) ────────────────────────────────────
+
+  it('creates the scheduled_task_runs session index after migrations, idempotently', () => {
+    const db = getConnection();
+    const index = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_scheduled_task_runs_session'")
+      .get() as { name: string } | undefined;
+    expect(index?.name).toBe('idx_scheduled_task_runs_session');
+
+    const columns = (db.prepare('PRAGMA index_info(idx_scheduled_task_runs_session)').all() as { name: string }[]).map(
+      (row) => row.name
+    );
+    expect(columns).toEqual(['session_id']);
+
+    // runMigrations() runs on every server start, so a second pass must be a no-op.
+    runMigrations();
+    const count = db
+      .prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name = 'idx_scheduled_task_runs_session'")
+      .get() as { count: number };
+    expect(count.count).toBe(1);
+  });
+
+  it('returns one origin per session, joins the task title and lets the newest run win', () => {
+    const id = tag();
+    const olderTask = makeTask({ title: 'Older origin ' + id });
+    const newerTask = makeTask({ title: 'Newer origin ' + id });
+    const sessionId = 'session-newest-' + id;
+    const otherSession = 'session-other-' + id;
+
+    const olderRun = scheduledTasksDb.createRun({
+      taskId: olderTask.id,
+      status: 'running',
+      trigger: 'schedule',
+      startedAt: '2026-01-01T00:00:00.000Z',
+    });
+    scheduledTasksDb.finishRun(olderRun.id, { status: 'success', sessionId });
+
+    const newestRun = scheduledTasksDb.createRun({
+      taskId: newerTask.id,
+      status: 'running',
+      trigger: 'manual',
+      startedAt: '2026-01-02T00:00:00.000Z',
+    });
+    scheduledTasksDb.finishRun(newestRun.id, { status: 'success', sessionId });
+
+    const olderRunOfNewerTask = scheduledTasksDb.createRun({
+      taskId: newerTask.id,
+      status: 'running',
+      trigger: 'schedule',
+      startedAt: '2026-01-01T12:00:00.000Z',
+    });
+    scheduledTasksDb.finishRun(olderRunOfNewerTask.id, { status: 'error', sessionId });
+
+    const isolatedRun = scheduledTasksDb.createRun({
+      taskId: olderTask.id,
+      status: 'running',
+      trigger: 'schedule',
+      startedAt: '2026-01-03T00:00:00.000Z',
+    });
+    scheduledTasksDb.finishRun(isolatedRun.id, { status: 'success', sessionId: otherSession });
+
+    const origins = scheduledTasksDb.getSessionOrigins([sessionId, otherSession]);
+    expect(origins.size).toBe(2);
+    expect(origins.get(sessionId)).toEqual({
+      taskId: newerTask.id,
+      taskTitle: 'Newer origin ' + id,
+      startedAt: '2026-01-02T00:00:00.000Z',
+    });
+    expect(origins.get(otherSession)).toEqual({
+      taskId: olderTask.id,
+      taskTitle: 'Older origin ' + id,
+      startedAt: '2026-01-03T00:00:00.000Z',
+    });
+  });
+
+  it('falls back to the task id as the title when the task row is gone', () => {
+    const id = tag();
+    const sessionId = 'session-orphan-' + id;
+    const task = makeTask({ title: 'Vanishing task ' + id });
+    const run = scheduledTasksDb.createRun({
+      taskId: task.id,
+      status: 'running',
+      trigger: 'schedule',
+      startedAt: '2026-03-01T00:00:00.000Z',
+    });
+    scheduledTasksDb.finishRun(run.id, { status: 'success', sessionId });
+
+    // ON DELETE CASCADE would remove the run, so drop the task with foreign keys temporarily
+    // off to reproduce a run whose task row no longer exists.
+    const db = getConnection();
+    db.pragma('foreign_keys = OFF');
+    try {
+      db.prepare('DELETE FROM scheduled_tasks WHERE id = ?').run(task.id);
+    } finally {
+      db.pragma('foreign_keys = ON');
+    }
+    expect(scheduledTasksDb.getTask(task.id)).toBeUndefined();
+    expect(scheduledTasksDb.countRuns(task.id)).toBe(1);
+
+    expect(scheduledTasksDb.getSessionOrigins([sessionId]).get(sessionId)).toEqual({
+      taskId: task.id,
+      taskTitle: task.id,
+      startedAt: '2026-03-01T00:00:00.000Z',
+    });
+  });
+
+  it('dedupes repeated runs and repeated input ids, and returns an empty Map for no input', () => {
+    const id = tag();
+    const task = makeTask({ title: 'Dedupe ' + id });
+    const sessionId = 'session-dedupe-' + id;
+    for (const startedAt of ['2026-04-01T00:00:00.000Z', '2026-04-02T00:00:00.000Z', '2026-04-03T00:00:00.000Z']) {
+      const run = scheduledTasksDb.createRun({ taskId: task.id, status: 'running', trigger: 'schedule', startedAt });
+      scheduledTasksDb.finishRun(run.id, { status: 'success', sessionId });
+    }
+
+    const origins = scheduledTasksDb.getSessionOrigins([sessionId, sessionId, sessionId]);
+    expect(origins.size).toBe(1);
+    expect(origins.get(sessionId)).toEqual({
+      taskId: task.id,
+      taskTitle: 'Dedupe ' + id,
+      startedAt: '2026-04-03T00:00:00.000Z',
+    });
+
+    expect(scheduledTasksDb.getSessionOrigins([]).size).toBe(0);
+    expect(scheduledTasksDb.getSessionOrigins(['no-such-session-' + id]).size).toBe(0);
+  });
+
+  it('returns every scheduled-task session id as a Set, skipping runs without a session', () => {
+    const id = tag();
+    const task = makeTask({ title: 'Set task ' + id });
+    const first = 'session-set-a-' + id;
+    const second = 'session-set-b-' + id;
+
+    const firstRun = scheduledTasksDb.createRun({ taskId: task.id, status: 'running', trigger: 'schedule' });
+    scheduledTasksDb.finishRun(firstRun.id, { status: 'success', sessionId: first });
+    const secondRun = scheduledTasksDb.createRun({ taskId: task.id, status: 'running', trigger: 'manual' });
+    scheduledTasksDb.finishRun(secondRun.id, { status: 'success', sessionId: second });
+    // A run that never started an agent must not contribute anything.
+    scheduledTasksDb.createRun({ taskId: task.id, status: 'skipped', trigger: 'schedule' });
+
+    const ids = scheduledTasksDb.getAllScheduledTaskSessionIds();
+    expect(ids).toBeInstanceOf(Set);
+    expect(ids.has(first)).toBe(true);
+    expect(ids.has(second)).toBe(true);
+    expect(ids.has('')).toBe(false);
+    for (const value of ids) {
+      expect(typeof value).toBe('string');
+      expect(value).not.toBe('');
+    }
+
+    const expected = (
+      getConnection()
+        .prepare('SELECT DISTINCT session_id FROM scheduled_task_runs WHERE session_id IS NOT NULL')
+        .all() as { session_id: string }[]
+    ).map((row) => row.session_id);
+    expect(ids.size).toBe(expected.length);
+    for (const value of expected) expect(ids.has(value)).toBe(true);
+  });
 });

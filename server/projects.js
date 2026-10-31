@@ -67,8 +67,8 @@ import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import os from 'os';
 import sessionManager from './sessionManager.js';
-import { applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, applyLastAutoDocAt, filterHiddenAutoDocSessions, applyReadState, applyForkParent, appConfigDb, sessionDb, sessionFileCache, userDb, userSettingsDb } from './database/db.js';
-import { projectsDb, sessionsDb } from './modules/database/index.js';
+import { applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, applyLastAutoDocAt, filterHiddenAutoDocSessions, applyScheduledTaskOrigin, filterHiddenScheduledTaskSessions, applyReadState, applyForkParent, appConfigDb, sessionDb, sessionFileCache, userDb, userSettingsDb } from './database/db.js';
+import { projectsDb, sessionsDb, scheduledTasksDb } from './modules/database/index.js';
 import { claudeSessionSynchronizer } from './modules/providers/list/claude/claude-session-synchronizer.provider.js';
 import { matchesExcludePattern } from '../shared/excludePatterns.js';
 
@@ -549,11 +549,11 @@ async function extractProjectDirectory(projectName) {
   }
 }
 
-// TTL cache for buildExcludedSessionIds — these sets (auto-doc IDs + hidden IDs) change
+// TTL cache for buildExcludedSessionIds — these sets (auto-doc IDs + scheduled-task IDs + hidden IDs) change
 // very rarely (only when user creates/hides sessions), but are queried on every fast-path
 // surgicallyUpdateSession call (2-3× per second during active sessions).
 // A 15-second TTL eliminates ~90 redundant SQLite queries per minute without any staleness risk.
-const _excludedSessionIdsCache = new Map(); // provider → { set, time }
+const _excludedSessionIdsCache = new Map(); // provider → { set, time, hideAutoDoc, hideScheduled }
 const EXCLUDED_IDS_TTL_MS = 15_000;
 
 function invalidateExcludedSessionIdsCache() {
@@ -561,19 +561,32 @@ function invalidateExcludedSessionIdsCache() {
 }
 
 // Returns a Set of session IDs that should be excluded from all views:
-// auto-doc fork sessions + user-hidden-from-recents sessions.
-// Used by both getProjects and searchConversations to keep filtering consistent.
+// auto-doc fork sessions + scheduled-task sessions (while hidden) + user-hidden-from-recents sessions.
+// Used by getProjects, getRecentSessions and searchConversations to keep filtering consistent.
 function buildExcludedSessionIds(provider = 'claude') {
-  const cached = _excludedSessionIdsCache.get(provider);
-  if (cached && Date.now() - cached.time < EXCLUDED_IDS_TTL_MS) {
-    return cached.set;
-  }
+  // Read the two hide switches first: toggling either one must invalidate the TTL entry
+  // immediately, otherwise the cached Set would contradict the requested state.
   const hideAutoDocRaw = appConfigDb.get('auto_doc_hide_sessions');
   const hideAutoDoc = hideAutoDocRaw === null ? true : hideAutoDocRaw === 'true';
+  const hideScheduledRaw = appConfigDb.get('scheduled_task_hide_sessions');
+  const hideScheduled = hideScheduledRaw === null ? true : hideScheduledRaw === 'true';
+
+  const cached = _excludedSessionIdsCache.get(provider);
+  if (
+    cached &&
+    cached.hideAutoDoc === hideAutoDoc &&
+    cached.hideScheduled === hideScheduled &&
+    Date.now() - cached.time < EXCLUDED_IDS_TTL_MS
+  ) {
+    return cached.set;
+  }
+
   const autoDocIds = hideAutoDoc ? sessionDb.getAllAutoDocSessionIds(provider) : new Set();
+  // docs/scheduled-tasks.md section 9.2: scheduled-task sessions are hidden by default too.
+  const scheduledIds = hideScheduled ? scheduledTasksDb.getAllScheduledTaskSessionIds() : new Set();
   const hiddenIds = sessionDb.getAllHiddenSessionIds(provider);
-  const result = new Set([...autoDocIds, ...hiddenIds]);
-  _excludedSessionIdsCache.set(provider, { set: result, time: Date.now() });
+  const result = new Set([...autoDocIds, ...scheduledIds, ...hiddenIds]);
+  _excludedSessionIdsCache.set(provider, { set: result, time: Date.now(), hideAutoDoc, hideScheduled });
   return result;
 }
 
@@ -622,6 +635,8 @@ async function getProjectData(dbProject, codexSessionsIndexRef, autoDocPreFilter
   applyAutoDocFlag(filteredClaude, 'claude');
   applyLastAutoDocAt(filteredClaude, 'claude');
   filterHiddenAutoDocSessions(filteredClaude);
+  applyScheduledTaskOrigin(filteredClaude, 'claude');
+  filterHiddenScheduledTaskSessions(filteredClaude);
   applyReadState(filteredClaude, 'claude');
   applyForkParent(filteredClaude, 'claude');
   project.sessions = paginateForkTrees(filteredClaude, 15);
@@ -737,6 +752,8 @@ function refreshProjectSessions(cachedProject, projectPath) {
   applyAutoDocFlag(filteredClaude, 'claude');
   applyLastAutoDocAt(filteredClaude, 'claude');
   filterHiddenAutoDocSessions(filteredClaude);
+  applyScheduledTaskOrigin(filteredClaude, 'claude');
+  filterHiddenScheduledTaskSessions(filteredClaude);
   applyReadState(filteredClaude, 'claude');
   applyForkParent(filteredClaude, 'claude');
 
@@ -811,6 +828,8 @@ function surgicallyUpdateSession(cachedProject, sessionId) {
   applyAutoDocFlag(sessionArr, 'claude');
   applyLastAutoDocAt(sessionArr, 'claude');
   filterHiddenAutoDocSessions(sessionArr);
+  applyScheduledTaskOrigin(sessionArr, 'claude');
+  filterHiddenScheduledTaskSessions(sessionArr);
   applyReadState(sessionArr, 'claude');
   applyForkParent(sessionArr, 'claude');
 
@@ -998,6 +1017,8 @@ async function getProjectsLegacy(progressCallback = null) {
       applyAutoDocFlag(project.sessions, 'claude');
       applyLastAutoDocAt(project.sessions, 'claude');
       filterHiddenAutoDocSessions(project.sessions);
+      applyScheduledTaskOrigin(project.sessions, 'claude');
+      filterHiddenScheduledTaskSessions(project.sessions);
       applyReadState(project.sessions, 'claude');
       applyForkParent(project.sessions, 'claude');
 
@@ -1151,6 +1172,8 @@ async function getSessions(projectName, limit = 5, offset = 0, preFilter = null)
     sessions.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
 
     const filteredSessions = preFilter ? preFilter(sessions) : sessions;
+    applyScheduledTaskOrigin(filteredSessions, 'claude');
+    filterHiddenScheduledTaskSessions(filteredSessions);
     applyForkParent(filteredSessions, 'claude');
     const total = countForkTreeRootsForRows(allSessionRows, 'claude');
     const paginatedSessions = paginateForkTrees(filteredSessions, limit, offset);
@@ -1234,6 +1257,8 @@ async function getRecentSessions(limit = 50, offset = 0) {
     if (provider === 'claude') {
       applyAutoDocFlag(providerSessions, provider);
       applyLastAutoDocAt(providerSessions, provider);
+      applyScheduledTaskOrigin(providerSessions, provider);
+      filterHiddenScheduledTaskSessions(providerSessions);
     }
 
     sessions.push(...providerSessions.map(session => ({
@@ -1304,6 +1329,8 @@ async function getSessionsLegacy(projectName, limit = 5, offset = 0, preFilter =
       .sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
 
     const filteredSessions = preFilter ? preFilter(sessions) : sessions;
+    applyScheduledTaskOrigin(filteredSessions, 'claude');
+    filterHiddenScheduledTaskSessions(filteredSessions);
     applyForkParent(filteredSessions, 'claude');
     const total = countForkTreeRoots(filteredSessions);
     const paginatedSessions = paginateForkTrees(filteredSessions, limit, offset);
@@ -3476,5 +3503,6 @@ export {
   paginateRecentSessionRows,
   paginateForkTrees,
   invalidateExcludedSessionIdsCache,
+  buildExcludedSessionIds,
   matchesExcludePattern
 };

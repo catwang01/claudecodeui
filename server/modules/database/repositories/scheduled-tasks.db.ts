@@ -39,6 +39,13 @@ export type ScheduledTaskRunRow = {
   prompt_used: string | null;
 };
 
+// docs section 9.1: which scheduled task started a session (the newest run wins).
+export type ScheduledTaskSessionOrigin = {
+  taskId: string;
+  taskTitle: string;
+  startedAt: string | null;
+};
+
 // Inputs are camelCase, rows are snake_case (docs §7). The snake_case spellings
 // are accepted as aliases so callers that already hold a row can spread it in.
 export type CreateScheduledTaskInput = {
@@ -149,6 +156,20 @@ const INSERT_TASK_SQL =
 const INSERT_RUN_SQL =
   'INSERT INTO scheduled_task_runs (id, task_id, status, "trigger", scheduled_for, started_at, finished_at, session_id, output, error, script_exit_code, script_output, prompt_used) ' +
   'VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?)';
+
+// docs section 9.1: one row per run, LEFT JOIN so a run whose task row is gone still resolves
+// (title falls back to the task id). The correlated rowid pick keeps exactly the newest run
+// per session, with rowid as a deterministic tie-breaker.
+const SESSION_ORIGINS_SQL_PREFIX =
+  'SELECT r.session_id AS session_id, r.task_id AS task_id, ' +
+  'COALESCE(t.title, r.task_id) AS task_title, r.started_at AS started_at ' +
+  'FROM scheduled_task_runs r LEFT JOIN scheduled_tasks t ON t.id = r.task_id ' +
+  'WHERE r.session_id IN (';
+const SESSION_ORIGINS_SQL_SUFFIX =
+  ') AND r.rowid = (' +
+  'SELECT r2.rowid FROM scheduled_task_runs r2 WHERE r2.session_id = r.session_id ' +
+  'ORDER BY r2.started_at DESC, r2.rowid DESC LIMIT 1) ' +
+  'ORDER BY r.session_id ASC';
 
 export const scheduledTasksDb = {
   createTask(input: CreateScheduledTaskInput): ScheduledTaskRow {
@@ -317,6 +338,36 @@ export const scheduledTasksDb = {
       .prepare('SELECT COUNT(*) AS count FROM scheduled_task_runs WHERE task_id = ?')
       .get(taskId) as { count: number } | undefined;
     return row ? row.count : 0;
+  },
+
+  // docs section 9.1: the authoritative session -> task mapping, one query. Repeated runs of
+  // the same session collapse to the newest started_at; empty input short-circuits.
+  getSessionOrigins(sessionIds: string[]): Map<string, ScheduledTaskSessionOrigin> {
+    const origins = new Map<string, ScheduledTaskSessionOrigin>();
+    const ids = Array.from(new Set(sessionIds)).filter((id) => typeof id === 'string' && id !== '');
+    if (ids.length === 0) return origins;
+
+    const placeholders = ids.map(() => '?').join(', ');
+    const rows = getConnection()
+      .prepare(SESSION_ORIGINS_SQL_PREFIX + placeholders + SESSION_ORIGINS_SQL_SUFFIX)
+      .all(...ids) as { session_id: string; task_id: string; task_title: string; started_at: string | null }[];
+
+    for (const row of rows) {
+      origins.set(row.session_id, {
+        taskId: row.task_id,
+        taskTitle: row.task_title,
+        startedAt: row.started_at,
+      });
+    }
+    return origins;
+  },
+
+  // docs section 9.1: every session id a scheduled task ever started, in one query.
+  getAllScheduledTaskSessionIds(): Set<string> {
+    const rows = getConnection()
+      .prepare('SELECT DISTINCT session_id FROM scheduled_task_runs WHERE session_id IS NOT NULL')
+      .all() as { session_id: string }[];
+    return new Set(rows.map((row) => row.session_id));
   },
 
   pruneRuns(taskId: string, keep = 50): number {
