@@ -6,7 +6,7 @@ import { Button } from '../../../shared/view/ui';
 import { cn } from '../../../lib/utils';
 import SettingsToggle from '../../settings/view/SettingsToggle';
 import { scheduledTasksApi } from '../api';
-import type { ParamDef, ProjectOption, RuleDraft, ScheduledTask, TaskRule } from '../types';
+import type { ConflictPolicy, ParamDef, ProjectOption, RuleDraft, ScheduledTask, TaskRule } from '../types';
 import { createDefaultRuleDraft, draftToRule, normalizeRuleKind, ruleToDraft, toTaskRule } from '../utils/rules';
 import { draftsToParams, paramsToDrafts, type ParamDraft } from '../utils/params';
 import { FormField, controlClassName, textAreaClassName } from './FormControls';
@@ -26,6 +26,8 @@ export type TaskEditorValues = {
   rule: TaskRule;
   /** Declared parameters, normalized for the API (section 12.1). */
   params: ParamDef[];
+  /** docs §17 conflict policy. */
+  conflictPolicy: ConflictPolicy;
 };
 
 type TaskEditorDialogProps = {
@@ -57,6 +59,7 @@ export default function TaskEditorDialog({ task, onClose, onSubmit }: TaskEditor
     String(task?.commandTimeoutSeconds ?? COMMAND_TIMEOUT_DEFAULT),
   );
   const [enabled, setEnabled] = useState(task?.enabled ?? true);
+  const [conflictPolicy, setConflictPolicy] = useState<ConflictPolicy>(task?.conflictPolicy ?? 'skip');
   const [draft, setDraft] = useState<RuleDraft>(() => initialDraft(task));
   const [paramDrafts, setParamDrafts] = useState<ParamDraft[]>(() => paramsToDrafts(task?.params));
   const [projectOptions, setProjectOptions] = useState<ProjectOption[]>([]);
@@ -145,6 +148,7 @@ export default function TaskEditorDialog({ task, onClose, onSubmit }: TaskEditor
         enabled,
         rule: validation.rule,
         params: paramValidation.params,
+        conflictPolicy,
       });
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : String(err));
@@ -269,6 +273,26 @@ export default function TaskEditorDialog({ task, onClose, onSubmit }: TaskEditor
           <RuleEditor draft={draft} onChange={setDraft} />
 
           <div className="h-px bg-border" />
+
+          <FormField
+            label={t('editor.fields.conflictPolicy')}
+            htmlFor="scheduled-task-conflict-policy"
+            hint={t('editor.fields.conflictPolicyHint')}
+          >
+            <select
+              id="scheduled-task-conflict-policy"
+              className={controlClassName}
+              value={conflictPolicy}
+              onChange={(event) => setConflictPolicy(event.target.value as ConflictPolicy)}
+              disabled={isSaving}
+            >
+              {(['skip', 'queue', 'replace'] as ConflictPolicy[]).map((value) => (
+                <option key={value} value={value}>
+                  {t('editor.conflictPolicy.' + value)}
+                </option>
+              ))}
+            </select>
+          </FormField>
 
           <div className="flex items-center justify-between gap-4">
             <div className="min-w-0">

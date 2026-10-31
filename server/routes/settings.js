@@ -284,16 +284,30 @@ router.post('/push/unsubscribe', async (req, res) => {
 function readAutomationsConfig() {
   const hideScheduledTaskSessionsRaw = appConfigDb.get('scheduled_task_hide_sessions');
   const hideScheduledTaskSessions = hideScheduledTaskSessionsRaw === null ? true : hideScheduledTaskSessionsRaw === 'true';
-  return { hideScheduledTaskSessions };
+  // §17 retention: how many runs per task the scheduler keeps. Unset/invalid
+  // falls back to the same 50 the scheduler itself uses.
+  const runRetentionRaw = appConfigDb.get('scheduled_task_run_retention');
+  const parsedRetention = parseInt(runRetentionRaw, 10);
+  const scheduledTaskRunRetention =
+    Number.isFinite(parsedRetention) && parsedRetention >= 1 ? parsedRetention : 50;
+  return { hideScheduledTaskSessions, scheduledTaskRunRetention };
 }
 
 // Applies a partial automations patch. Unknown or legacy keys (intervalMs, prompt,
 // minMessageCount, model, enabled) are ignored on purpose, never a 400.
 function applyAutomationsConfig(body = {}) {
-  const { hideScheduledTaskSessions } = body || {};
+  const { hideScheduledTaskSessions, scheduledTaskRunRetention } = body || {};
 
   if (hideScheduledTaskSessions != null) {
     appConfigDb.set('scheduled_task_hide_sessions', hideScheduledTaskSessions ? 'true' : 'false');
+  }
+
+  if (scheduledTaskRunRetention != null) {
+    const parsed = Number(scheduledTaskRunRetention);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 10000) {
+      return 'scheduledTaskRunRetention must be an integer between 1 and 10000';
+    }
+    appConfigDb.set('scheduled_task_run_retention', String(parsed));
   }
 
   return null;

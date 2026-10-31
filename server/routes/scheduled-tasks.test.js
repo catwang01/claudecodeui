@@ -35,6 +35,7 @@ function makeRepo() {
         last_error: null,
         enabled: input.enabled === false ? 0 : 1,
         run_count: 0,
+        conflict_policy: input.conflictPolicy ?? 'skip',
         created_at: stamp(),
         updated_at: stamp(),
       };
@@ -73,6 +74,7 @@ function makeRepo() {
         nextRunAt: 'next_run_at',
         enabled: 'enabled',
         paramsJson: 'params_json',
+        conflictPolicy: 'conflict_policy',
       };
       for (const [key, value] of Object.entries(patch)) {
         const column = columns[key] || key;
@@ -834,6 +836,29 @@ describe('POST /presets/:id/upgrade (§16)', () => {
       preset: { id: 'alpha-daily' },
       projects: [{ projectPath: '/tmp/x', updated: ['task-1'], created: [], skipped: [] }],
     });
+  });
+});
+describe('conflict policy (§17)', () => {
+  it('round-trips conflictPolicy on create and PATCH', async () => {
+    const created = await api('POST', '/', { ...validBody, conflictPolicy: 'queue' });
+    expect(created.body.task.conflictPolicy).toBe('queue');
+
+    const patched = await api('PATCH', '/' + created.body.task.id, { conflictPolicy: 'replace' });
+    expect(patched.body.task.conflictPolicy).toBe('replace');
+
+    const bad = await api('POST', '/', { ...validBody, conflictPolicy: 'nope' });
+    expect(bad.status).toBe(400);
+    expect(bad.body.code).toBe('invalid_input');
+  });
+
+  it('returns 202 { queued: true } when the queue policy defers a manual run', async () => {
+    deps.runNow.mockResolvedValueOnce({ queued: true });
+    const created = await api('POST', '/', validBody);
+
+    const result = await api('POST', '/' + created.body.task.id + '/run', {});
+
+    expect(result.status).toBe(202);
+    expect(result.body).toEqual({ queued: true });
   });
 });
 

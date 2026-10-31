@@ -35,6 +35,7 @@ function makeTaskRow(input, id) {
     last_error: null,
     enabled: input.enabled === false ? 0 : 1,
     run_count: 0,
+    conflict_policy: input.conflictPolicy ?? 'skip',
     created_at: stamp,
     updated_at: stamp,
   };
@@ -91,6 +92,7 @@ function makeRepo() {
         nextRunAt: 'next_run_at',
         enabled: 'enabled',
         paramsJson: 'params_json',
+        conflictPolicy: 'conflict_policy',
       };
       for (const [key, value] of Object.entries(patch)) {
         row[columns[key] || key] = key === 'enabled' ? (value ? 1 : 0) : value;
@@ -932,5 +934,30 @@ describe('schedule_preset_upgrade (§16)', () => {
 
     expect(result).toMatchObject({ preset: { id: 'p1' } });
     expect(presets.upgradePreset).toHaveBeenCalledWith('p1', { projectPath: PROJECT, userId: null });
+  });
+});
+describe('conflict policy (§17)', () => {
+  it('schedule_create / schedule_update accept conflict_policy', async () => {
+    const { call } = setup();
+    const created = await call('schedule_create', {
+      title: 'A',
+      prompt: 'p',
+      every_seconds: 60,
+      conflict_policy: 'queue',
+    });
+    expect(created.conflictPolicy).toBe('queue');
+
+    const updated = await call('schedule_update', { id: created.id, conflict_policy: 'replace' });
+    expect(updated.conflictPolicy).toBe('replace');
+  });
+
+  it('schedule_run reports a queued trigger', async () => {
+    const { call, runNow } = setup();
+    const created = await call('schedule_create', { title: 'A', prompt: 'p', every_seconds: 60 });
+    runNow.mockResolvedValueOnce({ queued: true });
+
+    const result = await call('schedule_run', { id: created.id });
+
+    expect(result).toEqual({ queued: true });
   });
 });

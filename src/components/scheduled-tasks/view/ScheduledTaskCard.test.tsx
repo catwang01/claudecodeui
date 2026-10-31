@@ -59,6 +59,7 @@ function makeTask(overrides: Partial<ScheduledTask>): ScheduledTask {
     lastStatus: 'success',
     lastError: null,
     enabled: true,
+    conflictPolicy: 'skip',
     runCount: 1,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T09:00:00.000Z',

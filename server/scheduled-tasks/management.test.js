@@ -39,6 +39,7 @@ function makeRepo() {
         run_count: 0,
         preset_id: input.presetId ?? null,
         preset_task_id: input.presetTaskId ?? null,
+        conflict_policy: input.conflictPolicy ?? 'skip',
         created_at: stamp(),
         updated_at: stamp(),
       };
@@ -65,6 +66,7 @@ function makeRepo() {
         paramsJson: 'params_json',
         presetId: 'preset_id',
         presetTaskId: 'preset_task_id',
+        conflictPolicy: 'conflict_policy',
       };
       for (const [key, value] of Object.entries(patch)) {
         row[columns[key] || key] = key === 'enabled' ? (value ? 1 : 0) : value;
@@ -428,6 +430,46 @@ describe('import/export (§16)', () => {
 
     const explicit = await management.importTask({ ...envelope, projectPath: '/tmp/explicit' });
     expect(explicit.task.projectPath).toBe('/tmp/explicit');
+  });
+});
+describe('conflict policy (§17)', () => {
+  it('validates, stores and returns the policy', async () => {
+    const { repo, management } = setup();
+    const created = await management.createTask({ ...baseTask, conflictPolicy: 'queue' });
+    expect(created.task.conflictPolicy).toBe('queue');
+    expect(repo._tasks.get(created.task.id).conflict_policy).toBe('queue');
+
+    expect(await management.createTask({ ...baseTask, conflictPolicy: 'nope' })).toMatchObject({
+      ok: false,
+      code: 'invalid_input',
+    });
+
+    const updated = await management.updateTask(created.task.id, { conflictPolicy: 'replace' });
+    expect(updated.task.conflictPolicy).toBe('replace');
+
+    const plain = await management.createTask(baseTask);
+    expect(plain.task.conflictPolicy).toBe('skip');
+  });
+
+  it('carries the policy over to a copy and reads legacy rows as skip', async () => {
+    const { management } = setup();
+    const created = await management.createTask({ ...baseTask, conflictPolicy: 'replace' });
+
+    const copy = await management.copyTask(created.task.id);
+
+    expect(copy.task.conflictPolicy).toBe('replace');
+    expect(taskRowToJson({}).conflictPolicy).toBe('skip');
+  });
+
+  it('reports a queued manual run without a run row', async () => {
+    const runNow = vi.fn(async () => ({ queued: true }));
+    const { management } = setup({ deps: { runNow } });
+    const created = await management.createTask(baseTask);
+
+    const result = await management.runTaskNow(created.task.id);
+
+    expect(result).toEqual({ ok: true, queued: true, run: null });
+    expect(runNow).toHaveBeenCalledWith(created.task.id);
   });
 });
 

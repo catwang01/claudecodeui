@@ -218,6 +218,8 @@
     "description": "控制由定时任务启动的 Session 在应用中的显示方式。",
     "saving": "保存中...",
     "hideScheduledTaskSessionsLabel": "隐藏定时任务 Session",
+    "runRetentionLabel": "每个任务保留的运行记录数",
+    "runRetentionDescription": "每条定时任务保留多少次运行记录；超出的旧记录会在每次运行结束后自动清理。",
     "hideScheduledTaskSessionsDescription": "由定时任务启动的 Session 将不会出现在侧边栏中。"
   },
   "footerActions": {

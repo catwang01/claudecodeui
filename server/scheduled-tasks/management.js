@@ -20,6 +20,9 @@ import { normalizeProjectPath } from '../shared/utils.js';
 import { normalizeParamDefs, parseParamDefs, resolveParams } from './params.js';
 
 const TASK_STATUSES = new Set(['active', 'paused', 'all']);
+/** §17: what to do when a task is due while its previous run is still in flight. */
+const CONFLICT_POLICIES = new Set(['skip', 'queue', 'replace']);
+const DEFAULT_CONFLICT_POLICY = 'skip';
 const DEFAULT_RUNS_LIMIT = 20;
 const MAX_RUNS_LIMIT = 100;
 
@@ -74,6 +77,21 @@ function checkCommandTimeout(value) {
 
 function hasValue(value) {
   return value !== undefined && value !== null;
+}
+
+/** §17: null means the default; only the three documented values are accepted. */
+function checkConflictPolicy(value) {
+  if (value === undefined) return { ok: true, value: undefined };
+  if (value === null) return { ok: true, value: DEFAULT_CONFLICT_POLICY };
+  if (typeof value !== 'string' || !CONFLICT_POLICIES.has(value)) {
+    return fail('invalid_input', "conflictPolicy must be one of 'skip', 'queue' or 'replace'");
+  }
+  return { ok: true, value };
+}
+
+function conflictPolicyOf(row) {
+  const value = row?.conflict_policy ?? row?.conflictPolicy;
+  return CONFLICT_POLICIES.has(value) ? value : DEFAULT_CONFLICT_POLICY;
 }
 
 function toIso(ms) {
@@ -141,6 +159,8 @@ export function taskRowToJson(row) {
     lastStatus: row.last_status ?? null,
     lastError: row.last_error ?? null,
     enabled: row.enabled === undefined ? false : !!row.enabled,
+    // §17: legacy rows read as 'skip', the pre-existing behaviour.
+    conflictPolicy: conflictPolicyOf(row),
     runCount: row.run_count ?? 0,
     createdAt: row.created_at ?? null,
     updatedAt: row.updated_at ?? null,
@@ -530,6 +550,9 @@ export function createManagement(deps = {}) {
     const params = input.params === undefined ? undefined : checkParams(input.params);
     if (params && !params.ok) return params;
 
+    const conflict = checkConflictPolicy(input.conflictPolicy);
+    if (!conflict.ok) return conflict;
+
     const nowMs = now();
     const checked = validateAndNormalize(withIntervalAnchor(input.rule, nowMs), rules);
     if (!checked.ok) return checked;
@@ -556,6 +579,7 @@ export function createManagement(deps = {}) {
       command: command ? command.value : undefined,
       commandTimeoutSeconds: commandTimeoutSeconds ? commandTimeoutSeconds.value : undefined,
       paramsJson: params ? params.value : undefined,
+      conflictPolicy: conflict.value ?? DEFAULT_CONFLICT_POLICY,
       presetId: nonEmptyString(input.presetId) ?? undefined,
       presetTaskId: nonEmptyString(input.presetTaskId) ?? undefined,
     });
@@ -605,6 +629,11 @@ export function createManagement(deps = {}) {
       const checked = checkParams(patch.params);
       if (!checked.ok) return checked;
       changes.paramsJson = checked.value;
+    }
+    if (patch.conflictPolicy !== undefined) {
+      const checked = checkConflictPolicy(patch.conflictPolicy);
+      if (!checked.ok) return checked;
+      changes.conflictPolicy = checked.value;
     }
     if (patch.presetId !== undefined) {
       changes.presetId = nonEmptyString(patch.presetId);
@@ -717,6 +746,10 @@ export function createManagement(deps = {}) {
     if (result.error === 'in_flight') {
       return fail('in_flight', 'Scheduled task is already running', 409);
     }
+    // §17: the queue policy accepted the run but has not started it yet.
+    if (result.queued) {
+      return { ok: true, queued: true, run: null };
+    }
     if (result.error || !result.run) {
       return fail('internal_error', result.error || 'No run was created', 500);
     }
@@ -770,6 +803,7 @@ export function createManagement(deps = {}) {
       command: row.command ?? null,
       commandTimeoutSeconds: row.command_timeout_seconds ?? null,
       paramsJson: row.params_json ?? row.paramsJson ?? null,
+      conflictPolicy: conflictPolicyOf(row),
     });
     await ensureTaskWorkspaceBestEffort(created);
     return { ok: true, task: taskRowToJson(created) };

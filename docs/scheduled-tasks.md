@@ -1,4 +1,5 @@
 
+
 # Scheduled Tasks (定时任务) — Design & Frozen Contract
 
 Status: implemented in this change. Reference: DSH `@deepseek-ai/dsh-schedule` /
@@ -1232,3 +1233,61 @@ i18n key `copyDialog.*`、`actions.copy`、`errors.copy`（en + zh-CN）。
 - 前端：`ScheduledTasksPanel` copy 对话框 + export、`PresetsSection` upgrade；`npm run typecheck`、`npm run lint`。
 - 另：`management.createTask` 现在对 `enabled:false` 不再计算 nextRunAt（与 PATCH enabled:false 一致），
   且暂停任务允许无后续运行。
+## 18. Conflict policy + run retention（第十四轮）
+
+### 17.1 Conflict policy（任务在运行中再次到点时）
+
+每个任务新增 `conflict_policy`（camelCase `conflictPolicy`），取值：
+
+| 值 | 行为 |
+|---|---|
+| `skip`（默认） | 该次触发不运行；定时触发等下一跳，手动触发返回 409 `in_flight`。 |
+| `queue` | 记下这次触发（每个任务最多保留一个，后到的覆盖先到的）；当前 run 结束后自动启动。 |
+| `replace` | 尽力 `abortClaudeSDKSession` 中止当前 run 的 agent，等它落定（最多 5s）后启动新 run。 |
+
+实现位于 `server/scheduled-tasks/service.js`：`inFlight` 仍按 task 去重；新增 `pending`（每任务一个排队项）、
+`generation`（每次 launch 一个 token，被替换的旧 run 的 `finally` 不会清掉新 run 的状态）与
+`pendingLaunches`（`whenIdle()` 等待尚未注册进 `inFlightRun` 的排队/替换后继）。
+`runner.js` 导出 `abortTaskRun(taskId)`：查该任务最新的 `running` run，有 `session_id` 才中止，best-effort。
+
+### 17.2 Database（additive）
+
+```sql
+ALTER TABLE scheduled_tasks ADD COLUMN conflict_policy TEXT NOT NULL DEFAULT 'skip';
+```
+
+走 `addColumnIfMissing`；旧行读到 `skip`，即升级前的行为。`schema.ts` 的 `CREATE TABLE` 同步补列。
+
+### 17.3 REST
+
+- `POST /`、`PATCH /:id` 接受 `conflictPolicy`（`skip|queue|replace`，null 视为 `skip`）；非法值 400 `invalid_input`。
+- `POST /:id/run`：命中 `queue` 且已有 run 在跑时返回 `202 { queued: true }`（尚未创建 run 行）；其余仍 `202 { run }`。
+- Task JSON 增加 `conflictPolicy`。
+
+### 17.4 Agent tools
+
+- `schedule_create` / `schedule_update` 增加 `conflict_policy` 字段（enum）。
+- `schedule_run` 在排队时返回 `{ queued: true }`。
+
+### 17.5 Run history retention
+
+每次 run 落定后按保留条数裁剪该任务的 `scheduled_task_runs`（调用已有 `repo.pruneRuns(taskId, keep)`，best-effort）。
+保留条数优先级：`deps.runRetention`（测试注入） > 环境变量 `SCHEDULED_TASK_RUN_RETENTION` >
+`app_config.scheduled_task_run_retention` > 默认 `50`。值 `< 1` 或非法表示不裁剪。
+
+设置接口 `GET/POST /api/settings/automations` 增加 `scheduledTaskRunRetention`（整数 1..10000；未设置读作 50）。
+
+### 17.6 Frontend
+
+- 任务编辑器新增 conflict policy 下拉（`editor.fields.conflictPolicy`、`editor.conflictPolicy.*`）。
+- 手动运行被排队时面板显示 `runQueued` 提示（`api.runNow` 在 queued 时返回 null）。
+- 设置 → 自动化新增「每个任务保留的运行记录数」数字输入。
+
+### 17.7 Acceptance
+
+- `service.test.js`：skip 不重复派发、queue 在 run 落定后补跑、replace 调 `abortTaskRun` 并起新 run、
+  `runNow` 按策略返回 `in_flight`/`queued`、run 落定后按配置 `pruneRuns`。
+- `management.test.js`：策略校验/存储/更新、copy 继承、queued 返回 `{ ok:true, queued:true, run:null }`。
+- `tools.test.js` / routes：`conflict_policy` 往返、`{queued:true}` 响应。
+- `scheduled-tasks.db.test.ts`：建任务/更新写入 `conflict_policy`，旧行读作 `skip`。
+- 全量 `npx vitest run`（Node 22）、`npm run typecheck`、`npm run lint`。

@@ -236,7 +236,10 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
   preset_task_id TEXT,
   -- Parametrized scheduled tasks (docs section 12.4). NULL/'' => no parameters;
   -- databases created before the feature get the column through migrations.ts.
-  params_json TEXT
+  params_json TEXT,
+  -- Conflict policy (docs section 17): what to do when the task is due while its
+  -- previous run is still in flight. 'skip' (default) | 'queue' | 'replace'.
+  conflict_policy TEXT NOT NULL DEFAULT 'skip'
 );
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due ON scheduled_tasks(enabled, next_run_at);`;
 

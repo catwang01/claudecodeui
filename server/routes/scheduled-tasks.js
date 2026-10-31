@@ -117,6 +117,7 @@ export function createScheduledTasksRouter(overrides = {}) {
         command: body.command,
         commandTimeoutSeconds: body.commandTimeoutSeconds,
         params: body.params,
+        conflictPolicy: body.conflictPolicy,
         rule: body.rule,
       });
       if (!result.ok) return sendError(res, result);
@@ -341,6 +342,7 @@ export function createScheduledTasksRouter(overrides = {}) {
         command: body.command,
         commandTimeoutSeconds: body.commandTimeoutSeconds,
         params: body.params,
+        conflictPolicy: body.conflictPolicy,
         enabled: body.enabled,
         rule: body.rule,
       });
@@ -361,13 +363,16 @@ export function createScheduledTasksRouter(overrides = {}) {
   );
 
   // POST /:id/run — start a run immediately (202 with the 'running' run row).
-  // The optional body { params } carries §12.3 per-run overrides.
+  // The optional body { params } carries §12.3 per-run overrides. Under the §17
+  // 'queue' conflict policy a run already in flight is queued instead: the reply
+  // is 202 { queued: true } and no run row exists yet.
   router.post(
     '/:id/run',
     handler(async (req, res) => {
       const body = req.body || {};
       const result = await (await getManagement()).runTaskNow(req.params.id, {}, { params: body.params });
       if (!result.ok) return sendError(res, result);
+      if (result.queued) return res.status(202).json({ queued: true });
       res.status(202).json({ run: result.run });
     })
   );

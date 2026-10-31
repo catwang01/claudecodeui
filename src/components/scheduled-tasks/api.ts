@@ -172,14 +172,15 @@ export const scheduledTasksApi = {
   async runNow(
     id: string,
     options: { params?: Record<string, unknown> } = {},
-  ): Promise<ScheduledTaskRun> {
+  ): Promise<ScheduledTaskRun | null> {
     const body = options.params === undefined ? undefined : JSON.stringify({ params: options.params });
     const response = await authenticatedFetch(`${BASE_URL}/${encodeURIComponent(id)}/run`, {
       method: 'POST',
       ...(body === undefined ? {} : { body }),
     });
-    const data = await parseResponse<{ run: ScheduledTaskRun }>(response);
-    return data.run;
+    const data = await parseResponse<{ run?: ScheduledTaskRun; queued?: boolean }>(response);
+    // §17 queue policy: the trigger was accepted but no run exists yet.
+    return data?.queued ? null : (data?.run ?? null);
   },
 
   async listRuns(

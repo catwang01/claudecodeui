@@ -180,6 +180,7 @@
     "run": "无法启动任务。",
     "update": "无法更新任务。",
     "copy": "无法复制任务。",
+    "runQueued": "任务已在运行，本次触发已排队。",
     "export": "无法导出任务。",
     "import": "无法导入任务。"
   },
@@ -206,11 +207,18 @@
       "modelPlaceholder": "留空则使用提供方默认值",
       "enabled": "启用",
       "enabledHint": "暂停后仍保留计划，但不会运行。",
+      "conflictPolicy": "运行中再次到点时",
+      "conflictPolicyHint": "当上一次运行还在进行、本次又到点时的处理方式。排队只保留一个待运行触发；替换会中止当前运行再启动新的。",
       "scriptGate": "脚本门控（可选）",
       "command": "Shell 命令",
       "commandPlaceholder": "./scripts/should-run.sh",
       "commandTimeout": "脚本超时（秒）",
       "commandHint": "脚本会在智能体运行前，以 sh -c 在项目目录中执行。其标准输出必须是 JSON：{\"prompt\": \"...\"} 表示用该提示词运行智能体，{\"skip\": true, \"reason\": \"...\"} 表示跳过本次运行，{\"skip\": false} 表示使用任务自身的提示词。退出码非零或 JSON 无效时任务会失败且不会调用智能体。留空则直接运行智能体。"
+    },
+    "conflictPolicy": {
+      "skip": "跳过本次",
+      "queue": "排队等待",
+      "replace": "中止当前并运行"
     },
     "params": {
       "title": "参数（可选）",

@@ -78,6 +78,7 @@ function makeTask(id: string, title: string): ScheduledTask {
     lastStatus: null,
     lastError: null,
     enabled: true,
+    conflictPolicy: 'skip',
     runCount: 0,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',

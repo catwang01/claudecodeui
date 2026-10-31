@@ -91,6 +91,9 @@ export interface RuleDraft {
   cronExpression: string;
 }
 
+/** docs §17: how a due task behaves while its previous run is still in flight. */
+export type ConflictPolicy = 'skip' | 'queue' | 'replace';
+
 export type RunStatus = 'running' | 'success' | 'error' | 'skipped';
 export type RunTrigger = 'schedule' | 'manual';
 
@@ -141,6 +144,8 @@ export interface ScheduledTask {
   lastStatus: RunStatus | null;
   lastError: string | null;
   enabled: boolean;
+  /** docs §17: conflict policy while a run is still in flight; legacy rows read 'skip'. */
+  conflictPolicy: ConflictPolicy;
   runCount: number;
   createdAt: string;
   updatedAt: string;
@@ -160,6 +165,8 @@ export interface ScheduledTaskInput {
   rule: TaskRule;
   /** Always sent: an empty list clears the task's parameters. */
   params?: ParamDef[];
+  /** docs §17; defaults to 'skip'. */
+  conflictPolicy?: ConflictPolicy;
 }
 
 export interface ScheduledTaskPatch {
@@ -174,6 +181,8 @@ export interface ScheduledTaskPatch {
   commandTimeoutSeconds?: number | null;
   /** Replacement parameter list; an empty list removes every parameter. */
   params?: ParamDef[];
+  /** docs §17 conflict policy. */
+  conflictPolicy?: ConflictPolicy;
 }
 
 export interface ProjectOption {

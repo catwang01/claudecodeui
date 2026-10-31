@@ -186,6 +186,7 @@
     "run": "Could not start the task.",
     "update": "Could not update the task.",
     "copy": "Could not duplicate the task.",
+    "runQueued": "The task is already running; this trigger was queued.",
     "export": "Could not export the task.",
     "import": "Could not import the task."
   },
@@ -212,11 +213,18 @@
       "modelPlaceholder": "Leave empty for the provider default",
       "enabled": "Enabled",
       "enabledHint": "Paused tasks keep their schedule but do not run.",
+      "conflictPolicy": "If already running",
+      "conflictPolicyHint": "What to do when this task is due while its previous run is still going. Queue keeps one pending trigger; Replace aborts the current run.",
       "scriptGate": "Script gate (optional)",
       "command": "Shell command",
       "commandPlaceholder": "./scripts/should-run.sh",
       "commandTimeout": "Script timeout (seconds)",
       "commandHint": "The command runs with sh -c in the project directory before the agent. Its stdout must be JSON: {\"prompt\": \"...\"} runs the agent with that prompt, {\"skip\": true, \"reason\": \"...\"} skips the run, {\"skip\": false} keeps the task prompt. A non-zero exit or invalid JSON fails the run without calling the agent. Leave empty to run the agent directly."
+    },
+    "conflictPolicy": {
+      "skip": "Skip the new run",
+      "queue": "Queue it",
+      "replace": "Replace the running one"
     },
     "params": {
       "title": "Parameters (optional)",

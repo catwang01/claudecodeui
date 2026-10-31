@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { scheduledTasksApi } from '../api';
-import type { ScheduledTask, ScheduledTaskInput, ScheduledTaskPatch, TaskStatusFilter } from '../types';
+import type { ScheduledTask, ScheduledTaskInput, ScheduledTaskPatch, ScheduledTaskRun, TaskStatusFilter } from '../types';
 
 /** Keep next-run/last-status reasonably fresh while the panel is open. */
 const AUTO_REFRESH_MS = 20000;
@@ -65,10 +65,12 @@ export function useScheduledTasks(params: { status: TaskStatusFilter; search: st
   );
 
   const runNow = useCallback(
-    async (id: string, params?: Record<string, unknown>): Promise<void> => {
+    async (id: string, params?: Record<string, unknown>): Promise<ScheduledTaskRun | null> => {
       // No params key at all keeps the request byte-identical to pre-section-12.
-      await scheduledTasksApi.runNow(id, params === undefined ? {} : { params });
+      // §17: null means the queue policy accepted the trigger but no run exists yet.
+      const run = await scheduledTasksApi.runNow(id, params === undefined ? {} : { params });
       await refresh();
+      return run;
     },
     [refresh],
   );

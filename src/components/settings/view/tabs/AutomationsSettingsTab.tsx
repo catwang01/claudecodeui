@@ -9,6 +9,8 @@ export default function AutomationsSettingsTab() {
   // Server default is "hidden" (app_config.scheduled_task_hide_sessions); keep the same initial
   // value so the first paint does not flash the scheduled-task sessions.
   const [hideScheduledTaskSessions, setHideScheduledTaskSessions] = useState(true);
+  // docs/scheduled-tasks.md §17: how many runs per task to keep (server default 50).
+  const [scheduledTaskRunRetention, setScheduledTaskRunRetention] = useState(50);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'success' | 'error' | null>(null);
@@ -19,6 +21,9 @@ export default function AutomationsSettingsTab() {
       .then(data => {
         if (typeof data?.hideScheduledTaskSessions === 'boolean') {
           setHideScheduledTaskSessions(data.hideScheduledTaskSessions);
+        }
+        if (typeof data?.scheduledTaskRunRetention === 'number') {
+          setScheduledTaskRunRetention(data.scheduledTaskRunRetention);
         }
       })
       .catch(() => {
@@ -34,7 +39,7 @@ export default function AutomationsSettingsTab() {
       const res = await authenticatedFetch('/api/settings/automations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hideScheduledTaskSessions }),
+        body: JSON.stringify({ hideScheduledTaskSessions, scheduledTaskRunRetention }),
       });
       setSaveStatus(res.ok ? 'success' : 'error');
     } catch {
@@ -87,6 +92,24 @@ export default function AutomationsSettingsTab() {
               }`}
             />
           </button>
+        </div>
+
+        <div className="flex items-center justify-between gap-4">
+          <div className="space-y-1 flex-1">
+            <label className="text-sm font-medium text-foreground" htmlFor="scheduled-task-retention">
+              {t('automations.runRetentionLabel')}
+            </label>
+            <p className="text-xs text-muted-foreground">{t('automations.runRetentionDescription')}</p>
+          </div>
+          <input
+            id="scheduled-task-retention"
+            type="number"
+            min={1}
+            max={10000}
+            className="w-24 rounded-md border border-input bg-transparent px-2 py-1 text-sm"
+            value={scheduledTaskRunRetention}
+            onChange={(event) => setScheduledTaskRunRetention(Number(event.target.value))}
+          />
         </div>
 
         <div className="flex items-center gap-3">

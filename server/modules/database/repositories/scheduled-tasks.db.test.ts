@@ -122,6 +122,19 @@ describe('scheduledTasksDb', () => {
     expect(fetched.rule_json).toBe('{"kind":"interval","everySeconds":300}');
     expect(scheduledTasksDb.getTask(crypto.randomUUID())).toBeUndefined();
   });
+  it('stores and updates the conflict policy; legacy rows read skip', () => {
+    const created = makeTask({ title: 'Policy task', conflictPolicy: 'queue' });
+    expect(created.conflict_policy).toBe('queue');
+
+    const plain = makeTask({ title: 'Default policy' });
+    expect(plain.conflict_policy).toBe('skip');
+
+    const updated = must(scheduledTasksDb.updateTask(created.id, { conflictPolicy: 'replace' }));
+    expect(updated.conflict_policy).toBe('replace');
+
+    // The legacy row predates the column; the migration default makes it 'skip'.
+    expect(must(scheduledTasksDb.getTask(legacyTaskId)).conflict_policy).toBe('skip');
+  });
 
   it('honours explicit id, user, provider, model, enabled and null next run', () => {
     const id = crypto.randomUUID();

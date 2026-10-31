@@ -66,6 +66,8 @@ export default function ScheduledTasksPanel({ onClose, runningCount = 0 }: Sched
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  // §17: a non-error notice (e.g. the run was queued behind the active one).
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   // Presets own their dialogs; this only stops Escape from closing the panel behind them.
   const [isPresetOverlayOpen, setIsPresetOverlayOpen] = useState(false);
@@ -119,9 +121,11 @@ export default function ScheduledTasksPanel({ onClose, runningCount = 0 }: Sched
   const handleRunNow = async (task: ScheduledTask, params?: Record<string, unknown>) => {
     setBusyTaskId(task.id);
     setActionError(null);
+    setActionNotice(null);
     setExpandedTaskId(task.id);
     try {
-      await runNow(task.id, params);
+      const run = await runNow(task.id, params);
+      if (!run) setActionNotice(t('runQueued'));
       setRunDialogTask(null);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : t('errors.run'));
@@ -135,9 +139,11 @@ export default function ScheduledTasksPanel({ onClose, runningCount = 0 }: Sched
   const handleRunWithParams = async (task: ScheduledTask, params: Record<string, unknown>) => {
     setBusyTaskId(task.id);
     setActionError(null);
+    setActionNotice(null);
     setExpandedTaskId(task.id);
     try {
-      await runNow(task.id, params);
+      const run = await runNow(task.id, params);
+      if (!run) setActionNotice(t('runQueued'));
       setRunDialogTask(null);
     } finally {
       setBusyTaskId(null);
@@ -170,6 +176,7 @@ export default function ScheduledTasksPanel({ onClose, runningCount = 0 }: Sched
         enabled: values.enabled,
         rule: values.rule,
         params: values.params,
+        conflictPolicy: values.conflictPolicy,
       });
     } else {
       const input: ScheduledTaskInput = {
@@ -182,6 +189,7 @@ export default function ScheduledTasksPanel({ onClose, runningCount = 0 }: Sched
         commandTimeoutSeconds: values.commandTimeoutSeconds,
         rule: values.rule,
         params: values.params,
+        conflictPolicy: values.conflictPolicy,
       };
       await createTask(input);
     }
@@ -437,6 +445,9 @@ export default function ScheduledTasksPanel({ onClose, runningCount = 0 }: Sched
 
               {actionError && (
                 <p className="mb-3 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{actionError}</p>
+              )}
+              {actionNotice && (
+                <p className="mb-3 rounded-md bg-primary/10 px-3 py-2 text-xs text-primary">{actionNotice}</p>
               )}
 
               {tasks.length > 0 && (

@@ -175,6 +175,10 @@ export function runMigrations(): void {
   // NULL and therefore never count as "running" after the upgrade.
   addColumnIfMissing(db, 'scheduled_task_runs', 'agent_started_at', 'TEXT');
 
+  // Conflict policy (docs section 17). Additive with a non-null default so every
+  // existing task reads as 'skip', exactly the pre-§17 behaviour.
+  addColumnIfMissing(db, 'scheduled_tasks', 'conflict_policy', "TEXT NOT NULL DEFAULT 'skip'");
+
   // Data migrations
   migrateLegacySessionNames(db);
 

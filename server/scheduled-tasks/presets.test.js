@@ -47,6 +47,7 @@ function makeTaskRow(input, id) {
     last_error: null,
     enabled: input.enabled === false ? 0 : 1,
     run_count: 0,
+    conflict_policy: input.conflictPolicy ?? 'skip',
     preset_id: input.presetId ?? null,
     preset_task_id: input.presetTaskId ?? null,
     created_at: stamp,

@@ -617,7 +617,25 @@ export function createTaskRunner(deps = {}) {
     return { run, done };
   }
 
-  return { startTaskRun };
+  /**
+   * §17 conflict policy 'replace': abort the agent session of the task's active
+   * run. Best-effort — resolves to the aborted session id, or null when the run
+   * is still in the script gate (no session yet) or the abort call failed.
+   */
+  async function abortTaskRun(taskId) {
+    try {
+      const runs = db.listRuns(taskId, 5, 0) || [];
+      const running = runs.find((row) => row.status === 'running' && row.session_id);
+      if (!running) return null;
+      await abortSession(running.session_id);
+      return running.session_id;
+    } catch (err) {
+      console.warn('[scheduled-tasks] abortTaskRun failed:', errorMessage(err));
+      return null;
+    }
+  }
+
+  return { startTaskRun, abortTaskRun };
 }
 
 const defaultRunner = createTaskRunner();
@@ -630,4 +648,14 @@ const defaultRunner = createTaskRunner();
  */
 export function startTaskRun(task, options = {}) {
   return defaultRunner.startTaskRun(task, options);
+}
+
+/**
+ * §17: abort the active run's agent, when there is one. Exported so the scheduler
+ * can implement the 'replace' conflict policy without importing claude-sdk itself.
+ * @param {string} taskId
+ * @returns {Promise<string|null>} the aborted session id, or null.
+ */
+export function abortTaskRun(taskId) {
+  return defaultRunner.abortTaskRun(taskId);
 }

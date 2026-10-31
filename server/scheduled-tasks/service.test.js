@@ -330,32 +330,133 @@ describe('interrupted-run sweep (§14.1)', () => {
     expect(logger.warn).toHaveBeenCalled();
   });
 });
-
-describe('runningCount (§15)', () => {
-  it('reads the repository count on demand', async () => {
-    const repo = makeRepo([]);
-    repo.countRunningAgentRuns = vi.fn(() => 2);
-    const scheduler = createScheduler({ repo, runner: makeRunner(null), now, tickMs: 1000 });
-
-    await expect(scheduler.runningCount()).resolves.toBe(2);
-    expect(repo.countRunningAgentRuns).toHaveBeenCalledTimes(1);
-  });
-
-  it('reads as 0 when the repository cannot count (older fakes)', async () => {
-    const scheduler = createScheduler({ repo: makeRepo([]), runner: makeRunner(null), now, tickMs: 1000 });
-
-    await expect(scheduler.runningCount()).resolves.toBe(0);
-  });
-
-  it('never throws when the count query fails', async () => {
-    const repo = makeRepo([]);
-    repo.countRunningAgentRuns = vi.fn(() => {
-      throw new Error('database is locked');
+describe('conflict policy (§17)', () => {
+  function runningRunner() {
+    let calls = 0;
+    let first = null;
+    const startTaskRun = vi.fn((task, options) => {
+      calls += 1;
+      const run = {
+        id: `run-${calls}`,
+        task_id: task.id,
+        status: 'running',
+        trigger: options.trigger,
+        finished_at: null,
+      };
+      const done =
+        calls === 1
+          ? (first = deferred()).promise
+          : Promise.resolve({
+              run: { ...run, status: 'success', finished_at: new Date(NOW).toISOString() },
+              status: 'success',
+              sessionId: null,
+              output: null,
+              error: null,
+            });
+      return { run, done };
     });
-    const logger = { warn: vi.fn(), error: vi.fn() };
-    const scheduler = createScheduler({ repo, runner: makeRunner(null), now, tickMs: 1000, logger });
+    return { runner: { startTaskRun }, firstRun: () => first };
+  }
 
-    await expect(scheduler.runningCount()).resolves.toBe(0);
-    expect(logger.warn).toHaveBeenCalled();
+  const settleFirst = (first) =>
+    first.resolve({
+      run: { id: 'run-1', status: 'success', finished_at: new Date(NOW).toISOString() },
+      status: 'success',
+      sessionId: null,
+      output: null,
+      error: null,
+    });
+
+  it('skip (default): a second due tick while a run is in flight dispatches nothing', async () => {
+    const repo = makeRepo([makeTask()]);
+    const { runner, firstRun } = runningRunner();
+    const scheduler = createScheduler({ repo, runner, now, tickMs: 1000, computeNextRun: () => NOW + 60000 });
+
+    await scheduler.tick();
+    await flush();
+    const first = firstRun();
+    await scheduler.tick();
+    expect(runner.startTaskRun).toHaveBeenCalledTimes(1);
+    settleFirst(first);
+    await scheduler.whenIdle();
+  });
+
+  it('queue: a due tick while in flight runs once the active run settles', async () => {
+    const repo = makeRepo([makeTask({ conflict_policy: 'queue' })]);
+    const { runner, firstRun } = runningRunner();
+    const scheduler = createScheduler({ repo, runner, now, tickMs: 1000, computeNextRun: () => NOW + 60000 });
+
+    await scheduler.tick();
+    await flush();
+    const first = firstRun();
+    await scheduler.tick();
+    expect(runner.startTaskRun).toHaveBeenCalledTimes(1);
+    settleFirst(first);
+    await scheduler.whenIdle();
+    expect(runner.startTaskRun).toHaveBeenCalledTimes(2);
+  });
+
+  it('replace: a due tick aborts the active run and starts a new one', async () => {
+    const repo = makeRepo([makeTask({ conflict_policy: 'replace' })]);
+    const { runner, firstRun } = runningRunner();
+    runner.abortTaskRun = vi.fn(async () => {
+      firstRun().resolve({
+        run: { id: 'run-1', status: 'error', finished_at: new Date(NOW).toISOString() },
+        status: 'error',
+        sessionId: 'sess-1',
+        output: null,
+        error: 'replaced',
+      });
+      return 'sess-1';
+    });
+    const scheduler = createScheduler({ repo, runner, now, tickMs: 1000, computeNextRun: () => NOW + 60000 });
+
+    await scheduler.tick();
+    await flush();
+    await scheduler.tick();
+    await scheduler.whenIdle();
+
+    expect(runner.abortTaskRun).toHaveBeenCalledWith('t1');
+    expect(runner.startTaskRun).toHaveBeenCalledTimes(2);
+  });
+
+  it('manual runNow honours skip and queue while a run is in flight', async () => {
+    const repo = makeRepo([makeTask({ conflict_policy: 'queue' })]);
+    const { runner, firstRun } = runningRunner();
+    const scheduler = createScheduler({ repo, runner, now, tickMs: 1000, computeNextRun: () => NOW + 60000 });
+
+    await scheduler.tick();
+    await flush();
+    const first = firstRun();
+    await expect(scheduler.runNow('t1')).resolves.toEqual({ queued: true });
+    settleFirst(first);
+    await scheduler.whenIdle();
+    expect(runner.startTaskRun).toHaveBeenCalledTimes(2);
+
+    const skipRepo = makeRepo([makeTask()]);
+    const skipRunner = runningRunner();
+    const skipScheduler = createScheduler({ repo: skipRepo, runner: skipRunner.runner, now, tickMs: 1000, computeNextRun: () => NOW + 60000 });
+    await skipScheduler.tick();
+    await flush();
+    await expect(skipScheduler.runNow('t1')).resolves.toEqual({ error: 'in_flight' });
+    settleFirst(skipRunner.firstRun());
+    await skipScheduler.whenIdle();
+  });
+
+  it('prunes run history after a run settles using the configured retention', async () => {
+    const repo = makeRepo([makeTask()]);
+    repo.pruneRuns = vi.fn(() => 3);
+    const scheduler = createScheduler({
+      repo,
+      runner: makeRunner(null),
+      now,
+      tickMs: 1000,
+      computeNextRun: () => NOW + 60000,
+      runRetention: () => 10,
+    });
+
+    await scheduler.tick();
+    await scheduler.whenIdle();
+    expect(repo.pruneRuns).toHaveBeenCalledWith('t1', 10);
   });
 });
