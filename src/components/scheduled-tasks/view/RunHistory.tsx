@@ -1,3 +1,4 @@
+import { MessageSquare } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../../shared/view/ui';
@@ -8,7 +9,15 @@ import StatusPill from './StatusPill';
 
 const PAGE_SIZE = 20;
 
-function RunRow({ run, locale }: { run: ScheduledTaskRun; locale: string }) {
+function RunRow({
+  run,
+  locale,
+  onOpenSession,
+}: {
+  run: ScheduledTaskRun;
+  locale: string;
+  onOpenSession?: (sessionId: string) => void;
+}) {
   const { t } = useTranslation('scheduledTasks');
   const duration = run.status === 'running' ? t('runs.inProgress') : formatDuration(run.startedAt, run.finishedAt);
 
@@ -25,9 +34,25 @@ function RunRow({ run, locale }: { run: ScheduledTaskRun; locale: string }) {
       </div>
 
       {run.sessionId && (
-        <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
-          {t('runs.session')}: {run.sessionId}
-        </p>
+        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+          <p className="truncate font-mono text-[11px] text-muted-foreground">
+            {t('runs.session')}: {run.sessionId}
+          </p>
+          {onOpenSession && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-6 gap-1 px-2 text-[11px]"
+              onClick={() => onOpenSession(run.sessionId as string)}
+              aria-label={t('runs.openSessionAria', { id: run.sessionId })}
+              title={t('runs.openSession')}
+            >
+              <MessageSquare className="h-3 w-3" />
+              {t('runs.openSession')}
+            </Button>
+          )}
+        </div>
       )}
 
       {run.status === 'skipped' && (
@@ -97,9 +122,11 @@ type RunHistoryProps = {
    * the run list never disagree after a run-now or a background list refresh.
    */
   refreshToken?: string;
+  /** Opens the agent session this run created (the panel closes and navigates). */
+  onOpenSession?: (sessionId: string) => void;
 };
 
-export default function RunHistory({ taskId, refreshToken }: RunHistoryProps) {
+export default function RunHistory({ taskId, refreshToken, onOpenSession }: RunHistoryProps) {
   const { t, i18n } = useTranslation('scheduledTasks');
   const locale = i18n.language;
   const [runs, setRuns] = useState<ScheduledTaskRun[]>([]);
@@ -156,7 +183,7 @@ export default function RunHistory({ taskId, refreshToken }: RunHistoryProps) {
       {runs.length > 0 && (
         <ul className="mt-2 space-y-2">
           {runs.map((run) => (
-            <RunRow key={run.id} run={run} locale={locale} />
+            <RunRow key={run.id} run={run} locale={locale} onOpenSession={onOpenSession} />
           ))}
         </ul>
       )}

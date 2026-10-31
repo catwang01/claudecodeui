@@ -6,8 +6,8 @@
  *   - the session_id index exists on scheduled_task_runs
  *   - getSessionOrigins / getAllScheduledTaskSessionIds behave as contracted
  *   - applyScheduledTaskOrigin decorates session objects
- *   - filterHiddenScheduledTaskSessions hides them by default and keeps them when
- *     app_config.scheduled_task_hide_sessions = 'false'
+ *   - hiding is presentation-only: the ids stay in the payload (so /session/<id> resolves)
+ *     and buildExcludedSessionIds never removes them
  *   - buildExcludedSessionIds() reflects the same decision
  *
  * Usage (Node 22, --tsconfig is required for the "@/" aliases):
@@ -48,7 +48,7 @@ async function main() {
   console.log('[origin-e2e] temp dir: ' + TMP);
   await import(url('server/database/db.js')); // migrations on the temp DB
   const { scheduledTasksDb, appConfigDb } = await import(url('server/modules/database/index.js'));
-  const { applyScheduledTaskOrigin, filterHiddenScheduledTaskSessions } = await import(url('server/database/db.js'));
+  const { applyScheduledTaskOrigin } = await import(url('server/database/db.js'));
   const { buildExcludedSessionIds } = await import(url('server/projects.js'));
 
   const iso = (ms) => new Date(ms).toISOString();
@@ -151,53 +151,31 @@ async function main() {
     return 'decorated 2/3';
   });
 
-  await check('filterHiddenScheduledTaskSessions hides them by default', () => {
+  // ── hiding is presentation-only ───────────────────────────────────────────
+  await check('scheduled sessions are never excluded from the payload', () => {
+    // docs §9.3: they must reach the client so /session/<id> resolves even while the sidebar
+    // hides them; the hide setting is applied by the sidebar's client-side filter.
+    for (const setting of ['true', 'false']) {
+      appConfigDb.set('scheduled_task_hide_sessions', setting);
+      const excluded = buildExcludedSessionIds('claude');
+      assert(excluded instanceof Set, 'expected a Set');
+      assert(
+        !excluded.has(SESSION_A) && !excluded.has(SESSION_B),
+        'excluded with hide=' + setting + ': ' + JSON.stringify([...excluded])
+      );
+    }
+    appConfigDb.set('scheduled_task_hide_sessions', 'true');
+    return 'always present in the payload';
+  });
+
+  await check('the origin flag is what the sidebar filter keys on', () => {
     const sessions = makeSessions();
     applyScheduledTaskOrigin(sessions, 'claude');
-    filterHiddenScheduledTaskSessions(sessions);
-    assert(sessions.length === 1 && sessions[0].id === 'plain-session', 'expected only the plain session, got ' + JSON.stringify(sessions.map((s) => s.id)));
-    return 'hidden by default';
+    const kept = sessions.filter((s) => !s.scheduledTaskOrigin);
+    assert(kept.length === 1 && kept[0].id === 'plain-session', 'client filter would keep the wrong rows');
+    return 'origin drives the filter';
   });
 
-  await check("setting 'scheduled_task_hide_sessions' = 'false' keeps them visible", () => {
-    appConfigDb.set('scheduled_task_hide_sessions', 'false');
-    try {
-      const sessions = makeSessions();
-      applyScheduledTaskOrigin(sessions, 'claude');
-      filterHiddenScheduledTaskSessions(sessions);
-      assert(sessions.length === 3, 'expected all 3 sessions, got ' + sessions.length);
-      return 'visible when disabled';
-    } finally {
-      appConfigDb.set('scheduled_task_hide_sessions', 'true');
-    }
-  });
-
-  await check('a session with no origin is never filtered', () => {
-    const sessions = [{ id: 'plain-session' }];
-    filterHiddenScheduledTaskSessions(sessions);
-    assert(sessions.length === 1, 'plain session was removed');
-    return 'kept';
-  });
-
-  // ── exclusion set used by getProjects / search ───────────────────────────
-  await check('buildExcludedSessionIds includes them while hiding is on', () => {
-    appConfigDb.set('scheduled_task_hide_sessions', 'true');
-    const excluded = buildExcludedSessionIds('claude');
-    assert(excluded instanceof Set, 'expected a Set');
-    assert(excluded.has(SESSION_A) && excluded.has(SESSION_B), 'scheduled sessions not excluded: ' + JSON.stringify([...excluded]));
-    return excluded.size + ' excluded';
-  });
-
-  await check('buildExcludedSessionIds drops them when hiding is off', () => {
-    appConfigDb.set('scheduled_task_hide_sessions', 'false');
-    try {
-      const excluded = buildExcludedSessionIds('claude');
-      assert(!excluded.has(SESSION_A) && !excluded.has(SESSION_B), 'still excluded with hiding off');
-      return 'not excluded';
-    } finally {
-      appConfigDb.set('scheduled_task_hide_sessions', 'true');
-    }
-  });
 }
 
 main()

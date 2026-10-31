@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import ReactDOM from 'react-dom';
+import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Clock, Loader2, Plus, RefreshCw, Search, X } from 'lucide-react';
 import { Button } from '../../../shared/view/ui';
@@ -21,6 +22,7 @@ const STATUS_FILTERS: TaskStatusFilter[] = ['all', 'enabled', 'paused'];
 
 export default function ScheduledTasksPanel({ onClose }: ScheduledTasksPanelProps) {
   const { t } = useTranslation('scheduledTasks');
+  const navigate = useNavigate();
   const [searchInput, setSearchInput] = useState('');
   const search = useDebouncedValue(searchInput, 250);
   const [statusFilter, setStatusFilter] = useState<TaskStatusFilter>('all');
@@ -279,6 +281,10 @@ export default function ScheduledTasksPanel({ onClose }: ScheduledTasksPanelProp
                   onEdit={openEdit}
                   onDelete={setPendingDelete}
                   onToggleHistory={handleToggleHistory}
+                  onOpenSession={(sessionId) => {
+                    onClose();
+                    navigate('/session/' + sessionId);
+                  }}
                 />
               ))}
             </div>

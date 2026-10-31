@@ -214,10 +214,9 @@ export default function SidebarContent({
     } catch {
       /* keep the optimistic state; the next settings load restores the server value */
     }
-    // Hidden scheduled-task sessions are dropped server-side, so revealing them needs a
-    // refetch rather than a pure client-side filter.
-    if (!next) onRefresh();
-  }, [hideScheduledTaskSessions, onRefresh]);
+    // Hiding is presentation only: the sessions stay in the payload (so a session URL still
+    // resolves) and the client filters the list, so no refetch is needed.
+  }, [hideScheduledTaskSessions]);
 
   const loadGlobalRecents = useCallback(async (offset: number, replace: boolean) => {
     if (isLoadingGlobalRecentsRef.current) return;

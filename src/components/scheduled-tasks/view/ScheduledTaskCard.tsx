@@ -17,6 +17,7 @@ type ScheduledTaskCardProps = {
   onEdit: (task: ScheduledTask) => void;
   onDelete: (task: ScheduledTask) => void;
   onToggleHistory: (task: ScheduledTask) => void;
+  onOpenSession?: (sessionId: string) => void;
 };
 
 /** Last path segment; handles both / and Windows separators without regex escapes. */
@@ -42,6 +43,7 @@ export default function ScheduledTaskCard({
   onEdit,
   onDelete,
   onToggleHistory,
+  onOpenSession,
 }: ScheduledTaskCardProps) {
   const { t, i18n } = useTranslation('scheduledTasks');
   const locale = i18n.language;
@@ -188,7 +190,7 @@ export default function ScheduledTaskCard({
 
       {isExpanded && (
         <div className="border-t border-border">
-          <RunHistory taskId={task.id} refreshToken={historyToken} />
+          <RunHistory taskId={task.id} refreshToken={historyToken} onOpenSession={onOpenSession} />
         </div>
       )}
     </div>

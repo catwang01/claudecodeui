@@ -667,7 +667,7 @@ function filterHiddenAutoDocSessions(sessions) {
 
 // Tag sessions that were started by a scheduled task run.
 // docs/scheduled-tasks.md section 9.2: mirrors applyAutoDocFlag; claude-only because the
-// scheduler always starts Claude sessions. Must run before filterHiddenScheduledTaskSessions.
+// scheduler always starts Claude sessions. Hiding is presentation-only (client filter).
 function applyScheduledTaskOrigin(sessions, provider = 'claude') {
   if (!sessions?.length || provider !== 'claude') return;
   try {
@@ -686,23 +686,6 @@ function applyScheduledTaskOrigin(sessions, provider = 'claude') {
     }
   } catch (error) {
     console.warn(`[DB] Failed to apply scheduled-task origin for ${provider}:`, error.message);
-  }
-}
-
-// Remove scheduled-task sessions from the array when the hide setting is enabled.
-// docs/scheduled-tasks.md section 9.2: hidden when app_config 'scheduled_task_hide_sessions'
-// is unset (default) or 'true'. Must be called after applyScheduledTaskOrigin.
-function filterHiddenScheduledTaskSessions(sessions) {
-  if (!sessions?.length) return;
-  try {
-    const hideRaw = appConfigDb.get('scheduled_task_hide_sessions');
-    const hide = hideRaw === null ? true : hideRaw === 'true';
-    if (!hide) return;
-    for (let i = sessions.length - 1; i >= 0; i--) {
-      if (sessions[i].scheduledTaskOrigin) sessions.splice(i, 1);
-    }
-  } catch (error) {
-    console.warn('[DB] Failed to filter hidden scheduled-task sessions:', error.message);
   }
 }
 
@@ -963,7 +946,6 @@ export {
   applyForkParent,
   filterHiddenAutoDocSessions,
   applyScheduledTaskOrigin,
-  filterHiddenScheduledTaskSessions,
   applyReadState,
   appConfigDb,
   userSettingsDb,

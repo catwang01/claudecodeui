@@ -157,6 +157,8 @@
     "count": "{{shown}} of {{total}}",
     "duration": "Duration",
     "session": "Session",
+    "openSession": "Open session",
+    "openSessionAria": "Open the session started by this run ({{id}})",
     "output": "Output",
     "error": "Error",
     "inProgress": "Running…",
