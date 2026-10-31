@@ -1,3 +1,4 @@
 # Test / benchmark dependencies for the PII proxy (not needed at runtime).
 #   python3 -m pip install -r requirements.txt -r requirements-dev.txt
 pytest>=8.0
+pytest-cov>=5.0

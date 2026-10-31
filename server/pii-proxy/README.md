@@ -74,5 +74,27 @@ cd server/pii-proxy
 ```
 
 * `tests/test_detect.py`：T0 字面 / T1 正则 / 增量扫描与全量扫描等价 / 体检规则。
-* `tests/test_stream.py`：任意切分输出一致、JSON 合法性（含引号/反斜杠/换行）、占位符跨帧、`input_json_delta` 累积还原、thinking/signature 透传。
-* `tests/test_proxy_v2.py`：请求脱敏覆盖（嵌套 tool_use / tool_result / system list）、响应还原、签名块豁免、fail-open。
+```bash
+npm run pii-proxy:cov      # 覆盖率 + 未覆盖行
+npm run bench:pii          # 基准与切分 fuzz
+```
+
+当前基线：**171 passed + 1 xfailed，整体行覆盖 95%**（pii_vault 98% / pii_stream 96% / pii_detect 93% / pii_proxy 93%）。未覆盖主要是防御性分支（配置回退、保存失败、上游重试）。
+
+| 测试文件 | 覆盖 |
+|---|---|
+| `tests/test_detect.py` | T0 字面 / T1 正则 / 增量扫描与全量扫描等价 / 体检规则 / 内置规则必须全部加载且命中样例 / 锚点保守性 |
+| `tests/test_stream.py` | 任意切分不变量、JSON 合法性、占位符跨帧、`input_json_delta` 累积还原、thinking/signature 透传 |
+| `tests/test_stream_edges.py` | 畸形帧、CRLF、半截 UTF-8、超长/超多帧、转义与嵌套、截断与计数、幂等 |
+| `tests/test_proxy_v2.py` | 请求脱敏覆盖（嵌套 tool_use / tool_result / system list）、响应还原、签名块豁免、fail-open |
+| `tests/test_proxy_edges.py` | UI 端点形状、统计计数、非 messages 路径不动、非 JSON 透传、错误响应还原、别名跨请求稳定、配置合并 |
+| `tests/test_http_e2e.py` | 真实 uvicorn + 真实 HTTP：多轮对话、极端切分、工具调用闭环、特殊字符、上游错误、并发 |
+| `tests/test_vault_edges.py` | 别名格式/确定性/持久化/损坏文件/并发/冲突扩展/签名键跳过 |
+
+**已知未覆盖**（刻意或待补）：
+
+1. 真实 Claude Code CLI → cc-switch → DeepSeek 链路的会话级验证（需要打开开关 + 真实会话；测试里用假上游代替）。
+2. 模型主动改写占位符（加空格 / 大小写 / 截断）后的模糊还原——当前设计不做模糊匹配，截断视为不可恢复。
+3. 上游长时间挂起 / 连接中断时的重试与超时行为（会拖慢测试，只在冒烟里手工验证过）。
+4. 多进程同时写同一个 vault 文件（当前靠文件替换 + 0600，没有跨进程锁）。
+5. CRLF（`\r\n\r\n`）帧分隔不被识别（`tests/test_stream_edges.py` 里标为 xfail 记录该契约缺口）：字节原样透传、不丢数据，但不会还原。当前上游（Anthropic / cc-switch）用 `\n\n`，如需支持 CRLF 上游需在 `pii_stream.py` 的切帧处放宽。

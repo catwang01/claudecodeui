@@ -40,6 +40,7 @@
     "start": "npm run build && cross-env PII_PROXY_PORT=18090 concurrently --kill-others \"npm run pii-proxy\" \"node scripts/wait-pii-proxy.js && npm run server:prod\"",
     "pii-proxy": "node scripts/start-pii-proxy.js",
     "pii-proxy:test": "cd server/pii-proxy && ./venv/bin/python3 -m pytest tests -q",
+    "pii-proxy:cov": "cd server/pii-proxy && ./venv/bin/python3 -m pytest tests -q --cov=pii_vault --cov=pii_detect --cov=pii_stream --cov=pii_proxy --cov-report=term-missing",
     "bench:pii": "cd server/pii-proxy && ./venv/bin/python3 bench/bench_pii.py",
     "release": "./release.sh",
     "prepublishOnly": "npm run build",
