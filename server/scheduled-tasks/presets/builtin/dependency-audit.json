@@ -1,0 +1,30 @@
+{
+  "id": "dependency-audit",
+  "name": "Dependency audit",
+  "description": "Audit dependencies for vulnerabilities weekly and keep the lockfile healthy.",
+  "icon": "PackageSearch",
+  "version": "1.0.0",
+  "tasks": [
+    {
+      "id": "audit-vulnerabilities",
+      "title": "Weekly dependency audit",
+      "description": "Check the dependency tree for known vulnerabilities and outdated packages.",
+      "prompt": "Audit this project's dependencies.\n\nWorkspace contract: write the full report to $SCHEDULED_TASK_STATE_DIR/audit-<date>.md and update $SCHEDULED_TASK_STATE_DIR/latest.json with the findings so the next run can compare. Per-run scratch data belongs in this run's runs/<runId>/tmp/; the task tmp/ directory is wiped at the start of every run, so never keep anything you need across runs there. Only write inside $SCHEDULED_TASK_DIR and the project directory.\n\n1. Run the package manager's audit command and list outdated direct dependencies.\n2. Apply safe patch/minor upgrades and update the lockfile.\n3. Summarize what changed and flag anything that needs a human decision.",
+      "rule": {
+        "kind": "cron",
+        "expression": "0 6 * * 1",
+        "timeZone": "UTC"
+      }
+    },
+    {
+      "id": "lockfile-drift",
+      "title": "Lockfile drift check",
+      "description": "Re-install from a clean cache and report if the lockfile drifted.",
+      "prompt": "Check the lockfile for drift.\n\nWorkspace contract: keep the previous lockfile hash in $SCHEDULED_TASK_STATE_DIR/lock-hash.txt and compare against it. Use the run's runs/<runId>/tmp/ for any scratch files (it is removed when the run ends); the task tmp/ directory is wiped at the start of every run. Only write inside $SCHEDULED_TASK_DIR and the project directory.\n\n1. Compute the current lockfile hash and compare it with the stored one.\n2. If it drifted, explain why (which dependency bumped) and fix or acknowledge it.\n3. Store the new hash in $SCHEDULED_TASK_STATE_DIR/lock-hash.txt.",
+      "rule": {
+        "kind": "interval",
+        "everySeconds": 604800
+      }
+    }
+  ]
+}

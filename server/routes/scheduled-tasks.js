@@ -33,7 +33,8 @@ async function loadDefaults() {
 }
 
 /**
- * @param {object} [overrides] test seams: repo, validateRule, normalizeRule, computeNextRun, runNow
+ * @param {object} [overrides] test seams: repo, validateRule, normalizeRule,
+ *   computeNextRun, runNow, presets, workspace, catalog
  * @returns {import('express').Router}
  */
 export function createScheduledTasksRouter(overrides = {}) {
@@ -61,6 +62,9 @@ export function createScheduledTasksRouter(overrides = {}) {
       repo,
       runNow,
       rules: { validateRule, normalizeRule, computeNextRun },
+      presets: overrides.presets,
+      workspace: overrides.workspace,
+      catalog: overrides.catalog,
     });
     return management;
   }
@@ -119,6 +123,126 @@ export function createScheduledTasksRouter(overrides = {}) {
     })
   );
 
+  // ─── Presets (§10.5) ─────────────────────────────────────────────────────────
+  // Registered BEFORE /:id: otherwise GET /presets would be captured by GET /:id.
+
+  function presetScope(req) {
+    const body = req.body || {};
+    if (body.projectPath !== undefined) return body.projectPath;
+    return req.query?.projectPath;
+  }
+
+  function truthyQuery(value, fallback = false) {
+    if (value === undefined) return fallback;
+    const normalized = String(value).toLowerCase();
+    return normalized !== '0' && normalized !== 'false' && normalized !== '';
+  }
+
+  // GET /presets — list builtin + in-project custom presets (?projectPath=)
+  router.get(
+    '/presets',
+    handler(async (req, res) => {
+      const result = await (await getManagement()).presets.listPresets({
+        projectPath: req.query?.projectPath,
+      });
+      if (!result.ok) return sendError(res, result);
+      res.json({ presets: result.presets });
+    })
+  );
+
+  // POST /presets — snapshot existing tasks of a project into a custom preset
+  router.post(
+    '/presets',
+    handler(async (req, res) => {
+      const body = req.body || {};
+      const result = await (await getManagement()).presets.createCustomPreset({
+        name: body.name,
+        description: body.description,
+        projectPath: body.projectPath,
+        taskIds: body.taskIds,
+        userId: req.user?.id ?? null,
+      });
+      if (!result.ok) return sendError(res, result);
+      res.status(201).json({ preset: result.preset });
+    })
+  );
+
+  // GET /presets/:id
+  router.get(
+    '/presets/:id',
+    handler(async (req, res) => {
+      const result = await (await getManagement()).presets.getPreset(req.params.id, {
+        projectPath: req.query?.projectPath,
+      });
+      if (!result.ok) return sendError(res, result);
+      res.json({ preset: result.preset });
+    })
+  );
+
+  // PATCH /presets/:id — custom presets only
+  router.patch(
+    '/presets/:id',
+    handler(async (req, res) => {
+      const body = req.body || {};
+      const result = await (await getManagement()).presets.updatePreset(
+        req.params.id,
+        { name: body.name, description: body.description, icon: body.icon },
+        { projectPath: presetScope(req) }
+      );
+      if (!result.ok) return sendError(res, result);
+      res.json({ preset: result.preset });
+    })
+  );
+
+  // POST /presets/:id/install
+  router.post(
+    '/presets/:id/install',
+    handler(async (req, res) => {
+      const body = req.body || {};
+      const result = await (await getManagement()).presets.installPreset(req.params.id, {
+        projectPath: body.projectPath,
+        enabled: body.enabled,
+        userId: req.user?.id ?? null,
+      });
+      if (!result.ok) return sendError(res, result);
+      res.json({
+        preset: result.preset,
+        tasks: result.tasks,
+        created: result.created,
+        updated: result.updated,
+        skipped: result.skipped,
+      });
+    })
+  );
+
+  // POST /presets/:id/enable | /disable — whole-preset switch
+  for (const [action, enabled] of [['enable', true], ['disable', false]]) {
+    router.post(
+      `/presets/:id/${action}`,
+      handler(async (req, res) => {
+        const result = await (await getManagement()).presets.setPresetEnabled(req.params.id, enabled, {
+          projectPath: presetScope(req),
+        });
+        if (!result.ok) return sendError(res, result);
+        res.json({ preset: result.preset, tasks: result.tasks });
+      })
+    );
+  }
+
+  // DELETE /presets/:id — ?purge=0 keeps the installed tasks (default purge=1)
+  router.delete(
+    '/presets/:id',
+    handler(async (req, res) => {
+      const result = await (await getManagement()).presets.deletePreset(
+        req.params.id,
+        { purge: truthyQuery(req.query?.purge, true) },
+        { projectPath: req.query?.projectPath }
+      );
+      if (!result.ok) return sendError(res, result);
+      res.json({ id: result.id, deleted: true, removedTasks: result.removedTasks });
+    })
+  );
+
   // GET /:id
   router.get(
     '/:id',
@@ -149,11 +273,12 @@ export function createScheduledTasksRouter(overrides = {}) {
     })
   );
 
-  // DELETE /:id
+  // DELETE /:id — ?purge=1 also removes the task workspace <root>/<taskId> (§10.4)
   router.delete(
     '/:id',
     handler(async (req, res) => {
-      const result = await (await getManagement()).deleteTask(req.params.id);
+      const purge = truthyQuery(req.query?.purge, false);
+      const result = await (await getManagement()).deleteTask(req.params.id, {}, { purge });
       if (!result.ok) return sendError(res, result);
       res.json({ id: result.id, deleted: true });
     })

@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { getConnection } from '@/modules/database/connection.js';
+import { normalizeProjectPath } from '@/shared/utils.js';
 
 export type ScheduledTaskRow = {
   id: string;
@@ -21,6 +22,9 @@ export type ScheduledTaskRow = {
   updated_at: string;
   command: string | null;
   command_timeout_seconds: number | null;
+  // Preset installation link (docs section 10.2); NULL for ad-hoc tasks.
+  preset_id: string | null;
+  preset_task_id: string | null;
 };
 
 export type ScheduledTaskRunRow = {
@@ -46,6 +50,85 @@ export type ScheduledTaskSessionOrigin = {
   startedAt: string | null;
 };
 
+// Presets (docs section 10.2). `source` is 'builtin' | 'custom'; `project_path` is set
+// for custom presets only; `enabled` is the whole-preset switch.
+export type ScheduledTaskPresetRow = {
+  id: string;
+  user_id: number | null;
+  source: string;
+  name: string;
+  description: string | null;
+  icon: string | null;
+  version: string | null;
+  enabled: number;
+  project_path: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ScheduledTaskPresetTaskRow = {
+  id: string;
+  preset_id: string;
+  title: string;
+  description: string | null;
+  prompt: string;
+  provider: string;
+  model: string | null;
+  kind: string;
+  rule_json: string;
+  command: string | null;
+  command_timeout_seconds: number | null;
+  position: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreateScheduledTaskPresetInput = {
+  id?: string;
+  userId?: number | null;
+  source: string;
+  name: string;
+  description?: string | null;
+  icon?: string | null;
+  version?: string | null;
+  enabled?: boolean | number;
+  projectPath?: string | null;
+};
+
+export type ScheduledTaskPresetPatch = Partial<{
+  name: string;
+  description: string | null;
+  icon: string | null;
+  version: string | null;
+  enabled: boolean | number;
+  projectPath: string | null;
+  userId: number | null;
+}>;
+
+export type ListScheduledTaskPresetsOptions = {
+  source?: 'builtin' | 'custom' | string;
+  projectPath?: string | null;
+};
+
+// One template of a preset. `rule` (object) and `ruleJson` (already serialized) are
+// both accepted; `ruleJson` wins when both are supplied.
+export type PresetTaskInput = {
+  id?: string;
+  title: string;
+  description?: string | null;
+  prompt: string;
+  provider?: string;
+  model?: string | null;
+  kind: string;
+  rule?: unknown;
+  ruleJson?: string;
+  command?: string | null;
+  commandTimeoutSeconds?: number | null;
+  command_timeout_seconds?: number | null;
+  // Defaults to the array index in replacePresetTasks().
+  position?: number;
+};
+
 // Inputs are camelCase, rows are snake_case (docs §7). The snake_case spellings
 // are accepted as aliases so callers that already hold a row can spread it in.
 export type CreateScheduledTaskInput = {
@@ -63,6 +146,8 @@ export type CreateScheduledTaskInput = {
   command?: string | null;
   commandTimeoutSeconds?: number | null;
   command_timeout_seconds?: number | null;
+  presetId?: string | null;
+  presetTaskId?: string | null;
 };
 
 export type ScheduledTaskUpdatePatch = Partial<{
@@ -78,6 +163,8 @@ export type ScheduledTaskUpdatePatch = Partial<{
   command: string | null;
   commandTimeoutSeconds: number | null;
   command_timeout_seconds: number | null;
+  presetId: string | null;
+  presetTaskId: string | null;
 }>;
 
 export type ScheduledTaskAdvancePatch = Partial<{
@@ -147,11 +234,65 @@ function selectRun(id: string): ScheduledTaskRunRow | undefined {
   return getConnection().prepare('SELECT * FROM scheduled_task_runs WHERE id = ?').get(id) as ScheduledTaskRunRow | undefined;
 }
 
+function selectPreset(id: string): ScheduledTaskPresetRow | undefined {
+  return getConnection().prepare('SELECT * FROM scheduled_task_presets WHERE id = ?').get(id) as
+    | ScheduledTaskPresetRow
+    | undefined;
+}
+
+// docs section 10.2: the same comparison the management layer uses to scope tasks to a
+// project (server/scheduled-tasks/management.js#sameProjectPath), so custom presets are
+// filtered exactly like custom tasks.
+function sameProjectPath(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false;
+  let left = a;
+  let right = b;
+  try {
+    left = normalizeProjectPath(a);
+    right = normalizeProjectPath(b);
+  } catch {
+    // Keep the raw values when the path cannot be resolved.
+  }
+  if (process.platform === 'win32') return left.toLowerCase() === right.toLowerCase();
+  return left === right;
+}
+
+function selectPresetTasks(presetId: string): ScheduledTaskPresetTaskRow[] {
+  return getConnection()
+    .prepare(
+      'SELECT * FROM scheduled_task_preset_tasks WHERE preset_id = ? ' +
+        'ORDER BY position ASC, created_at ASC, rowid ASC'
+    )
+    .all(presetId) as ScheduledTaskPresetTaskRow[];
+}
+
+function selectTasksByPreset(presetId: string): ScheduledTaskRow[] {
+  return getConnection()
+    .prepare('SELECT * FROM scheduled_tasks WHERE preset_id = ? ORDER BY created_at ASC, rowid ASC')
+    .all(presetId) as ScheduledTaskRow[];
+}
+
+// A preset template carries either a rule object or an already serialized ruleJson.
+function serializeRule(task: PresetTaskInput): string {
+  if (typeof task.ruleJson === 'string') return task.ruleJson;
+  if (typeof task.rule === 'string') return task.rule;
+  return JSON.stringify(task.rule ?? {});
+}
+
 const INSERT_TASK_SQL =
   'INSERT INTO scheduled_tasks (id, user_id, title, prompt, project_path, provider, model, kind, rule_json, ' +
   'next_run_at, last_run_at, last_status, last_error, enabled, run_count, created_at, updated_at, ' +
-  'command, command_timeout_seconds) ' +
-  'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, 0, ?, ?, ?, ?)';
+  'command, command_timeout_seconds, preset_id, preset_task_id) ' +
+  'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, 0, ?, ?, ?, ?, ?, ?)';
+
+const INSERT_PRESET_SQL =
+  'INSERT INTO scheduled_task_presets (id, user_id, source, name, description, icon, version, enabled, ' +
+  'project_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+
+const INSERT_PRESET_TASK_SQL =
+  'INSERT INTO scheduled_task_preset_tasks (id, preset_id, title, description, prompt, provider, model, kind, ' +
+  'rule_json, command, command_timeout_seconds, position, created_at, updated_at) ' +
+  'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
 
 const INSERT_RUN_SQL =
   'INSERT INTO scheduled_task_runs (id, task_id, status, "trigger", scheduled_for, started_at, finished_at, session_id, output, error, script_exit_code, script_output, prompt_used) ' +
@@ -192,7 +333,9 @@ export const scheduledTasksDb = {
         timestamp,
         timestamp,
         input.command ?? null,
-        pick(input.commandTimeoutSeconds, input.command_timeout_seconds) ?? null
+        pick(input.commandTimeoutSeconds, input.command_timeout_seconds) ?? null,
+        input.presetId ?? null,
+        input.presetTaskId ?? null
       );
     return selectTask(id) as ScheduledTaskRow;
   },
@@ -242,6 +385,8 @@ export const scheduledTasksDb = {
     pushAssignment(assignments, values, 'next_run_at', patch.nextRunAt);
     pushAssignment(assignments, values, 'command', patch.command);
     pushAssignment(assignments, values, 'command_timeout_seconds', pick(patch.commandTimeoutSeconds, patch.command_timeout_seconds));
+    pushAssignment(assignments, values, 'preset_id', patch.presetId);
+    pushAssignment(assignments, values, 'preset_task_id', patch.presetTaskId);
     if (patch.enabled !== undefined) pushAssignment(assignments, values, 'enabled', toEnabled(patch.enabled));
 
     assignments.push('updated_at = ?');
@@ -381,6 +526,134 @@ export const scheduledTasksDb = {
       .prepare('SELECT DISTINCT session_id FROM scheduled_task_runs WHERE session_id IS NOT NULL')
       .all() as { session_id: string }[];
     return new Set(rows.map((row) => row.session_id));
+  },
+
+  // ── Presets (docs section 10.2) ──────────────────────────────────────────
+
+  createPreset(input: CreateScheduledTaskPresetInput): ScheduledTaskPresetRow {
+    const id = input.id ?? crypto.randomUUID();
+    const timestamp = currentIso();
+    getConnection()
+      .prepare(INSERT_PRESET_SQL)
+      .run(
+        id,
+        input.userId ?? null,
+        input.source,
+        input.name,
+        input.description ?? null,
+        input.icon ?? null,
+        input.version ?? null,
+        // Unlike tasks, a preset stays disabled until it is installed/enabled.
+        input.enabled === undefined ? 0 : toEnabled(input.enabled),
+        input.projectPath ?? null,
+        timestamp,
+        timestamp
+      );
+    return selectPreset(id) as ScheduledTaskPresetRow;
+  },
+
+  getPreset(id: string): ScheduledTaskPresetRow | undefined {
+    return selectPreset(id);
+  },
+
+  // Builtin rows are returned for every project; custom rows only when their project
+  // matches. Omitting projectPath returns all rows (source filter still applies).
+  listPresets(options: ListScheduledTaskPresetsOptions = {}): ScheduledTaskPresetRow[] {
+    const where: string[] = [];
+    const values: ColumnValue[] = [];
+    if (options.source) {
+      where.push('source = ?');
+      values.push(options.source);
+    }
+
+    const sql =
+      'SELECT * FROM scheduled_task_presets' +
+      (where.length > 0 ? ' WHERE ' + where.join(' AND ') : '') +
+      ' ORDER BY source ASC, name COLLATE NOCASE ASC, rowid ASC';
+    const rows = getConnection().prepare(sql).all(...values) as ScheduledTaskPresetRow[];
+
+    const { projectPath } = options;
+    if (projectPath === undefined) return rows;
+    return rows.filter((row) => row.source !== 'custom' || sameProjectPath(row.project_path, projectPath));
+  },
+
+  updatePreset(id: string, patch: ScheduledTaskPresetPatch = {}): ScheduledTaskPresetRow | undefined {
+    const assignments: string[] = [];
+    const values: ColumnValue[] = [];
+
+    pushAssignment(assignments, values, 'name', patch.name);
+    pushAssignment(assignments, values, 'description', patch.description);
+    pushAssignment(assignments, values, 'icon', patch.icon);
+    pushAssignment(assignments, values, 'version', patch.version);
+    pushAssignment(assignments, values, 'project_path', patch.projectPath);
+    pushAssignment(assignments, values, 'user_id', patch.userId);
+    if (patch.enabled !== undefined) pushAssignment(assignments, values, 'enabled', toEnabled(patch.enabled));
+
+    assignments.push('updated_at = ?');
+    values.push(currentIso());
+    values.push(id);
+
+    const info = getConnection()
+      .prepare('UPDATE scheduled_task_presets SET ' + assignments.join(', ') + ' WHERE id = ?')
+      .run(...values);
+    if (info.changes === 0) return undefined;
+    return selectPreset(id);
+  },
+
+  // Drops the preset and its templates. The installed tasks are not touched here: the
+  // service decides whether they are deleted or unlinked.
+  deletePreset(id: string): boolean {
+    const db = getConnection();
+    const remove = db.transaction((presetId: string): boolean => {
+      // Explicit delete (not relying on ON DELETE CASCADE) so the rows go even when the
+      // foreign_keys pragma is off.
+      db.prepare('DELETE FROM scheduled_task_preset_tasks WHERE preset_id = ?').run(presetId);
+      return db.prepare('DELETE FROM scheduled_task_presets WHERE id = ?').run(presetId).changes > 0;
+    });
+    return remove(id);
+  },
+
+  // Full replacement of the template list, atomically. `position` defaults to the array
+  // index, so callers that pass a catalog order get it preserved.
+  replacePresetTasks(presetId: string, tasks: PresetTaskInput[]): ScheduledTaskPresetTaskRow[] {
+    // A missing parent would surface as a raw FOREIGN KEY error; report "no templates".
+    if (!selectPreset(presetId)) return [];
+
+    const db = getConnection();
+    const timestamp = currentIso();
+    const replace = db.transaction((inputs: PresetTaskInput[]) => {
+      db.prepare('DELETE FROM scheduled_task_preset_tasks WHERE preset_id = ?').run(presetId);
+      const insert = db.prepare(INSERT_PRESET_TASK_SQL);
+      inputs.forEach((task, index) => {
+        insert.run(
+          task.id ?? crypto.randomUUID(),
+          presetId,
+          task.title,
+          task.description ?? null,
+          task.prompt,
+          task.provider ?? 'claude',
+          task.model ?? null,
+          task.kind,
+          serializeRule(task),
+          task.command ?? null,
+          pick(task.commandTimeoutSeconds, task.command_timeout_seconds) ?? null,
+          task.position ?? index,
+          timestamp,
+          timestamp
+        );
+      });
+    });
+    replace(tasks);
+    return selectPresetTasks(presetId);
+  },
+
+  listPresetTasks(presetId: string): ScheduledTaskPresetTaskRow[] {
+    return selectPresetTasks(presetId);
+  },
+
+  // The real tasks a preset materialized, oldest first.
+  listTasksByPreset(presetId: string): ScheduledTaskRow[] {
+    return selectTasksByPreset(presetId);
   },
 
   pruneRuns(taskId: string, keep = 50): number {

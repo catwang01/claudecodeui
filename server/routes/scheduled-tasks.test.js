@@ -117,9 +117,55 @@ function makeRepo() {
   };
 }
 
+function makePresetsService() {
+  return {
+    listPresets: vi.fn(async () => ({
+      ok: true,
+      presets: [{ id: 'alpha-daily', source: 'builtin', name: 'Alpha daily', enabled: false, taskCount: 1, tasks: [] }],
+    })),
+    getPreset: vi.fn(async (id) =>
+      id === 'missing'
+        ? { ok: false, code: 'not_found', message: 'Preset not found', httpStatus: 404 }
+        : { ok: true, preset: { id, source: 'builtin', name: 'Alpha daily' } }
+    ),
+    installPreset: vi.fn(async (id, options) => ({
+      ok: true,
+      preset: { id, enabled: options.enabled !== false },
+      tasks: [{ id: 'task-1' }],
+      created: ['task-1'],
+      updated: [],
+      skipped: [],
+    })),
+    setPresetEnabled: vi.fn(async (id, enabled) => ({
+      ok: true,
+      preset: { id, enabled },
+      tasks: [{ id: 'task-1', enabled }],
+    })),
+    createCustomPreset: vi.fn(async (input) =>
+      input.name
+        ? { ok: true, preset: { id: 'custom-1', name: input.name, source: 'custom' } }
+        : { ok: false, code: 'invalid_input', message: 'name is required', httpStatus: 400 }
+    ),
+    updatePreset: vi.fn(async (id, patch) =>
+      id === 'alpha-daily'
+        ? { ok: false, code: 'builtin_preset', message: 'Built-in presets cannot be edited', httpStatus: 400 }
+        : { ok: true, preset: { id, ...patch } }
+    ),
+    deletePreset: vi.fn(async (id, options) => ({
+      ok: true,
+      id,
+      deleted: true,
+      source: 'custom',
+      removedTasks: options.purge === false ? 0 : 1,
+    })),
+  };
+}
+
 function makeDeps(repo) {
   return {
     repo,
+    presets: makePresetsService(),
+    workspace: { ensureTaskWorkspace: vi.fn(() => null), removeTaskWorkspace: vi.fn(() => true) },
     validateRule: vi.fn((rule) => {
       if (!rule || typeof rule !== 'object') {
         return { ok: false, code: 'invalid_rule', message: 'rule is required' };
@@ -535,3 +581,104 @@ describe('script gate fields (§7)', () => {
     });
   });
 });
+
+describe('presets REST (§10.5)', () => {
+  it('serves GET /presets instead of letting GET /:id capture it', async () => {
+    const { status, body } = await api('GET', '/presets?projectPath=/tmp/x');
+
+    expect(status).toBe(200);
+    expect(body.presets).toHaveLength(1);
+    expect(deps.presets.listPresets).toHaveBeenCalledWith({ projectPath: '/tmp/x' });
+    expect(repo.getTask).not.toHaveBeenCalled();
+  });
+
+  it('POST /presets creates a custom preset with 201', async () => {
+    const { status, body } = await api('POST', '/presets', {
+      name: 'Mine',
+      projectPath: '/tmp/x',
+      taskIds: ['t1'],
+    });
+
+    expect(status).toBe(201);
+    expect(body.preset).toMatchObject({ id: 'custom-1', name: 'Mine' });
+    expect(deps.presets.createCustomPreset).toHaveBeenCalledWith({
+      name: 'Mine',
+      description: undefined,
+      projectPath: '/tmp/x',
+      taskIds: ['t1'],
+      userId: 7,
+    });
+  });
+
+  it('GET /presets/:id returns the preset or 404', async () => {
+    const found = await api('GET', '/presets/alpha-daily');
+    expect(found.status).toBe(200);
+    expect(found.body.preset.id).toBe('alpha-daily');
+
+    const missing = await api('GET', '/presets/missing');
+    expect(missing.status).toBe(404);
+    expect(missing.body.code).toBe('not_found');
+  });
+
+  it('PATCH /presets/:id surfaces builtin_preset as 400', async () => {
+    const { status, body } = await api('PATCH', '/presets/alpha-daily', { name: 'x' });
+    expect(status).toBe(400);
+    expect(body.code).toBe('builtin_preset');
+  });
+
+  it('POST /presets/:id/install returns the materialized bundle', async () => {
+    const { status, body } = await api('POST', '/presets/alpha-daily/install', { projectPath: '/tmp/x' });
+
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ created: ['task-1'], updated: [], skipped: [] });
+    expect(deps.presets.installPreset).toHaveBeenCalledWith('alpha-daily', {
+      projectPath: '/tmp/x',
+      enabled: undefined,
+      userId: 7,
+    });
+  });
+
+  it('POST /presets/:id/enable and /disable flip the whole bundle', async () => {
+    const on = await api('POST', '/presets/alpha-daily/enable', { projectPath: '/tmp/x' });
+    expect(on.status).toBe(200);
+    expect(on.body.preset.enabled).toBe(true);
+
+    const off = await api('POST', '/presets/alpha-daily/disable', {});
+    expect(off.status).toBe(200);
+    expect(off.body.preset.enabled).toBe(false);
+    expect(deps.presets.setPresetEnabled).toHaveBeenCalledWith('alpha-daily', false, {
+      projectPath: undefined,
+    });
+  });
+
+  it('DELETE /presets/:id purges by default and honours ?purge=0', async () => {
+    const purged = await api('DELETE', '/presets/custom-1');
+    expect(purged.status).toBe(200);
+    expect(purged.body).toEqual({ id: 'custom-1', deleted: true, removedTasks: 1 });
+    expect(deps.presets.deletePreset).toHaveBeenCalledWith('custom-1', { purge: true }, {
+      projectPath: undefined,
+    });
+
+    const kept = await api('DELETE', '/presets/custom-1?purge=0');
+    expect(kept.body.removedTasks).toBe(0);
+    expect(deps.presets.deletePreset).toHaveBeenLastCalledWith('custom-1', { purge: false }, {
+      projectPath: undefined,
+    });
+  });
+});
+
+describe('DELETE /:id?purge=1 (§10.4)', () => {
+  it('purges the task workspace only when asked', async () => {
+    const first = await api('POST', '/', validBody);
+    const plain = await api('DELETE', `/${first.body.task.id}`);
+    expect(plain.status).toBe(200);
+    expect(plain.body).toEqual({ id: first.body.task.id, deleted: true });
+    expect(deps.workspace.removeTaskWorkspace).not.toHaveBeenCalled();
+
+    const second = await api('POST', '/', validBody);
+    const purged = await api('DELETE', `/${second.body.task.id}?purge=1`);
+    expect(purged.status).toBe(200);
+    expect(deps.workspace.removeTaskWorkspace).toHaveBeenCalledWith(second.body.task.id);
+  });
+});
+

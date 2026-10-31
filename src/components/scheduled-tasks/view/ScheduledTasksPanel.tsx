@@ -10,6 +10,7 @@ import { useScheduledTasks } from '../hooks/useScheduledTasks';
 import type { ScheduledTask, ScheduledTaskInput, TaskStatusFilter } from '../types';
 import ConfirmDialog from './ConfirmDialog';
 import { controlClassName } from './FormControls';
+import PresetsSection from './PresetsSection';
 import ScheduledTaskCard from './ScheduledTaskCard';
 import TaskEditorDialog from './TaskEditorDialog';
 import type { TaskEditorValues } from './TaskEditorDialog';
@@ -18,11 +19,15 @@ type ScheduledTasksPanelProps = {
   onClose: () => void;
 };
 
+type PanelTab = 'tasks' | 'presets';
+
 const STATUS_FILTERS: TaskStatusFilter[] = ['all', 'enabled', 'paused'];
+const PANEL_TABS: PanelTab[] = ['tasks', 'presets'];
 
 export default function ScheduledTasksPanel({ onClose }: ScheduledTasksPanelProps) {
   const { t } = useTranslation('scheduledTasks');
   const navigate = useNavigate();
+  const [activeTab, setActiveTab] = useState<PanelTab>('tasks');
   const [searchInput, setSearchInput] = useState('');
   const search = useDebouncedValue(searchInput, 250);
   const [statusFilter, setStatusFilter] = useState<TaskStatusFilter>('all');
@@ -38,14 +43,16 @@ export default function ScheduledTasksPanel({ onClose }: ScheduledTasksPanelProp
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  // Presets own their dialogs; this only stops Escape from closing the panel behind them.
+  const [isPresetOverlayOpen, setIsPresetOverlayOpen] = useState(false);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !isEditorOpen && !pendingDelete) onClose();
+      if (event.key === 'Escape' && !isEditorOpen && !pendingDelete && !isPresetOverlayOpen) onClose();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, isEditorOpen, pendingDelete]);
+  }, [onClose, isEditorOpen, pendingDelete, isPresetOverlayOpen]);
 
   const openCreate = () => {
     setEditorTask(null);
@@ -154,6 +161,29 @@ export default function ScheduledTasksPanel({ onClose }: ScheduledTasksPanelProp
           <div className="flex items-center gap-2">
             <Clock className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-base font-semibold text-foreground">{t('title')}</h2>
+            <div
+              className="ml-2 flex items-center rounded-md border border-border p-0.5"
+              role="tablist"
+              aria-label={t('tabs.label')}
+            >
+              {PANEL_TABS.map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === tab}
+                  className={cn(
+                    'rounded px-2.5 py-1 text-xs font-medium transition-colors',
+                    activeTab === tab
+                      ? 'bg-accent text-accent-foreground'
+                      : 'text-muted-foreground hover:text-foreground',
+                  )}
+                  onClick={() => setActiveTab(tab)}
+                >
+                  {t('tabs.' + tab)}
+                </button>
+              ))}
+            </div>
           </div>
           <Button
             type="button"
@@ -167,127 +197,135 @@ export default function ScheduledTasksPanel({ onClose }: ScheduledTasksPanelProp
           </Button>
         </div>
 
-        <div className="flex flex-shrink-0 flex-col gap-2 border-b border-border px-4 py-3 sm:flex-row sm:items-center">
-          <div className="relative flex-1">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <input
-              type="text"
-              value={searchInput}
-              aria-label={t('search.placeholder')}
-              placeholder={t('search.placeholder')}
-              className={cn(controlClassName, 'pl-8 pr-8')}
-              onChange={(event) => setSearchInput(event.target.value)}
-            />
-            {searchInput && (
-              <button
-                type="button"
-                aria-label={t('search.clear')}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
-                onClick={() => setSearchInput('')}
-              >
-                <X className="h-4 w-4" />
-              </button>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2">
-            <div className="flex items-center rounded-md border border-border p-0.5" role="group" aria-label={t('filters.label')}>
-              {STATUS_FILTERS.map((filter) => (
+        {activeTab === 'tasks' && (
+          <div className="flex flex-shrink-0 flex-col gap-2 border-b border-border px-4 py-3 sm:flex-row sm:items-center">
+            <div className="relative flex-1">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <input
+                type="text"
+                value={searchInput}
+                aria-label={t('search.placeholder')}
+                placeholder={t('search.placeholder')}
+                className={cn(controlClassName, 'pl-8 pr-8')}
+                onChange={(event) => setSearchInput(event.target.value)}
+              />
+              {searchInput && (
                 <button
-                  key={filter}
                   type="button"
-                  aria-pressed={statusFilter === filter}
-                  className={cn(
-                    'rounded px-2.5 py-1 text-xs font-medium transition-colors',
-                    statusFilter === filter
-                      ? 'bg-accent text-accent-foreground'
-                      : 'text-muted-foreground hover:text-foreground',
-                  )}
-                  onClick={() => setStatusFilter(filter)}
+                  aria-label={t('search.clear')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
+                  onClick={() => setSearchInput('')}
                 >
-                  {t('filters.' + filter)}
+                  <X className="h-4 w-4" />
                 </button>
-              ))}
+              )}
             </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-9 w-9 p-0 text-muted-foreground hover:text-foreground"
-              aria-label={t('actions.refresh')}
-              title={t('actions.refresh')}
-              onClick={() => {
-                void refresh();
-              }}
-            >
-              <RefreshCw className={cn('h-4 w-4', isLoading && 'animate-spin')} />
-            </Button>
-            <Button type="button" size="sm" onClick={openCreate}>
-              <Plus className="h-4 w-4" />
-              {t('actions.newTask')}
-            </Button>
-          </div>
-        </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          {error && tasks.length === 0 && (
-            <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
-              <p className="text-sm text-destructive">{error}</p>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center rounded-md border border-border p-0.5" role="group" aria-label={t('filters.label')}>
+                {STATUS_FILTERS.map((filter) => (
+                  <button
+                    key={filter}
+                    type="button"
+                    aria-pressed={statusFilter === filter}
+                    className={cn(
+                      'rounded px-2.5 py-1 text-xs font-medium transition-colors',
+                      statusFilter === filter
+                        ? 'bg-accent text-accent-foreground'
+                        : 'text-muted-foreground hover:text-foreground',
+                    )}
+                    onClick={() => setStatusFilter(filter)}
+                  >
+                    {t('filters.' + filter)}
+                  </button>
+                ))}
+              </div>
               <Button
                 type="button"
-                variant="outline"
+                variant="ghost"
                 size="sm"
+                className="h-9 w-9 p-0 text-muted-foreground hover:text-foreground"
+                aria-label={t('actions.refresh')}
+                title={t('actions.refresh')}
                 onClick={() => {
                   void refresh();
                 }}
               >
-                {t('actions.retry')}
+                <RefreshCw className={cn('h-4 w-4', isLoading && 'animate-spin')} />
+              </Button>
+              <Button type="button" size="sm" onClick={openCreate}>
+                <Plus className="h-4 w-4" />
+                {t('actions.newTask')}
               </Button>
             </div>
-          )}
+          </div>
+        )}
 
-          {!error && isLoading && tasks.length === 0 && (
-            <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              {t('loading')}
-            </div>
-          )}
-
-          {(showEmptySearch || showEmpty) && (
-            <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
-              <Clock className="h-8 w-8 text-muted-foreground/50" />
-              <h3 className="text-sm font-medium text-foreground">
-                {showEmptySearch ? t('empty.searchTitle') : t('empty.title')}
-              </h3>
-              <p className="max-w-sm text-sm text-muted-foreground">
-                {showEmptySearch ? t('empty.searchDescription') : t('empty.description')}
-              </p>
-            </div>
-          )}
-
-          {tasks.length > 0 && (
-            <div className="space-y-3">
-              {actionError && (
-                <p className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{actionError}</p>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          {activeTab === 'presets' ? (
+            <PresetsSection onTasksChanged={refresh} onOverlayChange={setIsPresetOverlayOpen} />
+          ) : (
+            <>
+              {error && tasks.length === 0 && (
+                <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+                  <p className="text-sm text-destructive">{error}</p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      void refresh();
+                    }}
+                  >
+                    {t('actions.retry')}
+                  </Button>
+                </div>
               )}
-              {tasks.map((task) => (
-                <ScheduledTaskCard
-                  key={task.id}
-                  task={task}
-                  isBusy={busyTaskId === task.id}
-                  isExpanded={expandedTaskId === task.id}
-                  onToggleEnabled={handleToggleEnabled}
-                  onRunNow={handleRunNow}
-                  onEdit={openEdit}
-                  onDelete={setPendingDelete}
-                  onToggleHistory={handleToggleHistory}
-                  onOpenSession={(sessionId) => {
-                    onClose();
-                    navigate('/session/' + sessionId);
-                  }}
-                />
-              ))}
-            </div>
+
+              {!error && isLoading && tasks.length === 0 && (
+                <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  {t('loading')}
+                </div>
+              )}
+
+              {(showEmptySearch || showEmpty) && (
+                <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
+                  <Clock className="h-8 w-8 text-muted-foreground/50" />
+                  <h3 className="text-sm font-medium text-foreground">
+                    {showEmptySearch ? t('empty.searchTitle') : t('empty.title')}
+                  </h3>
+                  <p className="max-w-sm text-sm text-muted-foreground">
+                    {showEmptySearch ? t('empty.searchDescription') : t('empty.description')}
+                  </p>
+                </div>
+              )}
+
+              {tasks.length > 0 && (
+                <div className="space-y-3">
+                  {actionError && (
+                    <p className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{actionError}</p>
+                  )}
+                  {tasks.map((task) => (
+                    <ScheduledTaskCard
+                      key={task.id}
+                      task={task}
+                      isBusy={busyTaskId === task.id}
+                      isExpanded={expandedTaskId === task.id}
+                      onToggleEnabled={handleToggleEnabled}
+                      onRunNow={handleRunNow}
+                      onEdit={openEdit}
+                      onDelete={setPendingDelete}
+                      onToggleHistory={handleToggleHistory}
+                      onOpenSession={(sessionId) => {
+                        onClose();
+                        navigate('/session/' + sessionId);
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>

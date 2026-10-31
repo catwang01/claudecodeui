@@ -352,3 +352,294 @@ run 胜出"与"任务已删回退 task id"）、装饰函数打标正确、隐�
 默认隐藏意味着**已存在**的历史会话会立刻从侧栏消失（当前 4 个）；用户可用侧栏开关或设置页
 随时显示。
 
+## 10. Presets（安装包）+ per-task workspace（第八轮，issue #4）
+
+Issue #4 asks for three things: (a) **presets** — an installable package holding several scheduled
+tasks, enable/disableable as a whole, with a set of built-ins; (b) **custom presets** built by the
+user out of existing tasks; (c) a **planned on-disk layout** for everything a task owns (task root,
+per-run data, global state, temp data), announced to the agent when the task is created so it never
+stores state ad hoc.
+
+### 10.1 Model
+
+- **Preset** = a named bundle of task *templates*. `source` is `builtin` (shipped catalog) or
+  `custom` (user made). A preset is *installed* into a project: installation materializes one real
+  `scheduled_tasks` row per template, linked back through `preset_id` + `preset_task_id`.
+- **Built-in catalog** is version-controlled at `server/scheduled-tasks/presets/builtin/<id>.json`
+  and loaded by `server/scheduled-tasks/presets.js`. The catalog is authoritative for
+  name/description/icon/template content: every `listPresets()` re-seeds catalog rows
+  (insert when missing, refresh name/description/icon/version/templates when changed) while keeping
+  the user-owned column `enabled` (installed state is derived from the linked tasks).
+- **Enable/disable is whole-preset**: it flips `scheduled_task_presets.enabled` and every task
+  linked by `preset_id` (`enabled` + `nextRunAt`).
+- **Custom presets** are snapshots of existing tasks in one project. For the agent-tool path they
+  are project-scoped exactly like tasks (§6): `listPresets` / `getPreset` / `updatePreset` /
+  `setPresetEnabled` / `deletePreset` treat a custom preset whose `project_path` does not match the
+  calling project as `not_found`. **Installing is deliberately unscoped**: a preset (builtin or
+  custom) is a portable package and `installPreset` may materialize it into any requested target
+  project — that is what makes a custom preset shareable between projects. The install target never
+  has to equal the preset's own `project_path`; `project_path` only gates discovery and mutation.
+
+### 10.2 Database (additive)
+
+```sql
+CREATE TABLE IF NOT EXISTS scheduled_task_presets (
+  id TEXT PRIMARY KEY,                 -- builtin: catalog id; custom: crypto.randomUUID()
+  user_id INTEGER,
+  source TEXT NOT NULL,                -- 'builtin' | 'custom'
+  name TEXT NOT NULL,
+  description TEXT,
+  icon TEXT,
+  version TEXT,
+  enabled INTEGER NOT NULL DEFAULT 0,  -- whole-preset switch
+  project_path TEXT,                   -- custom presets: owning project; builtin: NULL
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS scheduled_task_preset_tasks (
+  id TEXT PRIMARY KEY,
+  preset_id TEXT NOT NULL REFERENCES scheduled_task_presets(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  description TEXT,
+  prompt TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'claude',
+  model TEXT,
+  kind TEXT NOT NULL,
+  rule_json TEXT NOT NULL,
+  command TEXT,
+  command_timeout_seconds INTEGER,
+  position INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_task_presets_source ON scheduled_task_presets(source);
+CREATE INDEX IF NOT EXISTS idx_scheduled_task_preset_tasks_preset
+  ON scheduled_task_preset_tasks(preset_id, position);
+```
+
+`scheduled_tasks` gains `preset_id TEXT` and `preset_task_id TEXT`, plus
+`CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_preset ON scheduled_tasks(preset_id)`.
+Existing databases get the columns through `addColumnIfMissing`; existing rows keep NULL and behave
+exactly as before.
+
+Repository additions (`server/modules/database/repositories/scheduled-tasks.db.ts`, all rows
+snake_case):
+```ts
+createPreset(input: { id?, userId?, source, name, description?, icon?, version?, enabled?, projectPath? }): ScheduledTaskPresetRow
+getPreset(id): ScheduledTaskPresetRow | undefined
+listPresets(opts?: { source?: 'builtin'|'custom', projectPath?: string|null }): ScheduledTaskPresetRow[]
+updatePreset(id, patch: Partial<{ name, description, icon, version, enabled, projectPath, userId }>): ScheduledTaskPresetRow | undefined
+deletePreset(id): boolean                       // also deletes its preset_tasks rows
+replacePresetTasks(presetId, tasks: PresetTaskInput[]): ScheduledTaskPresetTaskRow[]
+listPresetTasks(presetId): ScheduledTaskPresetTaskRow[]     // ordered by position, created_at
+listTasksByPreset(presetId): ScheduledTaskRow[]             // ordered by created_at
+```
+`listPresets({ projectPath })` returns every builtin row plus custom rows whose `project_path`
+matches (normalized with `normalizeProjectPath`, same comparison as `sameProjectPath`); when
+`projectPath` is omitted, all rows. `updatePreset` bumps `updated_at`.
+`createTask`/`updateTask` must accept `presetId`/`presetTaskId` so install can link rows.
+
+### 10.3 Module contract — `server/scheduled-tasks/presets.js`
+
+```js
+export const BUILTIN_PRESET_DIR;                      // absolute dir of the shipped catalog
+export function loadBuiltinCatalog();                 // BuiltinPreset[] sorted by id; throws { code:'invalid_catalog' } on malformed JSON
+export function createPresetService(deps = {});       // deps: { repo, rules, catalog, workspace, logger, now }
+```
+Catalog file shape (`<id>.json`), validated on load: `{ id, name, description?, icon?, version?,
+tasks: [{ id, title, description?, prompt, provider?, model?, rule, command?,
+commandTimeoutSeconds? }] }`. Ids are lower-kebab; `tasks[].id` is unique inside the preset.
+
+Service methods (same result convention as `createManagement`: `{ ok:true, ... }` or
+`{ ok:false, code, message, httpStatus? }`):
+```js
+listPresets({ projectPath } = {})                       // -> { ok:true, presets }
+getPreset(id, { projectPath } = {})                     // -> { ok:true, preset } | not_found
+installPreset(id, { projectPath, enabled, userId } = {})// -> { ok:true, preset, tasks, created, updated }
+setPresetEnabled(id, enabled, { projectPath } = {})     // -> { ok:true, preset, tasks }
+createCustomPreset(input)                               // -> { ok:true, preset }
+updatePreset(id, patch, { projectPath } = {})           // custom only -> { ok:true, preset }
+deletePreset(id, { purge } = {}, { projectPath } = {})  // -> { ok:true, id, deleted:true, removedTasks }
+```
+Preset JSON (camelCase):
+`{ id, source, name, description, icon, version, enabled, projectPath, taskCount,
+installedProjects, tasks: PresetTask[], createdAt, updatedAt }`
+`PresetTask` = `{ id, presetId, title, description, prompt, provider, model, kind, rule, command,
+commandTimeoutSeconds, position }`; `installedProjects` is the distinct set of `project_path`
+values of the tasks linked by `preset_id`; `taskCount` = `tasks.length`.
+
+Install semantics (frozen):
+1. Re-seed the builtin catalog first.
+2. `projectPath` is required. `enabled` defaults to **`true`** — installing a preset starts it;
+   pass `enabled: false` to install it paused. The preset lookup for install is **not** scoped:
+   `installPreset` never returns `not_found` because the target project differs from the preset's
+   `project_path` (see §10.1). Scope matching applies to the discovery and mutation methods only.
+3. For every template, match an existing task by `(preset_id, preset_task_id, project_path)`
+   (normalized): update title/prompt/rule/command/provider/model, do **not** duplicate. A template's
+   `description` is catalog metadata only — `scheduled_tasks` has no description column, so it is not
+   persisted on the materialized task.
+   Otherwise create one. `enabled` follows the effective value; `nextRunAt` is recomputed from now
+   (interval rules get a fresh `anchorMs`) and is `null` when disabled.
+4. Set `preset.enabled` to the effective value. Installing twice with the same arguments is
+   idempotent (only `updated_at` moves).
+5. Result: `{ preset, tasks, created: string[], updated: string[] }`, HTTP 200.
+6. Templates whose rule has no upcoming run (`computeNextRun` → null, e.g. a past `once`) are
+   skipped and reported in `skipped: string[]` (template ids), never a hard failure.
+
+Enable/disable semantics: flip `preset.enabled`; for every linked task set `enabled` and
+`nextRunAt` (`null` when disabling, recomputed from now when enabling, interval re-anchored).
+When `projectPath` is given, only the tasks installed in that project are toggled while the preset
+row's `enabled` flag itself is global. A preset that is not installed yet still records the flag and returns `tasks: []` (the flag is
+only a UI hint until it is installed: `installPreset` without an explicit `enabled` always installs
+enabled).
+
+Custom preset creation: `{ name, description?, projectPath, taskIds }`; `taskIds` are existing
+task ids in scope, at least one, order preserved as `position`; each template snapshots
+prompt/rule/command/provider/model. New preset `enabled: false`, `source: 'custom'`. Errors:
+`invalid_input`, `not_found`.
+
+Update: `name`/`description`/`icon` only, custom presets only, otherwise
+`{ ok:false, code:'builtin_preset' }`.
+
+Delete: custom → drop the preset and its templates; the linked real tasks are deleted only when
+`purge !== false` (REST default `purge=1`, agent tools never purge). Builtin → uninstall: delete
+the linked tasks, set `enabled:false`; the catalog row and templates stay. `removedTasks` is the
+count of deleted real tasks.
+
+New error codes: `builtin_preset`, `invalid_catalog`, `no_tasks`.
+
+### 10.4 Per-task workspace (`server/scheduled-tasks/workspace.js`)
+
+Root: `process.env.SCHEDULED_TASK_DATA_DIR` when set, otherwise
+`path.join(os.homedir(), '.claudecodeui', 'scheduled-tasks')`. Layout:
+
+```
+<root>/<taskId>/
+  task.json      machine snapshot of the task definition (schemaVersion, id, title, projectPath, provider, model, kind, rule, command, commandTimeoutSeconds, url?, updatedAt)
+  prompt.md      current task prompt (copy; the DB row stays authoritative)
+  README.md      the layout contract, generated on create/update (see below)
+  state/         durable per-task data — the ONLY place an agent may keep state between runs
+  runs/<runId>/
+    run.json     run metadata + workspace paths (see below)
+    prompt.md    the full prompt sent to the agent (workspace block + effective prompt)
+    output.md    final assistant output / error text
+    logs/        script-gate stdout and other logs
+    tmp/         per-run scratch, removed when the run finishes
+  tmp/           task scratch, wiped at the start of every run
+```
+
+```js
+export const SCHEDULED_TASK_SCHEMA_VERSION = 1;
+export function tasksRoot();
+export function isWorkspaceEnabled();          // SCHEDULED_TASKS_WORKSPACE=0 disables everything
+export function taskDir(taskId); taskStateDir(taskId); taskTmpDir(taskId); taskRunsDir(taskId);
+export function runDir(taskId, runId); runTmpDir(taskId, runId);
+export function ensureTaskWorkspace(task);      // creates dirs + task.json + prompt.md + README.md
+export function ensureRunWorkspace(task, run, { effectivePrompt } = {});   // dirs + run.json + prompt.md
+export function clearTaskTmp(taskId);           // wipe <taskDir>/tmp before a run
+export function finalizeRunWorkspace(task, run, patch);  // output.md, run.json status, per-run tmp cleanup
+export function workspaceEnv(task, { runId } = {});      // extra env for the script gate
+export function workspacePromptBlock(task, { runId } = {});  // markdown block prepended to the prompt
+```
+Every function is a no-op returning `null` when `isWorkspaceEnabled()` is false, and all of them are
+best-effort: filesystem failures are logged, never thrown to the caller (a task must still run).
+`run.json` fields: `{ schemaVersion, runId, taskId, title, projectPath, trigger, scheduledFor,
+startedAt, finishedAt, status, sessionId, scriptExitCode, error, workspace: { root, taskDir,
+stateDir, tmpDir, runDir } }`.
+
+Env added to the script gate (never replacing the existing three):
+`SCHEDULED_TASK_DIR`, `SCHEDULED_TASK_STATE_DIR`, `SCHEDULED_TASK_TMP_DIR`,
+`SCHEDULED_TASK_RUN_ID`, `SCHEDULED_TASK_RUN_DIR`.
+
+Prompt block (`workspacePromptBlock`) is prepended to the prompt the agent receives, in English,
+and states: the task id/title/run id, the project directory the agent may edit, the task root, the
+durable `state/` directory ("keep every long-lived cache, counter or note here"), this run's
+directory (`runs/<runId>/` with `output.md`, `logs/`, `tmp/`), the task `tmp/` that is wiped at the
+start of each run ("never keep anything you need across runs there"), and "never write outside the
+task root and the project directory". The same layout text is written to `README.md` and appended to
+the `schedule_create` / `schedule_preset_install` tool descriptions, so an agent authoring a task
+knows the contract before the first run.
+
+Runner integration (`server/scheduled-tasks/runner.js`):
+1. In `execute()`, before the script gate: `clearTaskTmp(task.id)`, `ensureTaskWorkspace(task)`,
+   `ensureRunWorkspace(task, run)`.
+2. The script gate env gains `workspaceEnv(task, { runId: run.id })`.
+3. After the gate decision, the agent is called with
+   `workspacePromptBlock(task, { runId }) + '\n\n' + effectivePrompt`.
+   `prompt_used` keeps the pre-block effective prompt (unchanged §7 semantics) and
+   `runs/<runId>/prompt.md` stores the full agent-facing text.
+4. `finishOnce` calls `finalizeRunWorkspace(...)` (best-effort) with status/output/error/sessionId/
+   script fields; per-run `tmp/` is removed unless `SCHEDULED_TASK_KEEP_RUN_TMP=1`.
+5. Dry-run (`SCHEDULED_TASK_DRY_RUN=1`) still creates the workspace and writes `prompt.md`/
+   `output.md`, so the layout is verifiable without model calls. Dry-run output stays
+   `[dry-run] <effective prompt>` (without the block).
+
+Task lifecycle: `management.createTask`/`updateTask` call `ensureTaskWorkspace` (best-effort) so
+the directories, `README.md` and `task.json` exist right after creation. `DELETE /api/scheduled-tasks/:id`
+accepts `?purge=1` to remove `<root>/<taskId>` (default: data is kept).
+
+### 10.5 REST additions (same router, same auth)
+
+Preset routes are registered **before** `/:id`, otherwise `GET /presets` would be captured by
+`GET /:id`.
+
+| Method | Path | Body / query | Response |
+|---|---|---|---|
+| GET | `/presets` | `?projectPath=` | `{ presets: Preset[] }` |
+| POST | `/presets` | `{ name, description?, projectPath, taskIds }` | 201 `{ preset }` / 400 |
+| GET | `/presets/:id` | `?projectPath=` | `{ preset }` / 404 |
+| PATCH | `/presets/:id` | `{ name?, description?, icon? }` | `{ preset }` / 400 `builtin_preset` |
+| POST | `/presets/:id/install` | `{ projectPath, enabled? }` | `{ preset, tasks, created, updated, skipped }` |
+| POST | `/presets/:id/enable` | `/disable` | `{ projectPath? }` | `{ preset, tasks }` |
+| DELETE | `/presets/:id` | `?purge=0` to keep the installed tasks | `{ id, deleted: true, removedTasks }` |
+| DELETE | `/:id` | `?purge=1` removes the task workspace | `{ id, deleted: true }` |
+
+### 10.6 Agent tools (extend §6)
+
+Four new names appended to `SCHEDULE_TOOL_NAMES` (and to `allowedTools` in `claude-sdk.js` through
+the existing export — no new wiring), each opening its description with the §6 precedence sentence:
+
+| Tool | Args | Returns |
+|---|---|---|
+| `schedule_preset_list` | optional `include_catalog` (default true) | `{ presets: Preset[] }` |
+| `schedule_preset_install` | `id`, optional `project_path` (defaults to the session cwd), optional `enabled` | `{ preset, tasks, created, updated, skipped }` |
+| `schedule_preset_set_enabled` | `id`, `enabled` | `{ preset, tasks }` |
+| `schedule_preset_create` | `name`, optional `description`, optional `task_ids` (default: every task of the session project) | `{ preset }` |
+
+Tool scoping: builtin presets always visible; custom presets only when `project_path` matches the
+session cwd; install always targets the session cwd (or `project_path` when given). The tools never
+purge real tasks on delete (there is no preset delete tool in this iteration).
+
+### 10.7 Frontend
+
+`ScheduledTasksPanel` gains a **Presets** section (tab or segmented switch next to the task list):
+- **Catalog**: builtin presets with name/description/task count and per-task preview; actions
+  *Install into project* (project picker), *Enable/Disable* (whole preset), *Uninstall*.
+- **Custom presets**: *New preset* opens a dialog to pick tasks of the current project, name the
+  preset and save it; presets list shows installed state per project and the same enable/disable,
+  install and delete actions. Deleting a custom preset asks whether to also delete the tasks it
+  installed.
+- i18n keys in `scheduledTasks` namespace (`en` + `zh-CN`; other locales fall back to en).
+
+### 10.8 Write scopes (one owner per file)
+
+| Owner | Files |
+|---|---|
+| backend-db | `server/modules/database/schema.ts`, `migrations.ts`, `index.ts`, `repositories/scheduled-tasks.db.ts`, `repositories/scheduled-tasks.db.test.ts` |
+| backend-runtime | `server/scheduled-tasks/presets.js` (+test), `presets/builtin/*.json`, `workspace.js` (+test), `management.js`, `management.test.js` (new), `runner.js` (+test), `service.js` (+test), `tools.js` (+test), `server/routes/scheduled-tasks.js` (+test) |
+| frontend | `src/components/scheduled-tasks/**`, `src/i18n/locales/{en,zh-CN}/scheduledTasks.json`, `src/i18n/config.js` |
+| verify | `scripts/verify-scheduled-task-presets.mjs` |
+| lead | `docs/scheduled-tasks.md` |
+
+### 10.9 Acceptance
+
+`node scripts/verify-scheduled-task-presets.mjs` boots the real server (throwaway DB, temp
+`SCHEDULED_TASK_DATA_DIR`, `SCHEDULED_TASK_DRY_RUN=1`) and asserts: the builtin catalog seeds and
+lists; install is idempotent and materializes tasks; a second install with `enabled:false` pauses
+them; enable/disable flips the whole bundle; a custom preset can be built from tasks and installed
+elsewhere; uninstall removes tasks without touching the catalog; the on-disk layout
+(`task.json`/`README.md`/`prompt.md`/`state/`/`runs/<runId>/{run.json,prompt.md,output.md,logs}`)
+appears after a dry run; the script gate sees the `SCHEDULED_TASK_*_DIR` env vars; and
+`?purge=1` removes the task directory.
+
+

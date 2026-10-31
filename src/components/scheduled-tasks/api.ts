@@ -1,6 +1,12 @@
 import { authenticatedFetch } from '../../utils/api';
 import type { Project } from '../../types/app';
 import type {
+  CustomPresetInput,
+  DeletePresetResult,
+  InstallPresetResult,
+  Preset,
+  PresetEnabledResult,
+  PresetPatch,
   ProjectOption,
   ScheduledTask,
   ScheduledTaskInput,
@@ -10,6 +16,7 @@ import type {
 } from './types';
 
 const BASE_URL = '/api/scheduled-tasks';
+const PRESETS_URL = `${BASE_URL}/presets`;
 
 export class ScheduledTasksApiError extends Error {
   status: number;
@@ -65,6 +72,24 @@ function extractProjects(payload: unknown): Project[] {
   return [];
 }
 
+/**
+ * Shared POST for /presets/:id/enable and /presets/:id/disable (section 10.5).
+ * `projectPath` is optional and only scopes access to custom presets.
+ */
+async function setPresetEnabled(
+  id: string,
+  enabled: boolean,
+  options: { projectPath?: string } = {},
+): Promise<PresetEnabledResult> {
+  const action = enabled ? 'enable' : 'disable';
+  const response = await authenticatedFetch(
+    `${PRESETS_URL}/${encodeURIComponent(id)}/${action}`,
+    { method: 'POST', body: JSON.stringify({ projectPath: options.projectPath }) },
+  );
+  const data = await parseResponse<{ preset: Preset; tasks?: ScheduledTask[] }>(response);
+  return { preset: data.preset, tasks: data.tasks ?? [] };
+}
+
 export const scheduledTasksApi = {
   async list(params: { status: TaskStatusFilter; search: string }): Promise<ScheduledTask[]> {
     const query = buildQuery({ status: toApiStatus(params.status), search: params.search.trim() });
@@ -115,6 +140,89 @@ export const scheduledTasksApi = {
     const data = await parseResponse<{ runs?: ScheduledTaskRun[]; total?: number }>(response);
     const runs = data?.runs ?? [];
     return { runs, total: typeof data?.total === 'number' ? data.total : runs.length };
+  },
+
+  // --- Presets (section 10.5) ---------------------------------------------
+  // These routes live under /api/scheduled-tasks/presets and are registered
+  // before /:id on the server, so a preset id can never shadow a task id here.
+
+  async listPresets(options: { projectPath?: string } = {}): Promise<Preset[]> {
+    const query = buildQuery({ projectPath: options.projectPath });
+    const response = await authenticatedFetch(`${PRESETS_URL}${query}`);
+    const data = await parseResponse<{ presets?: Preset[] }>(response);
+    return data?.presets ?? [];
+  },
+
+  async getPreset(id: string, options: { projectPath?: string } = {}): Promise<Preset> {
+    const query = buildQuery({ projectPath: options.projectPath });
+    const response = await authenticatedFetch(
+      `${PRESETS_URL}/${encodeURIComponent(id)}${query}`,
+    );
+    const data = await parseResponse<{ preset: Preset }>(response);
+    return data.preset;
+  },
+
+  async createPreset(input: CustomPresetInput): Promise<Preset> {
+    const response = await authenticatedFetch(PRESETS_URL, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+    const data = await parseResponse<{ preset: Preset }>(response);
+    return data.preset;
+  },
+
+  async updatePreset(id: string, patch: PresetPatch): Promise<Preset> {
+    const response = await authenticatedFetch(`${PRESETS_URL}/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    });
+    const data = await parseResponse<{ preset: Preset }>(response);
+    return data.preset;
+  },
+
+  async installPreset(
+    id: string,
+    options: { projectPath: string; enabled?: boolean },
+  ): Promise<InstallPresetResult> {
+    const response = await authenticatedFetch(
+      `${PRESETS_URL}/${encodeURIComponent(id)}/install`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ projectPath: options.projectPath, enabled: options.enabled }),
+      },
+    );
+    const data = await parseResponse<Partial<InstallPresetResult>>(response);
+    return {
+      preset: data.preset as Preset,
+      tasks: data.tasks ?? [],
+      created: data.created ?? [],
+      updated: data.updated ?? [],
+      skipped: data.skipped ?? [],
+    };
+  },
+
+  async enablePreset(id: string, options: { projectPath?: string } = {}): Promise<PresetEnabledResult> {
+    return setPresetEnabled(id, true, options);
+  },
+
+  async disablePreset(id: string, options: { projectPath?: string } = {}): Promise<PresetEnabledResult> {
+    return setPresetEnabled(id, false, options);
+  },
+
+  async removePreset(
+    id: string,
+    options: { purge?: boolean; projectPath?: string } = {},
+  ): Promise<DeletePresetResult> {
+    const query = buildQuery({
+      purge: options.purge === undefined ? undefined : options.purge ? 1 : 0,
+      projectPath: options.projectPath,
+    });
+    const response = await authenticatedFetch(
+      `${PRESETS_URL}/${encodeURIComponent(id)}${query}`,
+      { method: 'DELETE' },
+    );
+    const data = await parseResponse<Partial<DeletePresetResult>>(response);
+    return { id, deleted: data.deleted ?? true, removedTasks: data.removedTasks ?? 0 };
   },
 
   async listProjectOptions(): Promise<ProjectOption[]> {

@@ -3,6 +3,107 @@
   "launcher": {
     "label": "定时任务"
   },
+  "tabs": {
+    "label": "面板分栏",
+    "tasks": "任务",
+    "presets": "预设包"
+  },
+  "presets": {
+    "catalogTitle": "内置预设包",
+    "customTitle": "自定义预设包",
+    "loading": "正在加载预设包…",
+    "installed": "已安装",
+    "installedIn_other": "已安装到 {{count}} 个项目",
+    "taskCount_other": "{{count}} 个任务",
+    "moreTasks_other": "另有 {{count}} 个任务",
+    "version": "v{{version}}",
+    "source": {
+      "builtin": "内置",
+      "custom": "自定义"
+    },
+    "actions": {
+      "install": "安装到项目",
+      "uninstall": "卸载",
+      "delete": "删除预设包",
+      "enable": "启用预设包",
+      "disable": "停用预设包",
+      "installing": "安装中…",
+      "newPreset": "新建预设包",
+      "refresh": "刷新预设包",
+      "showTasks": "显示任务",
+      "hideTasks": "隐藏任务"
+    },
+    "project": {
+      "label": "项目",
+      "placeholder": "选择项目…"
+    },
+    "empty": {
+      "title": "暂无可用预设包",
+      "description": "安装内置预设包，或用现有任务创建自定义预设包。",
+      "catalog": "当前版本没有内置预设包。",
+      "custom": "该项目还没有自定义预设包。"
+    },
+    "installDialog": {
+      "title": "安装 {{name}}",
+      "description": "将在所选项目中创建 {{count}} 个定时任务。",
+      "confirm": "安装",
+      "enable": "安装后启用任务",
+      "enableHint": "暂停的任务保留计划，但不会运行。",
+      "errors": {
+        "project": "请选择项目。"
+      }
+    },
+    "newDialog": {
+      "title": "新建自定义预设包",
+      "name": "预设包名称",
+      "namePlaceholder": "每周维护",
+      "description": "描述（可选）",
+      "descriptionPlaceholder": "这组任务的用途。",
+      "tasks": "任务",
+      "tasksHint": "选择要快照进该预设包的任务。",
+      "selected": "已选 {{count}} 个",
+      "selectAll": "全选",
+      "clear": "清空",
+      "loadingTasks": "正在加载任务…",
+      "noTasks": "该项目还没有定时任务。",
+      "confirm": "创建预设包",
+      "errors": {
+        "name": "请输入预设包名称。",
+        "project": "请选择项目。",
+        "tasks": "请至少选择一个任务。"
+      }
+    },
+    "deleteDialog": {
+      "title": "删除这个预设包？",
+      "description": "“{{name}}”将从此项目移除。",
+      "purge": "同时删除该预设包安装的任务",
+      "purgeHint": "由该预设包创建的任务会被删除。",
+      "keepHint": "由该预设包创建的任务会保留，并与预设包脱钩。",
+      "confirm": "删除预设包"
+    },
+    "uninstallDialog": {
+      "title": "卸载这个预设包？",
+      "description": "“{{name}}”会保留在内置目录中，但它安装的任务会被删除。",
+      "confirm": "卸载"
+    },
+    "result": {
+      "installed": "安装完成：新建 {{created}} 个，更新 {{updated}} 个。",
+      "skipped_other": "{{count}} 个任务因没有后续运行时间被跳过。",
+      "removed_other": "已删除 {{count}} 个任务。",
+      "detached": "预设包已删除，其任务已保留。",
+      "uninstalled": "预设包已卸载。",
+      "created": "已创建预设包“{{name}}”。"
+    },
+    "errors": {
+      "install": "无法安装预设包。",
+      "enable": "无法启用预设包。",
+      "disable": "无法停用预设包。",
+      "delete": "无法删除预设包。",
+      "create": "无法创建预设包。",
+      "tasks": "无法加载任务。"
+    }
+  },
+
   "search": {
     "placeholder": "搜索定时任务…",
     "clear": "清除搜索"

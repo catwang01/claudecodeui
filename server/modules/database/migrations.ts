@@ -7,6 +7,8 @@ import {
   LAST_SCANNED_AT_SQL,
   PROJECTS_TABLE_SCHEMA_SQL,
   PUSH_SUBSCRIPTIONS_TABLE_SCHEMA_SQL,
+  SCHEDULED_TASK_PRESET_TASKS_TABLE_SCHEMA_SQL,
+  SCHEDULED_TASK_PRESETS_TABLE_SCHEMA_SQL,
   SCHEDULED_TASK_RUNS_TABLE_SCHEMA_SQL,
   SCHEDULED_TASKS_TABLE_SCHEMA_SQL,
   SESSION_FILE_CACHE_SCHEMA_SQL,
@@ -106,6 +108,9 @@ export function runMigrations(): void {
   db.exec(SESSION_READ_STATE_SCHEMA_SQL);
   db.exec(SCHEDULED_TASKS_TABLE_SCHEMA_SQL);
   db.exec(SCHEDULED_TASK_RUNS_TABLE_SCHEMA_SQL);
+  // Presets (docs section 10.2), in foreign-key order.
+  db.exec(SCHEDULED_TASK_PRESETS_TABLE_SCHEMA_SQL);
+  db.exec(SCHEDULED_TASK_PRESET_TASKS_TABLE_SCHEMA_SQL);
 
   // Indexes
   db.exec('CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)');
@@ -152,6 +157,13 @@ export function runMigrations(): void {
   addColumnIfMissing(db, 'scheduled_task_runs', 'script_exit_code', 'INTEGER');
   addColumnIfMissing(db, 'scheduled_task_runs', 'script_output', 'TEXT');
   addColumnIfMissing(db, 'scheduled_task_runs', 'prompt_used', 'TEXT');
+
+  // Preset installation link (docs section 10.2). Rows created before the feature keep
+  // NULL and behave exactly as before. The index is created here (not in the table DDL)
+  // because on an existing database the column only appears through the ALTER above.
+  addColumnIfMissing(db, 'scheduled_tasks', 'preset_id', 'TEXT');
+  addColumnIfMissing(db, 'scheduled_tasks', 'preset_task_id', 'TEXT');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_preset ON scheduled_tasks(preset_id)');
 
   // Data migrations
   migrateLegacySessionNames(db);

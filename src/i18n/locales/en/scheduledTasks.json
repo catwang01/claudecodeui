@@ -3,6 +3,112 @@
   "launcher": {
     "label": "Scheduled tasks"
   },
+  "tabs": {
+    "label": "Panel sections",
+    "tasks": "Tasks",
+    "presets": "Presets"
+  },
+  "presets": {
+    "catalogTitle": "Built-in presets",
+    "customTitle": "Custom presets",
+    "loading": "Loading presets…",
+    "installed": "Installed",
+    "installedIn_one": "Installed in {{count}} project",
+    "installedIn_other": "Installed in {{count}} projects",
+    "taskCount_one": "{{count}} task",
+    "taskCount_other": "{{count}} tasks",
+    "moreTasks_one": "{{count}} more task",
+    "moreTasks_other": "{{count}} more tasks",
+    "version": "v{{version}}",
+    "source": {
+      "builtin": "Built-in",
+      "custom": "Custom"
+    },
+    "actions": {
+      "install": "Install into project",
+      "uninstall": "Uninstall",
+      "delete": "Delete preset",
+      "enable": "Enable preset",
+      "disable": "Disable preset",
+      "installing": "Installing…",
+      "newPreset": "New preset",
+      "refresh": "Refresh presets",
+      "showTasks": "Show tasks",
+      "hideTasks": "Hide tasks"
+    },
+    "project": {
+      "label": "Project",
+      "placeholder": "Select a project…"
+    },
+    "empty": {
+      "title": "No presets available",
+      "description": "Install a built-in preset or create a custom one from your existing tasks.",
+      "catalog": "No built-in presets are shipped with this build.",
+      "custom": "No custom presets in this project yet."
+    },
+    "installDialog": {
+      "title": "Install {{name}}",
+      "description": "Creates {{count}} scheduled tasks in the selected project.",
+      "confirm": "Install",
+      "enable": "Enable the installed tasks",
+      "enableHint": "Paused tasks keep their schedule but do not run.",
+      "errors": {
+        "project": "Choose a project."
+      }
+    },
+    "newDialog": {
+      "title": "New custom preset",
+      "name": "Preset name",
+      "namePlaceholder": "Weekly maintenance",
+      "description": "Description (optional)",
+      "descriptionPlaceholder": "What this bundle of tasks is for.",
+      "tasks": "Tasks",
+      "tasksHint": "Pick the tasks to snapshot into this preset.",
+      "selected": "{{count}} selected",
+      "selectAll": "Select all",
+      "clear": "Clear",
+      "loadingTasks": "Loading tasks…",
+      "noTasks": "This project has no scheduled tasks yet.",
+      "confirm": "Create preset",
+      "errors": {
+        "name": "Enter a preset name.",
+        "project": "Choose a project.",
+        "tasks": "Select at least one task."
+      }
+    },
+    "deleteDialog": {
+      "title": "Delete this preset?",
+      "description": "\"{{name}}\" will be removed from this project.",
+      "purge": "Also delete the tasks this preset installed",
+      "purgeHint": "The tasks created by this preset are deleted.",
+      "keepHint": "The tasks created by this preset are kept, detached from the preset.",
+      "confirm": "Delete preset"
+    },
+    "uninstallDialog": {
+      "title": "Uninstall this preset?",
+      "description": "\"{{name}}\" stays in the catalog, but the tasks it installed are deleted.",
+      "confirm": "Uninstall"
+    },
+    "result": {
+      "installed": "Installed: {{created}} created, {{updated}} updated.",
+      "skipped_one": "{{count}} task was skipped (no upcoming run).",
+      "skipped_other": "{{count}} tasks were skipped (no upcoming run).",
+      "removed_one": "Removed {{count}} task.",
+      "removed_other": "Removed {{count}} tasks.",
+      "detached": "Preset deleted; its tasks were kept.",
+      "uninstalled": "Preset uninstalled.",
+      "created": "Preset \"{{name}}\" created."
+    },
+    "errors": {
+      "install": "Could not install the preset.",
+      "enable": "Could not enable the preset.",
+      "disable": "Could not disable the preset.",
+      "delete": "Could not delete the preset.",
+      "create": "Could not create the preset.",
+      "tasks": "Could not load tasks."
+    }
+  },
+
   "search": {
     "placeholder": "Search scheduled tasks…",
     "clear": "Clear search"

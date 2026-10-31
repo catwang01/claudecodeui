@@ -16,6 +16,10 @@
 import { tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod/v4';
 import { createManagement } from './management.js';
+// §10.4: the workspace module owns the layout text (README.md + run prompt); the
+// same text is embedded in the schedule_create / schedule_preset_install
+// descriptions so an authoring agent knows the contract before the first run.
+import { workspacePromptBlock } from './workspace.js';
 
 /** Bare tool names, in registration order. */
 export const SCHEDULE_TOOL_NAMES = [
@@ -27,6 +31,11 @@ export const SCHEDULE_TOOL_NAMES = [
   'schedule_run',
   'schedule_pause',
   'schedule_resume',
+  // §10.6 presets
+  'schedule_preset_list',
+  'schedule_preset_install',
+  'schedule_preset_set_enabled',
+  'schedule_preset_create',
 ];
 
 const DISABLED_VALUES = new Set(['0', 'false', 'off', 'no']);
@@ -51,6 +60,26 @@ const SCHEDULER_STORAGE_NOTE =
   '~/.claude/projects/<project>/<sessionId>.jsonl. A built-in scheduler keeps its jobs in its own ' +
   'separate store (Claude Code: <project>/.claude/scheduled_tasks.json), so those jobs are not ' +
   "visible in schedule_list or in this app's Scheduled tasks panel, and they auto-expire after 7 days.";
+
+/**
+ * §10.4/§10.6: the on-disk layout contract appended to the schedule_create and
+ * schedule_preset_install descriptions. The text is the workspace module's own
+ * `workspacePromptBlock()` (called without a task => the generic placeholder
+ * version), so README.md, the run prompt and the tool descriptions cannot drift.
+ * `SCHEDULED_TASKS_WORKSPACE=0` makes that call return null; this fallback keeps
+ * the contract documented anyway.
+ */
+const WORKSPACE_FALLBACK_LAYOUT =
+  ' Scheduled task workspace: every task owns a directory tree under the scheduled-task data root — ' +
+  'task.json (task snapshot), prompt.md, README.md, state/ (durable per-task data: keep every long-lived cache, counter or note here, it survives across runs), ' +
+  'runs/<runId>/ (run.json, prompt.md, output.md, logs/ and a tmp/ scratch removed when the run finishes) and ' +
+  'tmp/ (task scratch, wiped at the start of every run — never keep anything you need across runs there). ' +
+  'Never write outside the task root and the project directory.';
+
+const WORKSPACE_LAYOUT_NOTE =
+  '\n\n' +
+  (workspacePromptBlock() ?? WORKSPACE_FALLBACK_LAYOUT) +
+  '\n\nThe script gate receives SCHEDULED_TASK_DIR, SCHEDULED_TASK_STATE_DIR, SCHEDULED_TASK_TMP_DIR, SCHEDULED_TASK_RUN_ID and SCHEDULED_TASK_RUN_DIR.';
 
 /** SCHEDULED_TASKS_TOOLS=0 (default on) removes the tools entirely. */
 export function isScheduleToolsEnabled() {
@@ -237,13 +266,68 @@ export function createScheduleTools(options = {}) {
     return result.ok ? result.task : result;
   });
 
+  // ─── Presets (§10.6) ─────────────────────────────────────────────────────────
+
+  const presetList = guarded('schedule_preset_list', async (args) => {
+    const result = await management.presets.listPresets({ projectPath: projectPath ?? null });
+    if (!result.ok) return result;
+    const presets =
+      args.include_catalog === false
+        ? result.presets.filter((preset) => preset.source !== 'builtin')
+        : result.presets;
+    return { presets };
+  });
+
+  const presetInstall = guarded('schedule_preset_install', async (args) => {
+    const result = await management.presets.installPreset(args.id, {
+      projectPath: args.project_path || projectPath,
+      enabled: args.enabled,
+      userId,
+    });
+    if (!result.ok) return result;
+    return {
+      preset: result.preset,
+      tasks: result.tasks,
+      created: result.created,
+      updated: result.updated,
+      skipped: result.skipped,
+    };
+  });
+
+  const presetSetEnabled = guarded('schedule_preset_set_enabled', async (args) => {
+    const result = await management.presets.setPresetEnabled(args.id, args.enabled, {
+      projectPath: projectPath ?? null,
+    });
+    if (!result.ok) return result;
+    return { preset: result.preset, tasks: result.tasks };
+  });
+
+  const presetCreate = guarded('schedule_preset_create', async (args) => {
+    let taskIds = Array.isArray(args.task_ids) ? args.task_ids : null;
+    if (!taskIds) {
+      // Default: every task of the session project (paused ones included).
+      const listed = await management.listTasks({ userId: null, status: 'all' }, scope);
+      taskIds = (listed.tasks || []).map((task) => task.id);
+    }
+    const result = await management.presets.createCustomPreset({
+      name: args.name,
+      description: args.description,
+      projectPath,
+      taskIds,
+      userId,
+    });
+    if (!result.ok) return result;
+    return { preset: result.preset };
+  });
+
   return [
     tool(
       'schedule_create',
       SCHEDULER_PRECEDENCE_NOTE +
         SCHEDULER_STORAGE_NOTE +
         ' Create a scheduled task that starts a new agent run in this project. Provide exactly one schedule selector (after_seconds, at, every_seconds, daily, weekly or cron).' +
-        ' Optionally add a script gate via command/command_timeout_seconds: the command runs first and its stdout JSON envelope ({"skip":true,"reason":"..."} | {"prompt":"..."} | {"skip":false}) decides whether the agent runs and with which prompt.',
+        ' Optionally add a script gate via command/command_timeout_seconds: the command runs first and its stdout JSON envelope ({"skip":true,"reason":"..."} | {"prompt":"..."} | {"skip":false}) decides whether the agent runs and with which prompt.' +
+        WORKSPACE_LAYOUT_NOTE,
       {
         prompt: z.string().describe('Prompt sent to the agent when the task runs.'),
         title: z.string().describe('Short human-readable title.'),
@@ -314,6 +398,59 @@ export function createScheduleTools(options = {}) {
       SCHEDULER_PRECEDENCE_NOTE + ' Resume a paused scheduled task and recompute its next run.',
       { id: z.string().describe('Scheduled task id.') },
       resume,
+      { annotations: { readOnlyHint: false } }
+    ),
+    tool(
+      'schedule_preset_list',
+      SCHEDULER_PRECEDENCE_NOTE +
+        ' List installable task presets: the built-in catalog plus the custom presets that belong to this project. Set include_catalog to false to list custom presets only.',
+      { include_catalog: z.boolean().describe('Include the built-in catalog. Defaults to true.').optional() },
+      presetList,
+      { annotations: { readOnlyHint: true } }
+    ),
+    tool(
+      'schedule_preset_install',
+      SCHEDULER_PRECEDENCE_NOTE +
+        ' Install a preset into this project: every task template becomes a real scheduled task linked back to the preset, so enabling or disabling the preset switches them all at once. Installing again is idempotent — linked tasks are updated, never duplicated.' +
+        WORKSPACE_LAYOUT_NOTE,
+      {
+        id: z.string().describe('Preset id (see schedule_preset_list).'),
+        project_path: z
+          .string()
+          .describe('Target project path; defaults to the current session project.')
+          .optional(),
+        enabled: z
+          .boolean()
+          .describe('Install the preset enabled. Defaults to true; pass false to install it paused.')
+          .optional(),
+      },
+      presetInstall,
+      { annotations: { readOnlyHint: false } }
+    ),
+    tool(
+      'schedule_preset_set_enabled',
+      SCHEDULER_PRECEDENCE_NOTE +
+        ' Enable or disable a whole preset: the preset flag flips and every scheduled task it installed follows (enabling recomputes each next run, disabling clears it).',
+      {
+        id: z.string().describe('Preset id.'),
+        enabled: z.boolean().describe('true to enable the whole preset, false to disable it.'),
+      },
+      presetSetEnabled,
+      { annotations: { readOnlyHint: false } }
+    ),
+    tool(
+      'schedule_preset_create',
+      SCHEDULER_PRECEDENCE_NOTE +
+        ' Create a custom preset by snapshotting existing scheduled tasks of this project, so the bundle can be installed and toggled as one unit. task_ids defaults to every task of the session project.',
+      {
+        name: z.string().describe('Human-readable preset name.'),
+        description: z.string().describe('Optional preset description.').optional(),
+        task_ids: z
+          .array(z.string())
+          .describe('Scheduled task ids to snapshot, in order. Defaults to every task of the session project.')
+          .optional(),
+      },
+      presetCreate,
       { annotations: { readOnlyHint: false } }
     ),
   ];

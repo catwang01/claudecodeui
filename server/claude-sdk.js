@@ -112,8 +112,8 @@ const BASE_INTERNAL_TOOLS = {
 
 /**
  * Names of the built-in MCP tools registered on the 'internal' server.
- * Single source of truth for createInternalToolsServer(); the eight
- * schedule_* tools are omitted when SCHEDULED_TASKS_TOOLS=0.
+ * Single source of truth for createInternalToolsServer(); the schedule_*
+ * tools (see SCHEDULE_TOOL_NAMES) are omitted when SCHEDULED_TASKS_TOOLS=0.
  * @returns {string[]}
  */
 export function getInternalToolNames() {

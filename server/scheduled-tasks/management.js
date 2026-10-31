@@ -98,6 +98,8 @@ export function taskRowToJson(row) {
     title: row.title,
     prompt: row.prompt,
     projectPath: row.project_path ?? row.projectPath ?? null,
+    presetId: row.preset_id ?? row.presetId ?? null,
+    presetTaskId: row.preset_task_id ?? row.presetTaskId ?? null,
     provider: row.provider ?? 'claude',
     model: row.model ?? null,
     command: row.command ?? null,
@@ -243,12 +245,39 @@ async function loadDefaultRunNow() {
   return cachedRunNow;
 }
 
+// §10.3 preset service. Loaded lazily so a missing/incomplete presets module
+// (or a repo without the preset tables) never breaks task management.
+let cachedPresetsModule = null;
+async function loadPresetsModule() {
+  if (!cachedPresetsModule) cachedPresetsModule = await import('./presets.js');
+  return cachedPresetsModule;
+}
+
+// §10.4 workspace module. Optional everywhere: filesystem failures and a
+// missing module are logged, never thrown (a task must still run).
+let cachedWorkspaceModule;
+let workspaceModuleLoaded = false;
+async function loadDefaultWorkspace() {
+  if (!workspaceModuleLoaded) {
+    workspaceModuleLoaded = true;
+    try {
+      cachedWorkspaceModule = await import('./workspace.js');
+    } catch {
+      cachedWorkspaceModule = null;
+    }
+  }
+  return cachedWorkspaceModule;
+}
+
 /**
  * @param {object} [deps]
  * @param {object} [deps.repo] scheduledTasksDb-compatible repository
  * @param {object} [deps.rules] { validateRule, normalizeRule, computeNextRun }
  * @param {Function} [deps.runNow] (taskId) => { run } | { error }
  * @param {Function} [deps.now] () => epoch ms
+ * @param {object|null} [deps.workspace] §10.4 workspace module (undefined = load lazily, null/false = disabled)
+ * @param {object} [deps.presets] §10.3 preset service (tests; default is built lazily)
+ * @param {Array} [deps.catalog] preset catalog for the default preset service (tests)
  */
 export function createManagement(deps = {}) {
   const logger = deps.logger ?? console;
@@ -257,6 +286,9 @@ export function createManagement(deps = {}) {
   let repoRef = deps.repo ?? null;
   let rulesRef = deps.rules ?? null;
   let runNowRef = deps.runNow ?? null;
+  let presetsRef = deps.presets ?? null;
+  // undefined => load ./workspace.js lazily; null/false => workspace disabled.
+  const workspaceDep = deps.workspace;
 
   async function getRepo() {
     if (!repoRef) repoRef = await loadDefaultRepo();
@@ -271,6 +303,62 @@ export function createManagement(deps = {}) {
   async function getRunNow() {
     if (!runNowRef) runNowRef = await loadDefaultRunNow();
     return runNowRef;
+  }
+
+  async function getWorkspace() {
+    if (workspaceDep !== undefined) return workspaceDep;
+    return loadDefaultWorkspace();
+  }
+
+  async function getPresetsService() {
+    if (presetsRef) return presetsRef;
+    const [repo, rules, presetsModule] = await Promise.all([getRepo(), getRules(), loadPresetsModule()]);
+    presetsRef =
+      deps.presets ??
+      presetsModule.createPresetService({
+        repo,
+        rules,
+        workspace: workspaceDep,
+        catalog: deps.catalog,
+        logger,
+        now,
+      });
+    return presetsRef;
+  }
+
+  // §10.4: the task's on-disk layout exists right after create/update; a
+  // filesystem failure must never fail the request.
+  async function ensureTaskWorkspaceBestEffort(row) {
+    if (!row) return;
+    const workspace = await getWorkspace();
+    if (!workspace || typeof workspace.ensureTaskWorkspace !== 'function') return;
+    try {
+      const result = workspace.ensureTaskWorkspace(row);
+      if (result && typeof result.then === 'function') await result;
+    } catch (err) {
+      logger.warn?.(`[scheduled-tasks] workspace setup failed for ${row.id}: ${errorMessage(err)}`);
+    }
+  }
+
+  // §10.4: DELETE ?purge=1 removes <root>/<taskId>. Best-effort.
+  async function purgeTaskWorkspace(taskId) {
+    const workspace = await getWorkspace();
+    if (!workspace) return false;
+    try {
+      if (typeof workspace.removeTaskWorkspace === 'function') {
+        const result = await workspace.removeTaskWorkspace(taskId);
+        return result !== false;
+      }
+      if (typeof workspace.taskDir !== 'function') return false;
+      const dir = workspace.taskDir(taskId);
+      if (!dir) return false;
+      const fs = await import('node:fs');
+      fs.rmSync(dir, { recursive: true, force: true });
+      return true;
+    } catch (err) {
+      logger.warn?.(`[scheduled-tasks] workspace purge failed for ${taskId}: ${errorMessage(err)}`);
+      return false;
+    }
   }
 
   function validateAndNormalize(rule, rules) {
@@ -414,8 +502,11 @@ export function createManagement(deps = {}) {
       enabled: input.enabled !== false,
       command: command ? command.value : undefined,
       commandTimeoutSeconds: commandTimeoutSeconds ? commandTimeoutSeconds.value : undefined,
+      presetId: nonEmptyString(input.presetId) ?? undefined,
+      presetTaskId: nonEmptyString(input.presetTaskId) ?? undefined,
     });
 
+    await ensureTaskWorkspaceBestEffort(row);
     return { ok: true, task: taskRowToJson(row) };
   }
 
@@ -456,6 +547,12 @@ export function createManagement(deps = {}) {
       if (!checked.ok) return checked;
       changes.commandTimeoutSeconds = checked.value;
     }
+    if (patch.presetId !== undefined) {
+      changes.presetId = nonEmptyString(patch.presetId);
+    }
+    if (patch.presetTaskId !== undefined) {
+      changes.presetTaskId = nonEmptyString(patch.presetTaskId);
+    }
 
     const nowMs = now();
     let rule = null;
@@ -489,6 +586,7 @@ export function createManagement(deps = {}) {
 
     const updated = repo.updateTask(id, changes);
     if (!updated) return notFound();
+    await ensureTaskWorkspaceBestEffort(updated);
     return { ok: true, task: taskRowToJson(updated) };
   }
 
@@ -512,13 +610,20 @@ export function createManagement(deps = {}) {
     return { ok: true, task: taskRowToJson(updated) };
   }
 
-  async function deleteTask(id, scope = {}) {
+  /**
+   * @param {string} id
+   * @param {object} [scope] { projectPath }
+   * @param {object} [options] { purge } — §10.4: purge removes <root>/<taskId>
+   */
+  async function deleteTask(id, scope = {}, options = {}) {
     const repo = await getRepo();
     const row = await findTask(id, scope);
     if (!row) return notFound();
     const deleted = repo.deleteTask(id);
     if (!deleted) return notFound();
-    return { ok: true, id, deleted: true };
+    let purged = false;
+    if (options && options.purge) purged = await purgeTaskWorkspace(id);
+    return { ok: true, id, deleted: true, purged };
   }
 
   async function runTaskNow(id, scope = {}) {
@@ -561,5 +666,18 @@ export function createManagement(deps = {}) {
     resumeTask: (id, scope) => setEnabled(id, true, scope),
     deleteTask,
     runTaskNow,
+    // §10.3 presets — same service for the REST routes and the agent tools.
+    presets: {
+      listPresets: (options) => getPresetsService().then((service) => service.listPresets(options)),
+      getPreset: (id, options) => getPresetsService().then((service) => service.getPreset(id, options)),
+      installPreset: (id, options) => getPresetsService().then((service) => service.installPreset(id, options)),
+      setPresetEnabled: (id, enabled, options) =>
+        getPresetsService().then((service) => service.setPresetEnabled(id, enabled, options)),
+      createCustomPreset: (input) => getPresetsService().then((service) => service.createCustomPreset(input)),
+      updatePreset: (id, patch, options) =>
+        getPresetsService().then((service) => service.updatePreset(id, patch, options)),
+      deletePreset: (id, options, scope) =>
+        getPresetsService().then((service) => service.deletePreset(id, options, scope)),
+    },
   };
 }

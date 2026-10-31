@@ -20,12 +20,28 @@
  * Test seam: SCHEDULED_TASK_DRY_RUN=1 runs everything up to (and including) the gate,
  * then replaces only the agent call with output '[dry-run] <effective prompt>' and
  * promptUsed = <effective prompt>.
+ *
+ * Workspace (§10.4): every run plans its on-disk workspace through
+ * ./workspace.js — the task tree (task.json/README.md/state/tmp) and the run
+ * directory (run.json/prompt.md/logs/tmp) exist before the script gate, the gate
+ * receives the SCHEDULED_TASK_*_DIR env vars, the agent prompt is prefixed with
+ * workspacePromptBlock(...) while promptUsed stays the effective prompt, and
+ * finishOnce records output.md/run.json through finalizeRunWorkspace.
+ * SCHEDULED_TASKS_WORKSPACE=0 disables the whole layer.
  */
 
 import { spawn as nodeSpawn } from 'child_process';
 import { scheduledTasksDb } from '../modules/database/index.js';
 import { addProjectManually } from '../projects.js';
 import { queryClaudeSDK, abortClaudeSDKSession } from '../claude-sdk.js';
+import {
+  clearTaskTmp,
+  ensureRunWorkspace,
+  ensureTaskWorkspace,
+  finalizeRunWorkspace,
+  workspaceEnv,
+  workspacePromptBlock,
+} from './workspace.js';
 
 const DEFAULT_TIMEOUT_MS = 1800000;
 const SUPPORTED_PROVIDERS = new Set(['claude']);
@@ -146,7 +162,7 @@ export function createTaskRunner(deps = {}) {
   const spawnImpl = deps.spawn ?? nodeSpawn;
   const timeoutOverride = deps.timeoutMs;
 
-  function finishOnce(run, status, extra = {}) {
+  function finishOnce(task, run, status, extra = {}) {
     const output = extra.output !== undefined ? extra.output : null;
     const sessionId = extra.sessionId !== undefined ? extra.sessionId : null;
     const error = extra.error !== undefined ? extra.error : null;
@@ -169,6 +185,10 @@ export function createTaskRunner(deps = {}) {
     } catch (err) {
       console.error('[scheduled-tasks] finishRun failed:', errorMessage(err));
     }
+
+    // §10.4 step 4: record the outcome on disk (best-effort, never throws).
+    finalizeRunWorkspace(task, run, { status, output, error, sessionId, scriptExitCode, scriptOutput });
+
     return {
       run: finished,
       status,
@@ -186,7 +206,7 @@ export function createTaskRunner(deps = {}) {
    * exit code, and turn the JSON envelope into a skip/prompt decision.
    * Never rejects.
    */
-  function runScriptGate(task, projectPath) {
+  function runScriptGate(task, projectPath, workspaceVars) {
     const command = task.command;
     const timeoutSeconds = resolveCommandTimeoutSeconds(task);
     const env = {
@@ -194,6 +214,8 @@ export function createTaskRunner(deps = {}) {
       SCHEDULED_TASK_ID: task.id ?? '',
       SCHEDULED_TASK_TITLE: task.title ?? '',
       SCHEDULED_TASK_PROJECT: projectPath ?? '',
+      // §10.4: the workspace variables never replace the three above.
+      ...(workspaceVars ?? {}),
     };
 
     return new Promise((resolve) => {
@@ -299,10 +321,17 @@ export function createTaskRunner(deps = {}) {
     let scriptExitCode = null;
     let scriptOutput = null;
 
+    // §10.4 step 1: plan the on-disk workspace before the script gate, so the
+    // layout exists even when the gate skips or fails the run. Best-effort.
+    clearTaskTmp(task.id);
+    ensureTaskWorkspace(task);
+    ensureRunWorkspace(task, run);
+    const workspaceVars = workspaceEnv(task, { runId: run.id });
+
     // §7 script gate: runs before the provider check and before any agent call.
     if (typeof task.command === 'string' && task.command.trim()) {
       if (!commandsEnabled()) {
-        return finishOnce(run, 'error', {
+        return finishOnce(task, run, 'error', {
           error: 'commands_disabled',
           promptUsed: null,
           scriptExitCode: null,
@@ -310,12 +339,12 @@ export function createTaskRunner(deps = {}) {
         });
       }
 
-      const gate = await runScriptGate(task, projectPath);
+      const gate = await runScriptGate(task, projectPath, workspaceVars);
       scriptExitCode = gate.scriptExitCode ?? null;
       scriptOutput = gate.scriptOutput ?? null;
 
       if (!gate.ok) {
-        return finishOnce(run, 'error', {
+        return finishOnce(task, run, 'error', {
           error: gate.code,
           promptUsed: null,
           scriptExitCode,
@@ -323,7 +352,7 @@ export function createTaskRunner(deps = {}) {
         });
       }
       if (gate.skip) {
-        return finishOnce(run, 'skipped', {
+        return finishOnce(task, run, 'skipped', {
           output: gate.reason ?? null,
           promptUsed: null,
           scriptExitCode,
@@ -333,8 +362,14 @@ export function createTaskRunner(deps = {}) {
       effectivePrompt = gate.prompt;
     }
 
+    // §10.4 step 3: prompt.md stores the full agent-facing text, which is only
+    // known once the gate has decided the effective prompt.
+    ensureRunWorkspace(task, run, { effectivePrompt });
+    const workspaceBlock = workspacePromptBlock(task, { runId: run.id });
+    const agentPrompt = workspaceBlock ? `${workspaceBlock}\n\n${effectivePrompt}` : effectivePrompt;
+
     if (!SUPPORTED_PROVIDERS.has(task.provider ?? 'claude')) {
-      return finishOnce(run, 'error', {
+      return finishOnce(task, run, 'error', {
         error: `Unsupported provider: ${task.provider}`,
         promptUsed: effectivePrompt,
         scriptExitCode,
@@ -345,7 +380,7 @@ export function createTaskRunner(deps = {}) {
     // Dry-run replaces only the agent call: the gate above has already run and
     // decided, and the effective prompt is reported back.
     if (isDryRun()) {
-      return finishOnce(run, 'success', {
+      return finishOnce(task, run, 'success', {
         output: `[dry-run] ${effectivePrompt}`,
         sessionId: null,
         promptUsed: effectivePrompt,
@@ -404,7 +439,7 @@ export function createTaskRunner(deps = {}) {
     if (task.model) options.model = task.model;
 
     const agentResult = (status, extra = {}) =>
-      finishOnce(run, status, {
+      finishOnce(task, run, status, {
         promptUsed: effectivePrompt,
         scriptExitCode,
         scriptOutput,
@@ -421,7 +456,7 @@ export function createTaskRunner(deps = {}) {
     });
 
     try {
-      await Promise.race([query(effectivePrompt, options, writer), timedOut]);
+      await Promise.race([query(agentPrompt, options, writer), timedOut]);
     } catch (err) {
       if (err && err.isScheduledTaskTimeout) {
         // Best-effort abort: the session may already be gone by now.
@@ -468,7 +503,7 @@ export function createTaskRunner(deps = {}) {
 
     const done = execute(task, run).catch((err) => {
       // execute() only throws on unexpected internal faults (e.g. the DB layer).
-      return finishOnce(run, 'error', { error: errorMessage(err) });
+      return finishOnce(task, run, 'error', { error: errorMessage(err) });
     });
 
     return { run, done };

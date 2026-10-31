@@ -117,7 +117,7 @@ function setup(depsOverrides = {}) {
   const runNow = vi.fn(async (taskId) => ({ run: makeRunRow(taskId) }));
   const tools = createScheduleTools({
     projectPath: PROJECT,
-    deps: { repo, runNow, rules, now: () => NOW, ...depsOverrides },
+    deps: { repo, runNow, rules, now: () => NOW, workspace: false, ...depsOverrides },
   });
   const byName = Object.fromEntries(tools.map((definition) => [definition.name, definition]));
 
@@ -138,10 +138,10 @@ beforeEach(() => {
 });
 
 describe('tool registration', () => {
-  it('registers the eight schedule_* tools in contract order', () => {
+  it('registers the twelve schedule_* tools in contract order', () => {
     const { tools } = setup();
     expect(tools.map((definition) => definition.name)).toEqual(SCHEDULE_TOOL_NAMES);
-    expect(SCHEDULE_TOOL_NAMES).toHaveLength(8);
+    expect(SCHEDULE_TOOL_NAMES).toHaveLength(12);
     for (const definition of tools) {
       expect(typeof definition.handler).toBe('function');
       expect(definition.description).toBeTruthy();
@@ -165,7 +165,13 @@ describe('schedule_create', () => {
     const tools = createScheduleTools({
       projectPath: PROJECT,
       userId: 7,
-      deps: { repo, runNow: vi.fn(async (taskId) => ({ run: makeRunRow(taskId) })), rules, now: () => NOW },
+      deps: {
+        repo,
+        runNow: vi.fn(async (taskId) => ({ run: makeRunRow(taskId) })),
+        rules,
+        now: () => NOW,
+        workspace: false,
+      },
     });
     const create = tools.find((definition) => definition.name === 'schedule_create');
 
@@ -579,10 +585,10 @@ describe('§6.1 built-in Cron precedence', () => {
     return end === -1 ? description : description.slice(0, end + 1);
   }
 
-  it('states the precedence note in the first sentence of all eight descriptions', () => {
+  it('states the precedence note in the first sentence of all twelve descriptions', () => {
     const { tools } = setup();
 
-    expect(tools).toHaveLength(8);
+    expect(tools).toHaveLength(12);
     for (const definition of tools) {
       const sentence = firstSentence(definition.description);
       expect(sentence, definition.name).toContain(PREFERENCE_MARKER);
@@ -627,3 +633,127 @@ describe('§6.1 built-in Cron precedence', () => {
     expect(byName.schedule_resume.description).toMatch(/recompute its next run/);
   });
 });
+
+describe('preset tools (§10.6)', () => {
+  const PRESETS = [
+    { id: 'alpha-daily', source: 'builtin', name: 'Alpha daily', taskCount: 1 },
+    { id: 'mine', source: 'custom', name: 'Mine', taskCount: 2 },
+  ];
+
+  function makePresetsService() {
+    return {
+      listPresets: vi.fn(async () => ({ ok: true, presets: PRESETS })),
+      getPreset: vi.fn(),
+      installPreset: vi.fn(async (id, options) => ({
+        ok: true,
+        preset: { id, enabled: options.enabled !== false },
+        tasks: [{ id: 'task-installed', presetId: id }],
+        created: ['task-installed'],
+        updated: [],
+        skipped: [],
+      })),
+      setPresetEnabled: vi.fn(async (id, enabled) => ({
+        ok: true,
+        preset: { id, enabled },
+        tasks: [{ id: 'task-installed', enabled }],
+      })),
+      createCustomPreset: vi.fn(async (input) => ({
+        ok: true,
+        preset: { id: 'custom-1', name: input.name, taskIds: input.taskIds },
+      })),
+      updatePreset: vi.fn(),
+      deletePreset: vi.fn(),
+    };
+  }
+
+  it('lists presets and can hide the built-in catalog', async () => {
+    const presets = makePresetsService();
+    const { call } = setup({ presets });
+
+    expect(await call('schedule_preset_list', {})).toEqual({ presets: PRESETS });
+    expect(presets.listPresets).toHaveBeenCalledWith({ projectPath: PROJECT });
+
+    const custom = await call('schedule_preset_list', { include_catalog: false });
+    expect(custom.presets.map((preset) => preset.id)).toEqual(['mine']);
+  });
+
+  it('installs into the session project by default', async () => {
+    const presets = makePresetsService();
+    const { call } = setup({ presets });
+
+    const result = await call('schedule_preset_install', { id: 'alpha-daily' });
+
+    expect(presets.installPreset).toHaveBeenCalledWith('alpha-daily', {
+      projectPath: PROJECT,
+      enabled: undefined,
+      userId: null,
+    });
+    expect(result).toMatchObject({ created: ['task-installed'], updated: [], skipped: [] });
+  });
+
+  it('forwards an explicit target project and enabled flag', async () => {
+    const presets = makePresetsService();
+    const { call } = setup({ presets });
+
+    await call('schedule_preset_install', { id: 'mine', project_path: OTHER, enabled: false });
+
+    expect(presets.installPreset).toHaveBeenCalledWith('mine', {
+      projectPath: OTHER,
+      enabled: false,
+      userId: null,
+    });
+  });
+
+  it('flips a whole preset', async () => {
+    const presets = makePresetsService();
+    const { call } = setup({ presets });
+
+    const result = await call('schedule_preset_set_enabled', { id: 'alpha-daily', enabled: false });
+
+    expect(presets.setPresetEnabled).toHaveBeenCalledWith('alpha-daily', false, { projectPath: PROJECT });
+    expect(result).toMatchObject({ preset: { enabled: false }, tasks: [{ enabled: false }] });
+  });
+
+  it('creates a custom preset from the session project tasks by default', async () => {
+    const presets = makePresetsService();
+    const { call } = setup({ presets });
+
+    const mine = await call('schedule_create', { title: 'a', prompt: 'p', every_seconds: 60 });
+    await call('schedule_create', { title: 'foreign', prompt: 'p', project_path: OTHER, every_seconds: 60 });
+    const paused = await call('schedule_create', { title: 'b', prompt: 'p', every_seconds: 60 });
+    await call('schedule_pause', { id: paused.id });
+
+    await call('schedule_preset_create', { name: 'My bundle' });
+
+    const input = presets.createCustomPreset.mock.calls[0][0];
+    expect(input).toMatchObject({ name: 'My bundle', projectPath: PROJECT });
+    expect(input.taskIds.sort()).toEqual([mine.id, paused.id].sort());
+  });
+
+  it('passes explicit task_ids through and surfaces preset errors', async () => {
+    const presets = makePresetsService();
+    presets.createCustomPreset.mockResolvedValueOnce({ ok: false, code: 'no_tasks', message: 'none' });
+    const { call } = setup({ presets });
+
+    const failed = await call('schedule_preset_create', { name: 'x', task_ids: [] });
+
+    expect(failed).toMatchObject({ code: 'no_tasks' });
+    expect(presets.createCustomPreset).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'x', taskIds: [] })
+    );
+  });
+
+  it('documents the workspace layout on schedule_create and schedule_preset_install', () => {
+    const { byName } = setup();
+
+    for (const name of ['schedule_create', 'schedule_preset_install']) {
+      const description = byName[name].description;
+      expect(description, name).toMatch(/state\//);
+      expect(description, name).toMatch(/runs\/<runId>\//);
+      expect(description, name).toContain('SCHEDULED_TASK_STATE_DIR');
+      expect(description, name).toMatch(/wiped at the start of every run/);
+      expect(description, name).toMatch(/Never write outside the task root/);
+    }
+  });
+});
+

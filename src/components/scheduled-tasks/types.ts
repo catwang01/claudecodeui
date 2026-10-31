@@ -144,3 +144,81 @@ export interface ProjectOption {
   value: string;
   label: string;
 }
+
+/** Presets (section 10): builtin catalog rows vs user-created bundles. */
+export type PresetSource = 'builtin' | 'custom';
+
+/**
+ * One task template inside a preset. Mirrors the frozen `PresetTask` shape in
+ * docs/scheduled-tasks.md section 10.3 (camelCase, rule already parsed).
+ */
+export interface PresetTask {
+  id: string;
+  presetId: string;
+  title: string;
+  description: string | null;
+  prompt: string;
+  provider: string;
+  model: string | null;
+  kind: RuleKind;
+  rule: RulePayload;
+  command: string | null;
+  commandTimeoutSeconds: number | null;
+  position: number;
+}
+
+export interface Preset {
+  id: string;
+  source: PresetSource;
+  name: string;
+  description: string | null;
+  icon: string | null;
+  version: string | null;
+  /** Whole-preset switch; stored even before the preset is installed. */
+  enabled: boolean;
+  /** Owning project for custom presets; null for builtin presets. */
+  projectPath: string | null;
+  taskCount: number;
+  /** Distinct project paths of the real tasks this preset installed. */
+  installedProjects: string[];
+  tasks: PresetTask[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CustomPresetInput {
+  name: string;
+  description?: string;
+  projectPath: string;
+  /** Existing task ids of `projectPath`; order becomes the template order. */
+  taskIds: string[];
+}
+
+export interface PresetPatch {
+  name?: string;
+  description?: string;
+  icon?: string;
+}
+
+/** Result of POST /presets/:id/install (section 10.3). */
+export interface InstallPresetResult {
+  preset: Preset;
+  tasks: ScheduledTask[];
+  created: string[];
+  updated: string[];
+  /** Template ids whose rule has no upcoming run; never a hard failure. */
+  skipped: string[];
+}
+
+/** Result of POST /presets/:id/enable and /disable. */
+export interface PresetEnabledResult {
+  preset: Preset;
+  tasks: ScheduledTask[];
+}
+
+/** Result of DELETE /presets/:id. */
+export interface DeletePresetResult {
+  id: string;
+  deleted: boolean;
+  removedTasks: number;
+}

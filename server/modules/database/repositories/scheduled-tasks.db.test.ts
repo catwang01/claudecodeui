@@ -696,4 +696,267 @@ describe('scheduledTasksDb', () => {
     expect(ids.size).toBe(expected.length);
     for (const value of expected) expect(ids.has(value)).toBe(true);
   });
+
+  it('creates, reads, updates and deletes presets', () => {
+    const id = 'preset-' + tag();
+    const created = scheduledTasksDb.createPreset({
+      id,
+      source: 'builtin',
+      name: 'Nightly suite',
+      description: 'desc',
+      icon: 'icon',
+      version: '1.0.0',
+    });
+
+    expect(created.id).toBe(id);
+    expect(created.user_id).toBeNull();
+    expect(created.source).toBe('builtin');
+    expect(created.name).toBe('Nightly suite');
+    expect(created.description).toBe('desc');
+    expect(created.icon).toBe('icon');
+    expect(created.version).toBe('1.0.0');
+    // Unlike tasks, a fresh preset is disabled until it is installed/enabled.
+    expect(created.enabled).toBe(0);
+    expect(created.project_path).toBeNull();
+    expect(created.created_at).toBe(created.updated_at);
+    expect(created.created_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(must(scheduledTasksDb.getPreset(id)).name).toBe('Nightly suite');
+    expect(scheduledTasksDb.getPreset(crypto.randomUUID())).toBeUndefined();
+
+    getConnection()
+      .prepare('UPDATE scheduled_task_presets SET updated_at = ? WHERE id = ?')
+      .run('2000-01-01T00:00:00.000Z', id);
+    const updated = must(
+      scheduledTasksDb.updatePreset(id, {
+        name: 'Renamed',
+        description: null,
+        icon: null,
+        version: '2.0.0',
+        enabled: true,
+        projectPath: '/srv/preset-' + id,
+        userId: 5,
+      })
+    );
+    expect(updated.name).toBe('Renamed');
+    expect(updated.description).toBeNull();
+    expect(updated.icon).toBeNull();
+    expect(updated.version).toBe('2.0.0');
+    expect(updated.enabled).toBe(1);
+    expect(updated.project_path).toBe('/srv/preset-' + id);
+    expect(updated.user_id).toBe(5);
+    expect(updated.updated_at > '2000-01-01T00:00:00.000Z').toBe(true);
+
+    const untouched = must(scheduledTasksDb.updatePreset(id, {}));
+    expect(untouched.name).toBe('Renamed');
+    expect(untouched.enabled).toBe(1);
+    expect(untouched.user_id).toBe(5);
+    expect(scheduledTasksDb.updatePreset('no-such-' + id, { name: 'x' })).toBeUndefined();
+
+    expect(scheduledTasksDb.deletePreset(id)).toBe(true);
+    expect(scheduledTasksDb.getPreset(id)).toBeUndefined();
+    expect(scheduledTasksDb.deletePreset(id)).toBe(false);
+  });
+
+  it('generates a preset id on demand and honours an explicit disabled flag', () => {
+    const id = tag();
+    const custom = scheduledTasksDb.createPreset({
+      source: 'custom',
+      name: 'Mine ' + id,
+      projectPath: '/srv/custom-' + id,
+      enabled: false,
+    });
+    expect(custom.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(custom.enabled).toBe(0);
+    expect(custom.project_path).toBe('/srv/custom-' + id);
+    expect(custom.user_id).toBeNull();
+    expect(custom.description).toBeNull();
+    expect(custom.icon).toBeNull();
+    expect(custom.version).toBeNull();
+
+    expect(scheduledTasksDb.createPreset({ source: 'builtin', name: 'On ' + id, enabled: true }).enabled).toBe(1);
+  });
+
+  it('replaces preset tasks in position order, snapshots the rule and cascade-deletes them', () => {
+    const id = 'preset-' + tag();
+    scheduledTasksDb.createPreset({ id, source: 'builtin', name: 'Tasks ' + id });
+    expect(scheduledTasksDb.listPresetTasks(id)).toEqual([]);
+    expect(scheduledTasksDb.replacePresetTasks(id, [])).toEqual([]);
+    expect(scheduledTasksDb.replacePresetTasks('no-such-' + id, [])).toEqual([]);
+
+    // Explicit positions win over the array index.
+    const positioned = scheduledTasksDb.replacePresetTasks(id, [
+      { id: 'tpl-second', title: 'Second', prompt: 'p2', kind: 'daily', rule: { kind: 'daily' }, position: 2 },
+      { id: 'tpl-first', title: 'First', prompt: 'p1', kind: 'daily', rule: { kind: 'daily' }, position: 1 },
+    ]);
+    expect(positioned.map((row) => row.id)).toEqual(['tpl-first', 'tpl-second']);
+    expect(positioned.map((row) => row.position)).toEqual([1, 2]);
+
+    // A replacement drops the previous templates and defaults position to the index.
+    const replaced = scheduledTasksDb.replacePresetTasks(id, [
+      {
+        id: 'tpl-x',
+        title: 'X',
+        description: 'template x',
+        prompt: 'px',
+        kind: 'daily',
+        rule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
+      },
+      {
+        id: 'tpl-y',
+        title: 'Y',
+        prompt: 'py',
+        provider: 'codex',
+        model: 'gpt',
+        kind: 'interval',
+        ruleJson: '{"kind":"interval","everySeconds":600}',
+        command: 'node gate.js',
+        commandTimeoutSeconds: 30,
+      },
+    ]);
+
+    expect(replaced.map((row) => row.id)).toEqual(['tpl-x', 'tpl-y']);
+    expect(replaced.map((row) => row.position)).toEqual([0, 1]);
+    const [first, second] = replaced;
+    expect(first.description).toBe('template x');
+    expect(first.provider).toBe('claude');
+    expect(first.model).toBeNull();
+    expect(first.rule_json).toBe('{"kind":"daily","time":"09:00","timeZone":"UTC"}');
+    expect(first.command).toBeNull();
+    expect(first.command_timeout_seconds).toBeNull();
+    expect(first.created_at).toBe(first.updated_at);
+    expect(second.rule_json).toBe('{"kind":"interval","everySeconds":600}');
+    expect(second.provider).toBe('codex');
+    expect(second.model).toBe('gpt');
+    expect(second.command).toBe('node gate.js');
+    expect(second.command_timeout_seconds).toBe(30);
+
+    // snake_case alias for callers that already hold a serialized row.
+    const aliased = scheduledTasksDb.replacePresetTasks(id, [
+      { id: 'tpl-z', title: 'Z', prompt: 'pz', kind: 'daily', rule: {}, command_timeout_seconds: 75 },
+    ]);
+    expect(aliased[0].command_timeout_seconds).toBe(75);
+
+    // Deleting the preset removes its templates (no orphans left behind).
+    expect(scheduledTasksDb.deletePreset(id)).toBe(true);
+    expect(scheduledTasksDb.listPresetTasks(id)).toEqual([]);
+    const leftovers = getConnection()
+      .prepare('SELECT COUNT(*) AS count FROM scheduled_task_preset_tasks WHERE preset_id = ?')
+      .get(id) as { count: number };
+    expect(leftovers.count).toBe(0);
+  });
+
+  it('lists presets filtered by source and project, keeping builtins visible everywhere', () => {
+    const id = tag();
+    const builtinAlpha = 'preset-alpha-' + id;
+    const builtinZulu = 'preset-zulu-' + id;
+    const customHere = 'preset-here-' + id;
+    const customThere = 'preset-there-' + id;
+    const projectPath = '/srv/proj-' + id;
+
+    scheduledTasksDb.createPreset({ id: builtinAlpha, source: 'builtin', name: 'Alpha ' + id });
+    scheduledTasksDb.createPreset({ id: builtinZulu, source: 'builtin', name: 'Zulu ' + id });
+    scheduledTasksDb.createPreset({ id: customHere, source: 'custom', name: 'Here ' + id, projectPath });
+    scheduledTasksDb.createPreset({ id: customThere, source: 'custom', name: 'There ' + id, projectPath: '/srv/other-' + id });
+
+    const byId = (rows: { id: string }[]): string[] => rows.map((row) => row.id);
+    const all = byId(scheduledTasksDb.listPresets());
+    expect(all).toEqual(expect.arrayContaining([builtinAlpha, builtinZulu, customHere, customThere]));
+
+    // Builtin rows are returned for every project, custom rows only for their own.
+    const here = byId(scheduledTasksDb.listPresets({ projectPath }));
+    expect(here).toContain(builtinAlpha);
+    expect(here).toContain(builtinZulu);
+    expect(here).toContain(customHere);
+    expect(here).not.toContain(customThere);
+    // A trailing separator still matches (normalizeProjectPath).
+    expect(byId(scheduledTasksDb.listPresets({ projectPath: projectPath + '/' }))).toContain(customHere);
+    // No project context: custom rows are hidden, builtins stay.
+    expect(byId(scheduledTasksDb.listPresets({ projectPath: null }))).not.toContain(customHere);
+    expect(byId(scheduledTasksDb.listPresets({ projectPath: null }))).toContain(builtinAlpha);
+    expect(byId(scheduledTasksDb.listPresets({ projectPath: '' }))).not.toContain(customHere);
+    // Unknown project.
+    expect(byId(scheduledTasksDb.listPresets({ projectPath: '/srv/nowhere-' + id }))).not.toContain(customHere);
+
+    // source and projectPath combine, and builtins are ordered by name.
+    expect(byId(scheduledTasksDb.listPresets({ source: 'custom', projectPath }))).toEqual([customHere]);
+    const builtinOrder = byId(scheduledTasksDb.listPresets({ source: 'builtin' })).filter(
+      (presetId) => presetId === builtinAlpha || presetId === builtinZulu
+    );
+    expect(builtinOrder).toEqual([builtinAlpha, builtinZulu]);
+  });
+
+  it('links real tasks to a preset and lists them by preset', () => {
+    const id = tag();
+    const presetId = 'preset-' + id;
+    scheduledTasksDb.createPreset({ id: presetId, source: 'custom', name: 'Link ' + id, projectPath: '/srv/link-' + id });
+
+    const linked = makeTask({ title: 'Linked ' + id, presetId, presetTaskId: 'tpl-1' });
+    expect(linked.preset_id).toBe(presetId);
+    expect(linked.preset_task_id).toBe('tpl-1');
+
+    makeTask({ title: 'Unlinked ' + id });
+    const second = makeTask({ title: 'Linked too ' + id, presetId, presetTaskId: 'tpl-2' });
+    expect(second.preset_id).toBe(presetId);
+
+    // Oldest first, and unlinked tasks never show up.
+    expect(scheduledTasksDb.listTasksByPreset(presetId).map((row) => row.title)).toEqual([
+      'Linked ' + id,
+      'Linked too ' + id,
+    ]);
+    expect(scheduledTasksDb.listTasksByPreset('no-such-' + id)).toEqual([]);
+    expect(scheduledTasksDb.listTasksByPreset(presetId).every((row) => row.preset_id === presetId)).toBe(true);
+
+    // Relink and clear through updateTask.
+    const relinked = must(scheduledTasksDb.updateTask(second.id, { presetId: 'other-' + id, presetTaskId: null }));
+    expect(relinked.preset_id).toBe('other-' + id);
+    expect(relinked.preset_task_id).toBeNull();
+    expect(scheduledTasksDb.listTasksByPreset(presetId).map((row) => row.id)).toEqual([linked.id]);
+
+    const cleared = must(scheduledTasksDb.updateTask(linked.id, { presetId: null, presetTaskId: null }));
+    expect(cleared.preset_id).toBeNull();
+    expect(cleared.preset_task_id).toBeNull();
+    expect(scheduledTasksDb.listTasksByPreset(presetId)).toEqual([]);
+  });
+
+  it('adds the preset columns and tables to a database created before the feature', () => {
+    const legacy = must(scheduledTasksDb.getTask(legacyTaskId));
+    expect(legacy.preset_id).toBeNull();
+    expect(legacy.preset_task_id).toBeNull();
+
+    const db = getConnection();
+    const columns = (db.prepare('PRAGMA table_info(scheduled_tasks)').all() as { name: string }[]).map((row) => row.name);
+    expect(columns).toContain('preset_id');
+    expect(columns).toContain('preset_task_id');
+
+    const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map(
+      (row) => row.name
+    );
+    expect(tables).toContain('scheduled_task_presets');
+    expect(tables).toContain('scheduled_task_preset_tasks');
+
+    const indexes = (db.prepare("SELECT name FROM sqlite_master WHERE type='index'").all() as { name: string }[]).map(
+      (row) => row.name
+    );
+    expect(indexes).toContain('idx_scheduled_tasks_preset');
+    expect(indexes).toContain('idx_scheduled_task_presets_source');
+    expect(indexes).toContain('idx_scheduled_task_preset_tasks_preset');
+
+    // Re-running the migrations keeps the schema stable.
+    runMigrations();
+    runMigrations();
+    const columnsAfter = (db.prepare('PRAGMA table_info(scheduled_tasks)').all() as { name: string }[]).map(
+      (row) => row.name
+    );
+    expect(columnsAfter).toEqual(columns);
+
+    // The preset tables are usable on the upgraded database.
+    const presetId = 'upgraded-' + tag();
+    scheduledTasksDb.createPreset({ id: presetId, source: 'builtin', name: 'Upgraded ' + presetId });
+    expect(
+      scheduledTasksDb.replacePresetTasks(presetId, [
+        { id: 'tpl-upgraded', title: 'T', prompt: 'p', kind: 'daily', rule: { kind: 'daily' } },
+      ])
+    ).toHaveLength(1);
+    expect(scheduledTasksDb.deletePreset(presetId)).toBe(true);
+  });
 });

@@ -228,7 +228,12 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
   updated_at TEXT NOT NULL,
   -- Script gate (docs section 7)
   command TEXT,
-  command_timeout_seconds INTEGER
+  command_timeout_seconds INTEGER,
+  -- Preset installation link (docs section 10.2). NULL for ad-hoc tasks; the index for
+  -- this column is created in migrations after addColumnIfMissing so that databases
+  -- created before the feature are upgraded too.
+  preset_id TEXT,
+  preset_task_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due ON scheduled_tasks(enabled, next_run_at);`;
 
@@ -252,4 +257,43 @@ CREATE TABLE IF NOT EXISTS scheduled_task_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_scheduled_task_runs_task ON scheduled_task_runs(task_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_scheduled_task_runs_session ON scheduled_task_runs(session_id);`;
+
+// Presets (docs section 10.2): an installable bundle of task templates. `source` is
+// 'builtin' (shipped catalog, re-seeded on every listPresets) or 'custom' (user made).
+// `enabled` is the whole-preset switch; `project_path` is set for custom presets only.
+export const SCHEDULED_TASK_PRESETS_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS scheduled_task_presets (
+  id TEXT PRIMARY KEY,
+  user_id INTEGER,
+  source TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  icon TEXT,
+  version TEXT,
+  enabled INTEGER NOT NULL DEFAULT 0,
+  project_path TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_task_presets_source ON scheduled_task_presets(source);`;
+
+export const SCHEDULED_TASK_PRESET_TASKS_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS scheduled_task_preset_tasks (
+  id TEXT PRIMARY KEY,
+  preset_id TEXT NOT NULL REFERENCES scheduled_task_presets(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  description TEXT,
+  prompt TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'claude',
+  model TEXT,
+  kind TEXT NOT NULL,
+  rule_json TEXT NOT NULL,
+  command TEXT,
+  command_timeout_seconds INTEGER,
+  position INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_task_preset_tasks_preset
+  ON scheduled_task_preset_tasks(preset_id, position);`;
 
