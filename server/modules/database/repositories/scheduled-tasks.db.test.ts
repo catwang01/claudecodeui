@@ -339,6 +339,34 @@ describe('scheduledTasksDb', () => {
     expect(scheduledTasksDb.finishRun(crypto.randomUUID(), { status: 'success' })).toBeUndefined();
   });
 
+  it('links a run to its session before the run finishes', () => {
+    const task = makeTask({ title: 'In flight' });
+    const run = scheduledTasksDb.createRun({
+      taskId: task.id,
+      status: 'running',
+      trigger: 'schedule',
+      startedAt: '2026-02-02T00:00:00.000Z',
+    });
+
+    const linked = must(scheduledTasksDb.attachRunSession(run.id, 'session-in-flight'));
+    expect(linked.session_id).toBe('session-in-flight');
+    expect(linked.status).toBe('running');
+    expect(linked.finished_at).toBeNull();
+
+    // The origin lookup must already see the in-flight run, so the sidebar can tag and hide
+    // the session while the agent is still working.
+    expect(scheduledTasksDb.getSessionOrigins(['session-in-flight']).get('session-in-flight')).toMatchObject({
+      taskId: task.id,
+      taskTitle: 'In flight',
+    });
+    expect(scheduledTasksDb.getAllScheduledTaskSessionIds().has('session-in-flight')).toBe(true);
+
+    expect(scheduledTasksDb.attachRunSession(crypto.randomUUID(), 'session-x')).toBeUndefined();
+    expect(must(scheduledTasksDb.finishRun(run.id, { status: 'success', sessionId: 'session-in-flight' })).session_id).toBe(
+      'session-in-flight'
+    );
+  });
+
   it('paginates runs by started_at DESC and counts per task', () => {
     const task = makeTask({ title: 'Paged task' });
     const other = makeTask({ title: 'Other task' });

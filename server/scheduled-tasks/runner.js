@@ -371,7 +371,16 @@ export function createTaskRunner(deps = {}) {
         switch (message.kind) {
           case 'session_created': {
             const id = message.sessionId ?? message.newSessionId ?? null;
-            if (id) sessionId = id;
+            if (id) {
+              sessionId = id;
+              // Record the link immediately so the session is tagged (and can be hidden)
+              // while the run is still executing, not only once finishRun writes it.
+              try {
+                db.attachRunSession(run.id, id);
+              } catch (err) {
+                console.warn('[scheduled-tasks] attachRunSession failed:', errorMessage(err));
+              }
+            }
             break;
           }
           case 'text': {

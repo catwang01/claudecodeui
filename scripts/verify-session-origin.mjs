@@ -42,6 +42,7 @@ const SESSION_A = '11111111-1111-4111-8111-111111111111';
 const SESSION_B = '22222222-2222-4222-8222-222222222222';
 const SESSION_OLD = '33333333-3333-4333-8333-333333333333';
 const SESSION_DOOMED = '44444444-4444-4444-8444-444444444444';
+const SESSION_LIVE = '55555555-5555-4555-8555-555555555555';
 
 async function main() {
   console.log('[origin-e2e] temp dir: ' + TMP);
@@ -123,6 +124,23 @@ async function main() {
 
   // ── decoration + filter ──────────────────────────────────────────────────
   const makeSessions = () => [{ id: SESSION_A, title: 'a' }, { id: SESSION_B, title: 'b' }, { id: 'plain-session', title: 'c' }];
+
+  await check('an in-flight run is linked as soon as its session exists', () => {
+    const task = scheduledTasksDb.createTask({
+      title: 'In flight task', prompt: 'p', projectPath: TMP, provider: 'claude',
+      kind: 'interval', ruleJson: '{"kind":"interval","everySeconds":300}',
+      nextRunAt: iso(NOW + 60000), enabled: true,
+    });
+    const pending = scheduledTasksDb.createRun({
+      taskId: task.id, status: 'running', trigger: 'schedule', startedAt: iso(NOW - 500),
+    });
+    assert(scheduledTasksDb.getSessionOrigins([SESSION_LIVE]).size === 0, 'no origin before the session exists');
+    scheduledTasksDb.attachRunSession(pending.id, SESSION_LIVE);
+    const map = scheduledTasksDb.getSessionOrigins([SESSION_LIVE]);
+    assert(map.get(SESSION_LIVE)?.taskTitle === 'In flight task', 'in-flight origin missing: ' + JSON.stringify([...map]));
+    assert(scheduledTasksDb.getAllScheduledTaskSessionIds().has(SESSION_LIVE), 'in-flight id missing from the set');
+    return 'linked while running';
+  });
 
   await check('applyScheduledTaskOrigin decorates only the matching sessions', () => {
     const sessions = makeSessions();

@@ -326,6 +326,19 @@ export const scheduledTasksDb = {
     return selectRun(id);
   },
 
+  /**
+   * Link a run to the agent session it started as soon as that session exists, so the
+   * origin tag and the hide filter work while the run is still in flight — finishRun
+   * otherwise records the id minutes later, after the session is already in the sidebar.
+   */
+  attachRunSession(id: string, sessionId: string): ScheduledTaskRunRow | undefined {
+    const info = getConnection()
+      .prepare('UPDATE scheduled_task_runs SET session_id = ? WHERE id = ?')
+      .run(sessionId, id);
+    if (info.changes === 0) return undefined;
+    return selectRun(id);
+  },
+
   listRuns(taskId: string, limit = 20, offset = 0): ScheduledTaskRunRow[] {
     const sql =
       'SELECT * FROM scheduled_task_runs WHERE task_id = ? ' +

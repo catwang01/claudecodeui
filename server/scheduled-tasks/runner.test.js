@@ -7,6 +7,7 @@ vi.mock('../modules/database/index.js', () => ({
   scheduledTasksDb: {
     createRun: vi.fn(),
     finishRun: vi.fn(),
+    attachRunSession: vi.fn(),
   },
 }));
 
@@ -64,6 +65,7 @@ beforeEach(() => {
     output: null,
     error: null,
   }));
+  scheduledTasksDb.attachRunSession.mockReset().mockReturnValue({});
   scheduledTasksDb.finishRun.mockReset().mockImplementation((id, patch) => ({
     id,
     task_id: 't1',
@@ -127,6 +129,11 @@ describe('startTaskRun', () => {
     expect(scheduledTasksDb.finishRun).toHaveBeenCalledWith(
       'run-1',
       expect.objectContaining({ status: 'success', sessionId: 'sess-1', output: 'hello\nworld', error: null })
+    );
+    // The session must be linked while the run is still in flight, not only at finish.
+    expect(scheduledTasksDb.attachRunSession).toHaveBeenCalledWith('run-1', 'sess-1');
+    expect(scheduledTasksDb.attachRunSession.mock.invocationCallOrder[0]).toBeLessThan(
+      scheduledTasksDb.finishRun.mock.invocationCallOrder[0]
     );
     expect(addProjectManually).toHaveBeenCalledWith('/tmp/scheduled-project');
   });
