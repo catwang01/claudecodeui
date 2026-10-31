@@ -194,12 +194,13 @@ describe('deleteTask purge (§10.4)', () => {
 });
 
 describe('preset service delegation (§10.3)', () => {
-  it('exposes the seven preset methods and forwards arguments', async () => {
+  it('exposes the eight preset methods and forwards arguments', async () => {
     const presets = {
       listPresets: vi.fn(async () => ({ ok: true, presets: [] })),
       getPreset: vi.fn(async () => ({ ok: true, preset: {} })),
       installPreset: vi.fn(async () => ({ ok: true })),
       setPresetEnabled: vi.fn(async () => ({ ok: true })),
+      upgradePreset: vi.fn(async () => ({ ok: true })),
       createCustomPreset: vi.fn(async () => ({ ok: true })),
       updatePreset: vi.fn(async () => ({ ok: true })),
       deletePreset: vi.fn(async () => ({ ok: true })),
@@ -210,6 +211,7 @@ describe('preset service delegation (§10.3)', () => {
     await management.presets.getPreset('p1', { projectPath: PROJECT });
     await management.presets.installPreset('p1', { projectPath: PROJECT, enabled: false });
     await management.presets.setPresetEnabled('p1', true, { projectPath: PROJECT });
+    await management.presets.upgradePreset('p1', { projectPath: PROJECT });
     await management.presets.createCustomPreset({ name: 'x', projectPath: PROJECT, taskIds: ['t'] });
     await management.presets.updatePreset('p1', { name: 'y' }, { projectPath: PROJECT });
     await management.presets.deletePreset('p1', { purge: false }, { projectPath: PROJECT });
@@ -218,6 +220,7 @@ describe('preset service delegation (§10.3)', () => {
     expect(presets.getPreset).toHaveBeenCalledWith('p1', { projectPath: PROJECT });
     expect(presets.installPreset).toHaveBeenCalledWith('p1', { projectPath: PROJECT, enabled: false });
     expect(presets.setPresetEnabled).toHaveBeenCalledWith('p1', true, { projectPath: PROJECT });
+    expect(presets.upgradePreset).toHaveBeenCalledWith('p1', { projectPath: PROJECT });
     expect(presets.createCustomPreset).toHaveBeenCalledWith({ name: 'x', projectPath: PROJECT, taskIds: ['t'] });
     expect(presets.updatePreset).toHaveBeenCalledWith('p1', { name: 'y' }, { projectPath: PROJECT });
     expect(presets.deletePreset).toHaveBeenCalledWith('p1', { purge: false }, { projectPath: PROJECT });
@@ -325,4 +328,107 @@ describe('running count (§14.3)', () => {
     expect(runRowToJson({ id: 'run-1', status: 'running' }).agentStartedAt).toBeNull();
   });
 });
+
+describe('copyTask (§15)', () => {
+  it('copies the definition, starts paused and drops history/preset links', async () => {
+    const { repo, management, workspace } = setup();
+    const source = await management.createTask({
+      ...baseTask,
+      command: 'echo hi',
+      commandTimeoutSeconds: 30,
+      params: [{ name: 'region', default: 'eu' }],
+      presetId: 'preset-1',
+      presetTaskId: 'tpl-1',
+    });
+    repo._tasks.get(source.task.id).run_count = 5;
+
+    const result = await management.copyTask(source.task.id);
+
+    expect(result.ok).toBe(true);
+    expect(result.task.id).not.toBe(source.task.id);
+    expect(result.task).toMatchObject({
+      title: 'a (copy)',
+      prompt: 'p',
+      projectPath: PROJECT,
+      enabled: false,
+      nextRunAt: null,
+      command: 'echo hi',
+      commandTimeoutSeconds: 30,
+      runCount: 0,
+      presetId: null,
+      presetTaskId: null,
+    });
+    expect(result.task.params).toEqual([{ name: 'region', type: 'string', default: 'eu' }]);
+    expect(workspace.ensureTaskWorkspace).toHaveBeenCalled();
+  });
+
+  it('honours title/projectPath overrides and enabled:true', async () => {
+    const { management } = setup();
+    const source = await management.createTask(baseTask);
+
+    const result = await management.copyTask(source.task.id, {
+      title: 'clone',
+      projectPath: '/tmp/other',
+      enabled: true,
+    });
+
+    expect(result.task).toMatchObject({ title: 'clone', projectPath: '/tmp/other', enabled: true });
+    expect(result.task.nextRunAt).toBeTruthy();
+  });
+
+  it('is scoped: a task outside the project behaves as not_found', async () => {
+    const { management } = setup();
+    const source = await management.createTask(baseTask);
+
+    const result = await management.copyTask(source.task.id, {}, { projectPath: '/tmp/elsewhere' });
+
+    expect(result).toMatchObject({ ok: false, code: 'not_found' });
+  });
+});
+
+describe('import/export (§16)', () => {
+  it('exports a portable envelope without ids or history', async () => {
+    const { management } = setup();
+    const source = await management.createTask({ ...baseTask, params: [{ name: 'a' }] });
+
+    const result = await management.exportTask(source.task.id);
+
+    expect(result.ok).toBe(true);
+    expect(result.format).toBe('claudecodeui.scheduled-task');
+    expect(result.version).toBe(1);
+    expect(result.task).toMatchObject({ title: 'a', prompt: 'p', projectPath: PROJECT });
+    expect(result.task.id).toBeUndefined();
+    expect(result.task.nextRunAt).toBeUndefined();
+    expect(result.task.params).toEqual([{ name: 'a', type: 'string' }]);
+  });
+
+  it('imports an envelope paused and validates format/version', async () => {
+    const { management } = setup();
+    const envelope = { format: 'claudecodeui.scheduled-task', version: 1, task: { ...baseTask } };
+
+    const result = await management.importTask(envelope);
+    expect(result.ok).toBe(true);
+    expect(result.task).toMatchObject({ title: 'a', enabled: false, nextRunAt: null });
+
+    expect(await management.importTask({ format: 'nope', task: baseTask })).toMatchObject({
+      ok: false,
+      code: 'invalid_input',
+    });
+    expect(
+      await management.importTask({ format: 'claudecodeui.scheduled-task', version: 99, task: baseTask })
+    ).toMatchObject({ ok: false, code: 'invalid_input' });
+  });
+
+  it('resolves the target project from input > envelope > scope', async () => {
+    const { management } = setup();
+    const envelope = { task: { title: 'i', prompt: 'p', rule: baseTask.rule } };
+
+    const scoped = await management.importTask(envelope, { projectPath: '/tmp/scoped' });
+    expect(scoped.task.projectPath).toBe('/tmp/scoped');
+
+    const explicit = await management.importTask({ ...envelope, projectPath: '/tmp/explicit' });
+    expect(explicit.task.projectPath).toBe('/tmp/explicit');
+  });
+});
+
 

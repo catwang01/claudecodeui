@@ -29,8 +29,17 @@ export default function PresetsSection({ onTasksChanged, onOverlayChange }: Pres
   const { t } = useTranslation('scheduledTasks');
   const [projectOptions, setProjectOptions] = useState<ProjectOption[]>([]);
   const [projectPath, setProjectPath] = useState('');
-  const { presets, isLoading, error, refresh, installPreset, setPresetEnabled, createPreset, removePreset } =
-    useScheduledTaskPresets(projectPath);
+  const {
+    presets,
+    isLoading,
+    error,
+    refresh,
+    installPreset,
+    setPresetEnabled,
+    upgradePreset,
+    createPreset,
+    removePreset,
+  } = useScheduledTaskPresets(projectPath);
 
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -82,6 +91,22 @@ export default function PresetsSection({ onTasksChanged, onOverlayChange }: Pres
       setActionError(
         err instanceof Error ? err.message : t(enabled ? 'presets.errors.enable' : 'presets.errors.disable'),
       );
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleUpgrade = async (preset: Preset) => {
+    setBusyId(preset.id);
+    setActionError(null);
+    setResultMessage(null);
+    try {
+      const result = await upgradePreset(preset.id, { projectPath: scopeFor(preset) });
+      const updated = result.projects.reduce((sum, entry) => sum + entry.updated.length, 0);
+      setResultMessage(t('presets.result.upgraded', { updated, projects: result.projects.length }));
+      onTasksChanged?.();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : t('presets.errors.upgrade'));
     } finally {
       setBusyId(null);
     }
@@ -258,6 +283,9 @@ export default function PresetsSection({ onTasksChanged, onOverlayChange }: Pres
                 onToggleExpanded={(target) => setExpandedId((current) => (current === target.id ? null : target.id))}
                 onToggleEnabled={handleToggleEnabled}
                 onInstall={openInstall}
+                onUpgrade={(target) => {
+                  void handleUpgrade(target);
+                }}
                 onDelete={openDelete}
               />
             ))}
@@ -280,6 +308,9 @@ export default function PresetsSection({ onTasksChanged, onOverlayChange }: Pres
                 onToggleExpanded={(target) => setExpandedId((current) => (current === target.id ? null : target.id))}
                 onToggleEnabled={handleToggleEnabled}
                 onInstall={openInstall}
+                onUpgrade={(target) => {
+                  void handleUpgrade(target);
+                }}
                 onDelete={openDelete}
               />
             ))}

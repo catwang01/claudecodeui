@@ -79,6 +79,7 @@ function renderCard(task: ScheduledTask) {
       onToggleEnabled={noop}
       onRunNow={noop}
       onEdit={noop}
+      onCopy={noop}
       onDelete={noop}
       onToggleHistory={noop}
     />,
@@ -116,6 +117,7 @@ describe('ScheduledTaskCard run history freshness', () => {
         onToggleEnabled={noop}
         onRunNow={noop}
         onEdit={noop}
+        onCopy={noop}
         onDelete={noop}
         onToggleHistory={noop}
       />,
@@ -142,6 +144,7 @@ describe('ScheduledTaskCard run history freshness', () => {
           onToggleEnabled={noop}
           onRunNow={noop}
           onEdit={noop}
+          onCopy={noop}
           onDelete={noop}
           onToggleHistory={noop}
         />,
@@ -158,6 +161,7 @@ describe('ScheduledTaskCard run history freshness', () => {
         onToggleEnabled={noop}
         onRunNow={noop}
         onEdit={noop}
+        onCopy={noop}
         onDelete={noop}
         onToggleHistory={noop}
       />,
@@ -176,6 +180,7 @@ describe('ScheduledTaskCard parameters', () => {
         onToggleEnabled={noop}
         onRunNow={noop}
         onEdit={noop}
+        onCopy={noop}
         onDelete={noop}
         onToggleHistory={noop}
       />,

@@ -1,4 +1,4 @@
-import { Cpu, FolderOpen, History, Loader2, Pencil, Play, Repeat, Terminal, Trash2 } from 'lucide-react';
+import { Copy, Cpu, Download, FolderOpen, History, Loader2, Pencil, Play, Repeat, Terminal, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button, Tooltip } from '../../../shared/view/ui';
 import { cn } from '../../../lib/utils';
@@ -17,6 +17,8 @@ type ScheduledTaskCardProps = {
   onToggleEnabled: (task: ScheduledTask, enabled: boolean) => void;
   onRunNow: (task: ScheduledTask) => void;
   onEdit: (task: ScheduledTask) => void;
+  onCopy: (task: ScheduledTask) => void;
+  onExport?: (task: ScheduledTask) => void;
   onDelete: (task: ScheduledTask) => void;
   onToggleHistory: (task: ScheduledTask) => void;
   onOpenSession?: (sessionId: string) => void;
@@ -43,6 +45,8 @@ export default function ScheduledTaskCard({
   onToggleEnabled,
   onRunNow,
   onEdit,
+  onCopy,
+  onExport,
   onDelete,
   onToggleHistory,
   onOpenSession,
@@ -163,6 +167,29 @@ export default function ScheduledTaskCard({
               onClick={() => onEdit(task)}
             >
               <Pencil className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
+              aria-label={t('actions.copy')}
+              title={t('actions.copy')}
+              disabled={isBusy}
+              onClick={() => onCopy(task)}
+            >
+              <Copy className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
+              aria-label={t('actions.export')}
+              title={t('actions.export')}
+              onClick={() => onExport?.(task)}
+            >
+              <Download className="h-3.5 w-3.5" />
             </Button>
             <Button
               type="button"

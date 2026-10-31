@@ -23,6 +23,10 @@ const TASK_STATUSES = new Set(['active', 'paused', 'all']);
 const DEFAULT_RUNS_LIMIT = 20;
 const MAX_RUNS_LIMIT = 100;
 
+/** §16: portable single-task export envelope (format id + schema version). */
+export const TASK_EXPORT_FORMAT = 'claudecodeui.scheduled-task';
+export const TASK_EXPORT_VERSION = 1;
+
 function errorMessage(err) {
   if (err instanceof Error && err.message) return err.message;
   if (typeof err === 'string' && err) return err;
@@ -530,8 +534,11 @@ export function createManagement(deps = {}) {
     const checked = validateAndNormalize(withIntervalAnchor(input.rule, nowMs), rules);
     if (!checked.ok) return checked;
 
-    const nextRunAt = nextRunIso(checked.rule, rules, nowMs);
-    if (!nextRunAt) {
+    // §5/§15/§16: a task created paused carries no next run (mirrors PATCH
+    // enabled:false) and may legitimately be a `once` whose time already passed.
+    const enabled = input.enabled !== false;
+    const nextRunAt = enabled ? nextRunIso(checked.rule, rules, nowMs) : null;
+    if (enabled && !nextRunAt) {
       return fail('invalid_schedule_time', 'Rule has no upcoming run');
     }
 
@@ -545,7 +552,7 @@ export function createManagement(deps = {}) {
       kind: checked.rule.kind,
       ruleJson: JSON.stringify(checked.rule),
       nextRunAt,
-      enabled: input.enabled !== false,
+      enabled,
       command: command ? command.value : undefined,
       commandTimeoutSeconds: commandTimeoutSeconds ? commandTimeoutSeconds.value : undefined,
       paramsJson: params ? params.value : undefined,
@@ -716,6 +723,130 @@ export function createManagement(deps = {}) {
     return { ok: true, run: runRowToJson(result.run) };
   }
 
+  // ─── Copy / import / export (§15, §16) ──────────────────────────────────────
+
+  /**
+   * §15: duplicate a task. The copy keeps the definition (prompt, provider,
+   * model, script gate, params and rule) but never the run history, the run
+   * counters, the preset link or the last-status fields. It is created *paused*
+   * unless the caller explicitly passes enabled:true, so copying can never
+   * silently double a running schedule.
+   */
+  async function copyTask(id, options = {}, scope = {}) {
+    const repo = await getRepo();
+    const rules = await getRules();
+    const row = await findTask(id, scope);
+    if (!row) return notFound();
+
+    const title = nonEmptyString(options.title) || `${row.title} (copy)`;
+    const projectPath =
+      nonEmptyString(options.projectPath) || nonEmptyString(row.project_path ?? row.projectPath);
+    if (!projectPath) return fail('invalid_input', 'projectPath is required');
+
+    // §15: the rule is carried over unchanged (an interval keeps its original
+    // anchor, so the copy shares the original cadence rather than restarting it).
+    const storedRule = parseJson(row.rule_json ?? row.ruleJson);
+    const checked = validateAndNormalize(withIntervalAnchor(storedRule, now()), rules);
+    if (!checked.ok) return checked;
+
+    const enabled = options.enabled === true;
+    const nowMs = now();
+    const nextRunAt = enabled ? nextRunIso(checked.rule, rules, nowMs) : null;
+    if (enabled && !nextRunAt) {
+      return fail('invalid_schedule_time', 'Rule has no upcoming run');
+    }
+
+    const created = repo.createTask({
+      userId: options.userId ?? row.user_id ?? row.userId ?? null,
+      title,
+      prompt: row.prompt,
+      projectPath,
+      provider: row.provider ?? 'claude',
+      model: row.model ?? null,
+      kind: checked.rule.kind,
+      ruleJson: JSON.stringify(checked.rule),
+      nextRunAt,
+      enabled,
+      command: row.command ?? null,
+      commandTimeoutSeconds: row.command_timeout_seconds ?? null,
+      paramsJson: row.params_json ?? row.paramsJson ?? null,
+    });
+    await ensureTaskWorkspaceBestEffort(created);
+    return { ok: true, task: taskRowToJson(created) };
+  }
+
+  /**
+   * §16: the portable form of one task. Ids, run history, preset linkage and
+   * the counters are deliberately absent: the envelope is a shareable template.
+   */
+  async function exportTask(id, scope = {}) {
+    const row = await findTask(id, scope);
+    if (!row) return notFound();
+    const task = taskRowToJson(row);
+    return {
+      ok: true,
+      format: TASK_EXPORT_FORMAT,
+      version: TASK_EXPORT_VERSION,
+      exportedAt: new Date(now()).toISOString(),
+      task: {
+        title: task.title,
+        prompt: task.prompt,
+        projectPath: task.projectPath,
+        provider: task.provider,
+        model: task.model,
+        command: task.command,
+        commandTimeoutSeconds: task.commandTimeoutSeconds,
+        params: task.params ?? [],
+        rule: task.rule,
+      },
+    };
+  }
+
+  /**
+   * §16: materialize an exported envelope (or a raw task definition) into a new
+   * paused task. The target project resolves as input.projectPath &gt; envelope
+   * projectPath &gt; the caller scope; the format/version are validated so a
+   * foreign JSON file fails loudly instead of creating a half-empty task.
+   */
+  async function importTask(input = {}, scope = {}) {
+    const envelope = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+    if (envelope.format !== undefined && envelope.format !== TASK_EXPORT_FORMAT) {
+      return fail('invalid_input', `Unsupported task format: ${String(envelope.format)}`);
+    }
+    if (envelope.version !== undefined && Number(envelope.version) !== TASK_EXPORT_VERSION) {
+      return fail('invalid_input', `Unsupported task format version: ${String(envelope.version)}`);
+    }
+    const candidate =
+      envelope.task && typeof envelope.task === 'object' && !Array.isArray(envelope.task)
+        ? envelope.task
+        : envelope;
+    if (!nonEmptyString(candidate.title) && !nonEmptyString(input.title)) {
+      return fail('invalid_input', 'title is required');
+    }
+    const projectPath =
+      nonEmptyString(input.projectPath) ||
+      nonEmptyString(candidate.projectPath) ||
+      nonEmptyString(scope.projectPath);
+    if (!projectPath) return fail('invalid_input', 'projectPath is required');
+    const enabled = input.enabled !== undefined ? input.enabled === true : candidate.enabled === true;
+    return createTask(
+      {
+        userId: input.userId ?? scope.userId ?? null,
+        title: nonEmptyString(input.title) || candidate.title,
+        prompt: candidate.prompt,
+        projectPath,
+        provider: candidate.provider,
+        model: candidate.model,
+        command: candidate.command,
+        commandTimeoutSeconds: candidate.commandTimeoutSeconds,
+        params: candidate.params,
+        rule: candidate.rule,
+        enabled,
+      },
+      scope
+    );
+  }
+
   return {
     // views
     taskView: taskRowToJson,
@@ -735,6 +866,10 @@ export function createManagement(deps = {}) {
     resumeTask: (id, scope) => setEnabled(id, true, scope),
     deleteTask,
     runTaskNow,
+    // §15/§16 copy + portability
+    copyTask,
+    exportTask,
+    importTask,
     // §10.3 presets — same service for the REST routes and the agent tools.
     presets: {
       listPresets: (options) => getPresetsService().then((service) => service.listPresets(options)),
@@ -742,6 +877,8 @@ export function createManagement(deps = {}) {
       installPreset: (id, options) => getPresetsService().then((service) => service.installPreset(id, options)),
       setPresetEnabled: (id, enabled, options) =>
         getPresetsService().then((service) => service.setPresetEnabled(id, enabled, options)),
+      upgradePreset: (id, options) =>
+        getPresetsService().then((service) => service.upgradePreset(id, options)),
       createCustomPreset: (input) => getPresetsService().then((service) => service.createCustomPreset(input)),
       updatePreset: (id, patch, options) =>
         getPresetsService().then((service) => service.updatePreset(id, patch, options)),

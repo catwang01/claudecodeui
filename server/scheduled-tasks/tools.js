@@ -39,11 +39,17 @@ export const SCHEDULE_TOOL_NAMES = [
   'schedule_run',
   'schedule_pause',
   'schedule_resume',
+  // §15/§16 copy + task portability
+  'schedule_copy',
+  'schedule_export',
+  'schedule_import',
   // §10.6 presets
   'schedule_preset_list',
   'schedule_preset_install',
   'schedule_preset_set_enabled',
   'schedule_preset_create',
+  // §16 preset upgrade
+  'schedule_preset_upgrade',
 ];
 
 const DISABLED_VALUES = new Set(['0', 'false', 'off', 'no']);
@@ -329,6 +335,46 @@ export function createScheduleTools(options = {}) {
     return result.ok ? result.task : result;
   });
 
+  // ─── Copy / portability (§15, §16) ───────────────────────────────────────────
+
+  const copy = guarded('schedule_copy', async (args) => {
+    const result = await management.copyTask(
+      args.id,
+      {
+        title: args.title,
+        projectPath: args.project_path,
+        enabled: args.enabled,
+        userId,
+      },
+      scope
+    );
+    return result.ok ? result.task : result;
+  });
+
+  const exportTask = guarded('schedule_export', async (args) => {
+    const result = await management.exportTask(args.id, scope);
+    if (!result.ok) return result;
+    return {
+      format: result.format,
+      version: result.version,
+      exportedAt: result.exportedAt,
+      task: result.task,
+    };
+  });
+
+  const importTask = guarded('schedule_import', async (args) => {
+    const result = await management.importTask(
+      {
+        task: args.task,
+        projectPath: args.project_path || projectPath,
+        enabled: args.enabled,
+        userId,
+      },
+      scope
+    );
+    return result.ok ? result.task : result;
+  });
+
   // ─── Presets (§10.6) ─────────────────────────────────────────────────────────
 
   const presetList = guarded('schedule_preset_list', async (args) => {
@@ -382,6 +428,15 @@ export function createScheduleTools(options = {}) {
     });
     if (!result.ok) return result;
     return { preset: result.preset };
+  });
+
+  const presetUpgrade = guarded('schedule_preset_upgrade', async (args) => {
+    const result = await management.presets.upgradePreset(args.id, {
+      projectPath: projectPath ?? null,
+      userId,
+    });
+    if (!result.ok) return result;
+    return { preset: result.preset, tasks: result.tasks, projects: result.projects };
   });
 
   return [
@@ -477,6 +532,47 @@ export function createScheduleTools(options = {}) {
       { annotations: { readOnlyHint: false } }
     ),
     tool(
+      'schedule_copy',
+      SCHEDULER_PRECEDENCE_NOTE +
+        ' Duplicate a scheduled task. The copy keeps the prompt, params, script gate and rule but starts with a fresh run history and no preset link; it is created paused unless enabled is true. project_path defaults to the source project, so a task can be copied into another project.' +
+        PREDEFINED_VARS_NOTE,
+      {
+        id: z.string().describe('Scheduled task id to copy.'),
+        title: z.string().describe('Optional title for the copy; defaults to "<title> (copy)".').optional(),
+        project_path: z
+          .string()
+          .describe('Target project path; defaults to the source task project.')
+          .optional(),
+        enabled: z.boolean().describe('Create the copy enabled. Defaults to false (paused).').optional(),
+      },
+      copy,
+      { annotations: { readOnlyHint: false } }
+    ),
+    tool(
+      'schedule_export',
+      SCHEDULER_PRECEDENCE_NOTE +
+        ' Export one scheduled task as a portable JSON envelope (format, version, task) that schedule_import or another instance can recreate. Run history and ids are not included.' +
+        PREDEFINED_VARS_NOTE,
+      { id: z.string().describe('Scheduled task id.') },
+      exportTask,
+      { annotations: { readOnlyHint: true } }
+    ),
+    tool(
+      'schedule_import',
+      SCHEDULER_PRECEDENCE_NOTE +
+        ' Create a new paused scheduled task from a schedule_export envelope (or a raw task definition). The target project defaults to the session project when the envelope has no projectPath.' +
+        PREDEFINED_VARS_NOTE,
+      {
+        task: z
+          .record(z.string(), z.unknown())
+          .describe('Exported task object: title, prompt, rule, and optional provider/model/command/commandTimeoutSeconds/params.'),
+        project_path: z.string().describe('Target project path; defaults to the session project.').optional(),
+        enabled: z.boolean().describe('Create the imported task enabled. Defaults to false (paused).').optional(),
+      },
+      importTask,
+      { annotations: { readOnlyHint: false } }
+    ),
+    tool(
       'schedule_preset_list',
       SCHEDULER_PRECEDENCE_NOTE +
         ' List installable task presets: the built-in catalog plus the custom presets that belong to this project. Set include_catalog to false to list custom presets only.' +
@@ -533,6 +629,15 @@ export function createScheduleTools(options = {}) {
           .optional(),
       },
       presetCreate,
+      { annotations: { readOnlyHint: false } }
+    ),
+    tool(
+      'schedule_preset_upgrade',
+      SCHEDULER_PRECEDENCE_NOTE +
+        ' Re-materialize a built-in preset from the current catalog into every project where it is installed, preserving each task\'s enabled flag. Custom presets cannot be upgraded.' +
+        PREDEFINED_VARS_NOTE,
+      { id: z.string().describe('Built-in preset id.') },
+      presetUpgrade,
       { annotations: { readOnlyHint: false } }
     ),
   ];

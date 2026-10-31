@@ -25,6 +25,7 @@
     },
     "actions": {
       "install": "安装到项目",
+      "upgrade": "从内置目录更新",
       "uninstall": "卸载",
       "delete": "删除预设包",
       "enable": "启用预设包",
@@ -94,7 +95,8 @@
       "removed_other": "已删除 {{count}} 个任务。",
       "detached": "预设包已删除，其任务已保留。",
       "uninstalled": "预设包已卸载。",
-      "created": "已创建预设包“{{name}}”。"
+      "created": "已创建预设包“{{name}}”。",
+      "upgraded": "已更新 {{projects}} 个项目中的 {{updated}} 个任务。"
     },
     "errors": {
       "install": "无法安装预设包。",
@@ -102,6 +104,7 @@
       "disable": "无法停用预设包。",
       "delete": "无法删除预设包。",
       "create": "无法创建预设包。",
+      "upgrade": "无法更新预设包。",
       "tasks": "无法加载任务。"
     }
   },
@@ -127,6 +130,9 @@
     "edit": "编辑",
     "delete": "删除",
     "runNow": "立即运行",
+    "copy": "复制任务",
+    "export": "导出任务",
+    "import": "导入任务",
     "history": "运行记录",
     "hideHistory": "隐藏记录",
     "loadMore": "加载更多",
@@ -172,7 +178,10 @@
     "save": "无法保存任务。",
     "delete": "无法删除任务。",
     "run": "无法启动任务。",
-    "update": "无法更新任务。"
+    "update": "无法更新任务。",
+    "copy": "无法复制任务。",
+    "export": "无法导出任务。",
+    "import": "无法导入任务。"
   },
   "confirmDelete": {
     "title": "删除这个任务？",
@@ -337,6 +346,23 @@
     "exitCode": "退出码",
     "params": "参数",
     "builtinsHint": "每次运行还会导出预定义变量（SCHEDULED_TASK_ID、TITLE、PROJECT、CWD、DIR、RUN_ID、RUN_DIR）；请从中读取，不要硬编码路径。"
+  },
+  "copyDialog": {
+    "title": "复制 {{title}}",
+    "defaultTitle": "{{title}}（副本）",
+    "description": "副本会保留提示词、计划、脚本门控和参数，但运行记录从零开始。默认以暂停状态创建。",
+    "fields": {
+      "title": "标题",
+      "project": "项目",
+      "enabled": "创建后启用副本",
+      "enabledHint": "暂停后仍保留计划，但不会运行。"
+    },
+    "confirm": "复制",
+    "copying": "复制中…",
+    "errors": {
+      "title": "请输入标题。",
+      "project": "请选择项目。"
+    }
   },
   "time": {
     "unknown": "未知"

@@ -260,3 +260,56 @@ export interface DeletePresetResult {
   deleted: boolean;
   removedTasks: number;
 }
+/** Payload of POST /:id/copy (section 15). */
+export interface CopyTaskInput {
+  title?: string;
+  /** Target project; defaults to the source task's project. */
+  projectPath?: string;
+  /** Created paused unless true. */
+  enabled?: boolean;
+}
+
+/** Portable task definition inside an export envelope (section 16). */
+export interface TaskExportPayload {
+  title: string;
+  prompt: string;
+  projectPath?: string;
+  provider?: string;
+  model?: string | null;
+  command?: string | null;
+  commandTimeoutSeconds?: number | null;
+  params?: ParamDef[];
+  rule: RulePayload;
+}
+
+/** GET /:id/export response (section 16). */
+export interface TaskExport {
+  format: string;
+  version: number;
+  exportedAt: string;
+  task: TaskExportPayload;
+}
+
+/** Arguments of POST /import (section 16). */
+export interface ImportTaskInput {
+  task: TaskExportPayload;
+  /** Target project; defaults to the envelope's projectPath. */
+  projectPath?: string;
+  enabled?: boolean;
+}
+
+/** One project upgraded by POST /presets/:id/upgrade (section 16). */
+export interface PresetUpgradeProject {
+  projectPath: string;
+  created: string[];
+  updated: string[];
+  skipped: string[];
+}
+
+/** POST /presets/:id/upgrade response (section 16). */
+export interface PresetUpgradeResult {
+  preset: Preset;
+  tasks: ScheduledTask[];
+  projects: PresetUpgradeProject[];
+}
+

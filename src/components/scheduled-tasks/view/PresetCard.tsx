@@ -1,4 +1,4 @@
-import { Boxes, ChevronDown, ChevronRight, Download, Loader2, PackagePlus, Terminal, Trash2 } from 'lucide-react';
+import { Boxes, ChevronDown, ChevronRight, Download, Loader2, PackagePlus, RefreshCw, Terminal, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button, Tooltip } from '../../../shared/view/ui';
 import { cn } from '../../../lib/utils';
@@ -15,6 +15,8 @@ type PresetCardProps = {
   onToggleExpanded: (preset: Preset) => void;
   onToggleEnabled: (preset: Preset, enabled: boolean) => void;
   onInstall: (preset: Preset) => void;
+  /** §16: refresh a built-in preset's installed tasks from the catalog. */
+  onUpgrade?: (preset: Preset) => void;
   onDelete: (preset: Preset) => void;
 };
 
@@ -29,6 +31,7 @@ export default function PresetCard({
   onToggleExpanded,
   onToggleEnabled,
   onInstall,
+  onUpgrade,
   onDelete,
 }: PresetCardProps) {
   const { t, i18n } = useTranslation('scheduledTasks');
@@ -135,6 +138,20 @@ export default function PresetCard({
             disabled={isBusy}
           />
           <div className="flex items-center gap-0.5">
+            {isBuiltin && onUpgrade && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
+                aria-label={t('presets.actions.upgrade')}
+                title={t('presets.actions.upgrade')}
+                disabled={isBusy}
+                onClick={() => onUpgrade(preset)}
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+              </Button>
+            )}
             <Button
               type="button"
               variant="ghost"

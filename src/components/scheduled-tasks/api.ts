@@ -1,17 +1,21 @@
 import { authenticatedFetch } from '../../utils/api';
 import type { Project } from '../../types/app';
 import type {
+  CopyTaskInput,
   CustomPresetInput,
   DeletePresetResult,
+  ImportTaskInput,
   InstallPresetResult,
   Preset,
   PresetEnabledResult,
   PresetPatch,
+  PresetUpgradeResult,
   ProjectOption,
   ScheduledTask,
   ScheduledTaskInput,
   ScheduledTaskPatch,
   ScheduledTaskRun,
+  TaskExport,
   TaskStatusFilter,
 } from './types';
 
@@ -128,6 +132,32 @@ export const scheduledTasksApi = {
     return data.task;
   },
 
+  /** POST /:id/copy (section 15): a paused duplicate unless enabled:true. */
+  async copy(id: string, input: CopyTaskInput = {}): Promise<ScheduledTask> {
+    const response = await authenticatedFetch(`${BASE_URL}/${encodeURIComponent(id)}/copy`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+    const data = await parseResponse<{ task: ScheduledTask }>(response);
+    return data.task;
+  },
+
+  /** GET /:id/export (section 16): the portable single-task envelope. */
+  async exportTask(id: string): Promise<TaskExport> {
+    const response = await authenticatedFetch(`${BASE_URL}/${encodeURIComponent(id)}/export`);
+    return parseResponse<TaskExport>(response);
+  },
+
+  /** POST /import (section 16): create a paused task from an envelope. */
+  async importTask(input: ImportTaskInput): Promise<ScheduledTask> {
+    const response = await authenticatedFetch(`${BASE_URL}/import`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+    const data = await parseResponse<{ task: ScheduledTask }>(response);
+    return data.task;
+  },
+
   async remove(id: string): Promise<void> {
     const response = await authenticatedFetch(`${BASE_URL}/${encodeURIComponent(id)}`, {
       method: 'DELETE',
@@ -227,6 +257,23 @@ export const scheduledTasksApi = {
       created: data.created ?? [],
       updated: data.updated ?? [],
       skipped: data.skipped ?? [],
+    };
+  },
+
+  /** POST /presets/:id/upgrade (section 16): refresh installed builtin templates. */
+  async upgradePreset(
+    id: string,
+    options: { projectPath?: string } = {},
+  ): Promise<PresetUpgradeResult> {
+    const response = await authenticatedFetch(
+      `${PRESETS_URL}/${encodeURIComponent(id)}/upgrade`,
+      { method: 'POST', body: JSON.stringify({ projectPath: options.projectPath }) },
+    );
+    const data = await parseResponse<Partial<PresetUpgradeResult>>(response);
+    return {
+      preset: data.preset as Preset,
+      tasks: data.tasks ?? [],
+      projects: data.projects ?? [],
     };
   },
 

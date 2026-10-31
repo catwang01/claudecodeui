@@ -141,10 +141,10 @@ beforeEach(() => {
 });
 
 describe('tool registration', () => {
-  it('registers the twelve schedule_* tools in contract order', () => {
+  it('registers the sixteen schedule_* tools in contract order', () => {
     const { tools } = setup();
     expect(tools.map((definition) => definition.name)).toEqual(SCHEDULE_TOOL_NAMES);
-    expect(SCHEDULE_TOOL_NAMES).toHaveLength(12);
+    expect(SCHEDULE_TOOL_NAMES).toHaveLength(16);
     for (const definition of tools) {
       expect(typeof definition.handler).toBe('function');
       expect(definition.description).toBeTruthy();
@@ -588,10 +588,10 @@ describe('§6.1 built-in Cron precedence', () => {
     return end === -1 ? description : description.slice(0, end + 1);
   }
 
-  it('states the precedence note in the first sentence of all twelve descriptions', () => {
+  it('states the precedence note in the first sentence of all sixteen descriptions', () => {
     const { tools } = setup();
 
-    expect(tools).toHaveLength(12);
+    expect(tools).toHaveLength(16);
     for (const definition of tools) {
       const sentence = firstSentence(definition.description);
       expect(sentence, definition.name).toContain(PREFERENCE_MARKER);
@@ -848,11 +848,11 @@ describe('params (§12)', () => {
     expect(byName.schedule_update.description).toMatch(/parameter/i);
   });
 
-  it('lists every §13 predefined variable and the id clarification on all twelve tools', () => {
+  it('lists every §13 predefined variable and the id clarification on all sixteen tools', () => {
     const { byName } = setup();
 
     expect(PREDEFINED_ENV_NAMES).toHaveLength(7);
-    expect(Object.keys(byName)).toHaveLength(12);
+    expect(Object.keys(byName)).toHaveLength(16);
 
     for (const name of Object.keys(byName)) {
       const description = byName[name].description;
@@ -885,5 +885,52 @@ describe('params (§12)', () => {
       expect(byName[name].description, name).not.toContain('SCHEDULED_TASK_STATE_DIR');
       expect(byName[name].description, name).not.toContain('SCHEDULED_TASK_TMP_DIR');
     }
+  });
+});
+
+describe('copy / import / export (§15, §16)', () => {
+  it('schedule_copy duplicates a task paused and can target another project', async () => {
+    const { call } = setup();
+    const created = await call('schedule_create', { title: 'A', prompt: 'p', every_seconds: 60 });
+
+    const copied = await call('schedule_copy', { id: created.id, project_path: OTHER });
+
+    expect(copied.id).not.toBe(created.id);
+    expect(copied).toMatchObject({ title: 'A (copy)', enabled: false, nextRunAt: null, projectPath: OTHER });
+  });
+
+  it('schedule_copy is scoped to the session project', async () => {
+    const { call } = setup();
+    const created = await call('schedule_create', { title: 'A', prompt: 'p', every_seconds: 60, project_path: OTHER });
+    // Created in OTHER; the session scope is PROJECT, so it is invisible.
+    expect(created.id).toBeTruthy();
+    const copied = await call('schedule_copy', { id: created.id });
+    expect(copied.code).toBe('not_found');
+  });
+
+  it('schedule_export round-trips through schedule_import paused', async () => {
+    const { call } = setup();
+    const created = await call('schedule_create', { title: 'A', prompt: 'p', every_seconds: 60 });
+
+    const exported = await call('schedule_export', { id: created.id });
+    expect(exported).toMatchObject({ format: 'claudecodeui.scheduled-task', version: 1 });
+    expect(exported.task.id).toBeUndefined();
+
+    const imported = await call('schedule_import', { task: exported.task, project_path: OTHER });
+    expect(imported).toMatchObject({ projectPath: OTHER, enabled: false });
+  });
+});
+
+describe('schedule_preset_upgrade (§16)', () => {
+  it('forwards to the preset service scoped to the session project', async () => {
+    const presets = {
+      upgradePreset: vi.fn(async () => ({ ok: true, preset: { id: 'p1' }, tasks: [], projects: [] })),
+    };
+    const { call } = setup({ presets });
+
+    const result = await call('schedule_preset_upgrade', { id: 'p1' });
+
+    expect(result).toMatchObject({ preset: { id: 'p1' } });
+    expect(presets.upgradePreset).toHaveBeenCalledWith('p1', { projectPath: PROJECT, userId: null });
   });
 });

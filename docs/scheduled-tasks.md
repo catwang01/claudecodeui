@@ -1,3 +1,4 @@
+
 # Scheduled Tasks (定时任务) — Design & Frozen Contract
 
 Status: implemented in this change. Reference: DSH `@deepseek-ai/dsh-schedule` /
@@ -1131,3 +1132,103 @@ export function emitScheduledTaskRunState(event)    // 永不抛：订阅者出�
   runner 在 agent 启动 / 结束时各发一次事件（顺序 `agent_started` → `finished`，计数 1 → 0），
   以及 skip 路径只发 `finished`（永不发 `agent_started`）。
 - 端到端：重启服务后连 `ws://…/ws?token=…`，触发一次 run，客户端应秒级收到 `scheduled_task_running_count`。
+## 16. Copy a task（第十三轮）
+
+需求：复制一条定时任务。复制品保留“任务定义”，但不带走运行历史、计数和预设包关联；默认**暂停**，
+避免复制动作本身立刻产生第二条重复调度。
+
+### 15.1 Model
+
+- `POST /api/scheduled-tasks/:id/copy`，body `{ title?, projectPath?, enabled? }` → `201 { task }`。
+- 复制字段：`prompt`、`provider`、`model`、`command`、`commandTimeoutSeconds`、`params`、`rule`。
+- 不复制：`id`（新生成）、运行历史、`runCount`/`lastRunAt`/`lastStatus`/`lastError`、
+  `preset_id`/`preset_task_id`。`user_id` 取调用者，缺省回退源任务的 `user_id`。
+- `title` 缺省为 `<source.title> (copy)`；`projectPath` 缺省为源任务的项目。
+- `enabled` 缺省 `false`：复制品以暂停创建、`nextRunAt` 为 `null`。显式 `enabled:true` 时从当前时间
+  重算 `nextRunAt`；若规则已无后续运行（例如已过期的 `once`）→ `invalid_schedule_time`。
+- interval 规则保留**原有 anchor**，因此复制品与源任务同相位（不是从复制时刻重新起算）。
+
+### 15.2 Scope
+
+源任务按调用方作用域解析（agent 工具只允许复制 session cwd 下的任务，越界即 `not_found`）；
+目标项目**不受作用域限制**（与 §10.1 的 preset install 一致），因此可把任务复制到另一个项目。
+
+### 15.3 Agent tool
+
+`schedule_copy`：`id`，可选 `title` / `project_path` / `enabled`，返回 task view。
+
+### 15.4 Frontend
+
+任务卡片新增 copy 按钮，打开 `CopyTaskDialog`（标题 + 项目选择 + 是否启用），提交后刷新列表；
+i18n key `copyDialog.*`、`actions.copy`、`errors.copy`（en + zh-CN）。
+
+## 17. Task import/export + preset upgrade（第十三轮）
+
+### 16.1 Envelope
+
+`GET /api/scheduled-tasks/:id/export` → 单任务可移植信封：
+
+```json
+{
+  "format": "claudecodeui.scheduled-task",
+  "version": 1,
+  "exportedAt": "<ISO-8601>",
+  "task": { "title": "...", "prompt": "...", "projectPath": "...", "provider": "claude",
+            "model": null, "command": null, "commandTimeoutSeconds": null, "params": [],
+            "rule": { "kind": "..." } }
+}
+```
+
+不含 id、运行历史、计数与预设包关联。
+
+### 16.2 Import
+
+`POST /api/scheduled-tasks/import`，body 为上面的信封，或直接是 task 定义对象 → `201 { task }`。
+
+- `format`（给了就必须等于 `claudecodeui.scheduled-task`）与 `version`（必须为 1）不合法 → `invalid_input`。
+- 目标项目：`body.projectPath` > 信封 `task.projectPath` > 调用方作用域（REST 无作用域，故 REST 必须显式给其一）。
+- 通过 `management.createTask` 创建，因此**默认暂停**、校验规则与参数；§16.1 的“暂停任务可无后续运行”
+  同样适用于导入已过期的 `once`。
+
+### 16.3 Tools
+
+- `schedule_export`：`id` → 信封。
+- `schedule_import`：`task`（信封里的 task 对象），可选 `project_path` / `enabled`。
+
+### 16.4 Preset upgrade
+
+内置预设的 catalog 会随版本更新，但**已安装**的真实任务此前只有重新 install 才会被刷新。
+新增 `POST /api/scheduled-tasks/presets/:id/upgrade`：
+
+- 仅 `source === 'builtin'`；自定义预设 → `builtin_preset`。
+- 先 `seedBuiltinCatalog()`，再对**每个已安装项目**执行一次 install（`preserveEnabled: true`）：
+  模板内容（title/prompt/rule/command/params）刷新，但每个已安装任务的 `enabled` 保留自身状态，
+  不会被整体启用/停用。
+- 返回 `{ preset, tasks, projects: [{ projectPath, created, updated, skipped }] }`；未安装任何项目时
+  `projects: []`。
+- Agent tool `schedule_preset_upgrade`（按 session cwd 限定项目）。
+
+### 16.5 Frontend
+
+- 任务卡片 export 按钮：下载 `<title>.scheduled-task.json`。
+- 任务面板工具栏 import 按钮：读取 JSON 文件并 `POST /import`，失败显示在列表上方。
+- preset 卡片（仅内置）upgrade 按钮：调用 upgrade，结果以 `presets.result.upgraded` 显示。
+- i18n：`actions.copy/export/import`、`errors.copy/export/import`、`presets.actions.upgrade`、
+  `presets.result.upgraded`、`presets.errors.upgrade`（en + zh-CN）。
+
+### 16.6 Write scopes（第十三轮）
+
+| Owner | Files |
+|---|---|
+| backend | `server/scheduled-tasks/management.js` (+test), `presets.js` (+test), `tools.js` (+test), `server/routes/scheduled-tasks.js` (+test) |
+| frontend | `src/components/scheduled-tasks/**`, `src/i18n/locales/{en,zh-CN}/scheduledTasks.json` |
+| lead | `docs/scheduled-tasks.md` |
+
+### 16.7 Acceptance
+
+- `npx vitest run server/scheduled-tasks server/routes/scheduled-tasks.test.js` 全绿；management 覆盖：
+  copy 默认暂停/不带历史与 preset 关联/作用域、export 信封、import 的 format/version 与项目优先级；
+  presets 覆盖 upgrade 保留每个任务的 enabled、覆盖全部已安装项目、拒绝自定义预设；routes 覆盖四个新端点。
+- 前端：`ScheduledTasksPanel` copy 对话框 + export、`PresetsSection` upgrade；`npm run typecheck`、`npm run lint`。
+- 另：`management.createTask` 现在对 `enabled:false` 不再计算 nextRunAt（与 PATCH enabled:false 一致），
+  且暂停任务允许无后续运行。

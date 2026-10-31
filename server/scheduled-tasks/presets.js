@@ -548,6 +548,9 @@ export function createPresetService(deps = {}) {
       // enabled:false installs it paused. The effective value is recorded on the
       // preset so the whole-bundle switch starts from the right state.
       const effective = typeof options.enabled === 'boolean' ? options.enabled : true;
+      // §16: an *upgrade* must not resurrect a task the user paused (nor pause an
+      // enabled one); each linked task keeps its own enabled flag.
+      const preserveEnabled = options.preserveEnabled === true;
       const nowMs = now();
       const created = [];
       const updated = [];
@@ -584,6 +587,7 @@ export function createPresetService(deps = {}) {
         const templateParams =
           templateParamsById.get(template.id) ??
           parseParamDefs(template.params_json ?? template.paramsJson);
+        const taskEnabled = preserveEnabled && existing ? !!existing.enabled : effective;
         const patch = {
           title: template.title,
           prompt: template.prompt,
@@ -595,8 +599,8 @@ export function createPresetService(deps = {}) {
           command: template.command ?? null,
           commandTimeoutSeconds: template.command_timeout_seconds ?? null,
           paramsJson: serializeParams(templateParams),
-          enabled: effective,
-          nextRunAt: effective ? nextIso : null,
+          enabled: taskEnabled,
+          nextRunAt: taskEnabled ? nextIso : null,
         };
         const target = existing
           ? repo.updateTask(existing.id, patch)
@@ -656,6 +660,50 @@ export function createPresetService(deps = {}) {
         .filter((task) => !options.projectPath || samePath(rowProjectPath(task), options.projectPath))
         .map(taskRowToJson);
       return { ok: true, preset: await presetJson(updatedRow), tasks };
+    });
+  }
+
+  /**
+   * §16: re-materialize a built-in preset from the current catalog into every
+   * project where it is installed, preserving each task's enabled flag. Returns
+   * one entry per project. A custom preset has no upstream catalog to upgrade.
+   */
+  async function upgradePreset(id, options = {}) {
+    return guarded(async () => {
+      const repo = await getRepo();
+      await seedBuiltinCatalog();
+      const row = repo.getPreset(id);
+      if (!row) return notFound();
+      if (row.source !== 'builtin') {
+        return fail('builtin_preset', 'Only built-in presets can be upgraded', 400);
+      }
+      const linked = typeof repo.listTasksByPreset === 'function' ? repo.listTasksByPreset(id) || [] : [];
+      const scope = nonEmptyString(options.projectPath);
+      const projects = [...new Set(linked.map((task) => rowProjectPath(task)).filter(Boolean))];
+      const targets = scope ? projects.filter((projectPath) => samePath(projectPath, scope)) : projects;
+      const results = [];
+      for (const projectPath of targets) {
+        const installed = linked.filter((task) => samePath(rowProjectPath(task), projectPath));
+        const enabled = installed.some((task) => !!task.enabled);
+        const result = await installPreset(id, {
+          projectPath,
+          enabled,
+          preserveEnabled: true,
+          userId: options.userId,
+        });
+        if (!result.ok) return result;
+        results.push({
+          projectPath,
+          created: result.created,
+          updated: result.updated,
+          skipped: result.skipped,
+        });
+      }
+      const fresh = repo.getPreset(id) ?? row;
+      const tasks = (typeof repo.listTasksByPreset === 'function' ? repo.listTasksByPreset(id) || [] : []).map(
+        taskRowToJson
+      );
+      return { ok: true, preset: await presetJson(fresh), tasks, projects: results };
     });
   }
 
@@ -785,6 +833,7 @@ export function createPresetService(deps = {}) {
     getPreset,
     installPreset,
     setPresetEnabled,
+    upgradePreset,
     createCustomPreset,
     updatePreset,
     deletePreset,

@@ -33,7 +33,14 @@ vi.mock('../hooks/useScheduledTasks', () => ({
   }),
 }));
 
-vi.mock('../api', () => ({ scheduledTasksApi: {} }));
+const api = vi.hoisted(() => ({
+  copy: vi.fn(),
+  exportTask: vi.fn(),
+  importTask: vi.fn(),
+  listProjectOptions: vi.fn(async () => [{ value: '/tmp/project', label: 'project' }]),
+}));
+
+vi.mock('../api', () => ({ scheduledTasksApi: api }));
 
 import ScheduledTasksPanel from './ScheduledTasksPanel';
 
@@ -115,5 +122,53 @@ describe('ScheduledTasksPanel manual run with parameters', () => {
 
     await waitFor(() => expect(hook.runNow).toHaveBeenCalledWith('task-plain', undefined));
     expect(screen.queryByRole('dialog', { name: 'runParams.title' })).toBeNull();
+  });
+});
+describe('ScheduledTasksPanel copy / export / import', () => {
+  beforeEach(() => {
+    Object.values(hook).forEach((value) => {
+      if (typeof value === 'function' && 'mockReset' in value) value.mockReset();
+    });
+    Object.values(api).forEach((value) => {
+      if (typeof value === 'function' && 'mockReset' in value) value.mockReset();
+    });
+    hook.tasks = [];
+    api.copy.mockResolvedValue({});
+    api.listProjectOptions.mockResolvedValue([{ value: '/tmp/project', label: 'project' }]);
+  });
+
+  it('duplicates a task through the copy dialog and refreshes the list', async () => {
+    hook.tasks = [makeTask()];
+    render(<ScheduledTasksPanel onClose={vi.fn()} />);
+
+    fireEvent.click(screen.getByLabelText('actions.copy'));
+    expect(screen.getByRole('dialog', { name: 'copyDialog.title{"title":"Nightly audit"}' })).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('copyDialog.fields.title'), { target: { value: 'Copy of audit' } });
+    fireEvent.click(screen.getByText('copyDialog.confirm'));
+
+    await waitFor(() =>
+      expect(api.copy).toHaveBeenCalledWith('task-1', {
+        title: 'Copy of audit',
+        projectPath: '/tmp/project',
+        enabled: false,
+      }),
+    );
+    await waitFor(() => expect(hook.refresh).toHaveBeenCalled());
+  });
+
+  it('exports a task envelope on demand', async () => {
+    hook.tasks = [makeTask()];
+    api.exportTask.mockResolvedValue({ format: 'claudecodeui.scheduled-task', version: 1, task: {} });
+    const createObjectURL = vi.fn(() => 'blob:mock');
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal('URL', { ...URL, createObjectURL, revokeObjectURL });
+
+    render(<ScheduledTasksPanel onClose={vi.fn()} />);
+    fireEvent.click(screen.getByLabelText('actions.export'));
+
+    await waitFor(() => expect(api.exportTask).toHaveBeenCalledWith('task-1'));
+    expect(createObjectURL).toHaveBeenCalled();
+    vi.unstubAllGlobals();
   });
 });

@@ -506,6 +506,79 @@ describe('installPreset (§10.3)', () => {
   });
 });
 
+describe('upgradePreset (§16)', () => {
+  function sharedSetup() {
+    const repo = makeRepo();
+    const workspace = { ensureTaskWorkspace: vi.fn(() => null) };
+    const make = (catalog) =>
+      createPresetService({
+        repo,
+        rules,
+        catalog,
+        workspace,
+        now: () => NOW,
+        logger: { warn: vi.fn(), error: vi.fn() },
+      });
+    return { repo, workspace, make };
+  }
+
+  it('re-materializes changed templates while preserving each task enabled flag', async () => {
+    const { repo, make } = sharedSetup();
+    const v1 = make(CATALOG);
+    const installed = await v1.installPreset('alpha-daily', { projectPath: PROJECT });
+    const taskId = installed.created[0];
+    repo.updateTask(taskId, { enabled: false, nextRunAt: null });
+
+    const v2Catalog = [
+      {
+        ...CATALOG[0],
+        version: '2.0.0',
+        tasks: [{ ...CATALOG[0].tasks[0], title: 'Alpha v2', prompt: 'do alpha 2' }],
+      },
+      ...CATALOG.slice(1),
+    ];
+    const v2 = make(v2Catalog);
+    const result = await v2.upgradePreset('alpha-daily');
+
+    expect(result.ok).toBe(true);
+    expect(result.preset.version).toBe('2.0.0');
+    const row = repo._tasks.get(taskId);
+    expect(row.title).toBe('Alpha v2');
+    expect(row.prompt).toBe('do alpha 2');
+    expect(row.enabled).toBe(0);
+    expect(row.next_run_at).toBeNull();
+    expect(result.projects).toEqual([
+      { projectPath: PROJECT, created: [], updated: [taskId], skipped: [] },
+    ]);
+  });
+
+  it('upgrades every installed project and rejects custom presets', async () => {
+    const { repo, make } = sharedSetup();
+    const v1 = make(CATALOG);
+    await v1.installPreset('alpha-daily', { projectPath: PROJECT, enabled: false });
+    await v1.installPreset('alpha-daily', { projectPath: OTHER, enabled: false });
+
+    const v2 = make(CATALOG);
+    const result = await v2.upgradePreset('alpha-daily');
+    expect(result.ok).toBe(true);
+    expect(result.projects.map((entry) => entry.projectPath).sort()).toEqual(
+      [path.resolve(PROJECT), path.resolve(OTHER)].sort()
+    );
+
+    const task = repo.createTask({
+      title: 'x',
+      prompt: 'p',
+      projectPath: PROJECT,
+      kind: 'interval',
+      ruleJson: JSON.stringify({ kind: 'interval', everySeconds: 3600 }),
+      nextRunAt: iso(NOW + 3600000),
+      enabled: true,
+    });
+    const custom = await v1.createCustomPreset({ name: 'Mine', projectPath: PROJECT, taskIds: [task.id] });
+    expect(await v2.upgradePreset(custom.preset.id)).toMatchObject({ ok: false, code: 'builtin_preset' });
+  });
+});
+
 describe('setPresetEnabled (§10.3)', () => {
   it('flips the preset and every linked task', async () => {
     const { repo, service } = setup();

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { scheduledTasksApi } from '../api';
-import type { CustomPresetInput, InstallPresetResult, Preset } from '../types';
+import type { CustomPresetInput, InstallPresetResult, Preset, PresetUpgradeResult } from '../types';
 
 /**
  * Loads the preset catalog for one project (section 10.7).
@@ -56,6 +56,15 @@ export function useScheduledTaskPresets(projectPath: string) {
     [refresh],
   );
 
+  const upgradePreset = useCallback(
+    async (id: string, options: { projectPath?: string } = {}): Promise<PresetUpgradeResult> => {
+      const result = await scheduledTasksApi.upgradePreset(id, options);
+      await refresh();
+      return result;
+    },
+    [refresh],
+  );
+
   const createPreset = useCallback(
     async (input: CustomPresetInput): Promise<Preset> => {
       const preset = await scheduledTasksApi.createPreset(input);
@@ -74,5 +83,15 @@ export function useScheduledTaskPresets(projectPath: string) {
     [refresh],
   );
 
-  return { presets, isLoading, error, refresh, installPreset, setPresetEnabled, createPreset, removePreset };
+  return {
+    presets,
+    isLoading,
+    error,
+    refresh,
+    installPreset,
+    setPresetEnabled,
+    upgradePreset,
+    createPreset,
+    removePreset,
+  };
 }

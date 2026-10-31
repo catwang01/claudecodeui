@@ -6,6 +6,7 @@ const api = vi.hoisted(() => ({
   listPresets: vi.fn(),
   listProjectOptions: vi.fn(),
   installPreset: vi.fn(),
+  upgradePreset: vi.fn(),
   enablePreset: vi.fn(),
   disablePreset: vi.fn(),
   removePreset: vi.fn(),
@@ -302,5 +303,23 @@ describe('PresetsSection', () => {
     render(<PresetsSection />);
 
     await waitFor(() => expect(screen.getByText('presets.empty.title')).toBeTruthy());
+  });
+  it('updates a builtin preset from the catalog', async () => {
+    const preset = makePreset();
+    api.listPresets.mockResolvedValue([preset]);
+    api.upgradePreset.mockResolvedValue({
+      preset,
+      tasks: [],
+      projects: [{ projectPath: '/p/a', created: [], updated: ['task-1'], skipped: [] }],
+    });
+
+    render(<PresetsSection />);
+    await waitFor(() => expect(screen.getByText('Starter kit')).toBeTruthy());
+    await waitForProjectSelected();
+
+    screen.getByLabelText('presets.actions.upgrade').click();
+
+    await waitFor(() => expect(api.upgradePreset).toHaveBeenCalledWith('builtin-starter', { projectPath: '/p/a' }));
+    await waitFor(() => expect(screen.getByText(textWith('presets.result.upgraded'))).toBeTruthy());
   });
 });

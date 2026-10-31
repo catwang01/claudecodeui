@@ -124,6 +124,21 @@ export function createScheduledTasksRouter(overrides = {}) {
     })
   );
 
+  // POST /import — create a paused task from an exported envelope (docs §16).
+  // Declared before /:id: the literal "import" must never be read as a task id.
+  router.post(
+    '/import',
+    handler(async (req, res) => {
+      const body = req.body || {};
+      const result = await (await getManagement()).importTask({
+        ...body,
+        userId: req.user?.id ?? null,
+      });
+      if (!result.ok) return sendError(res, result);
+      res.status(201).json({ task: result.task });
+    })
+  );
+
   // ─── Presets (§10.5) ─────────────────────────────────────────────────────────
   // Registered BEFORE /:id: otherwise GET /presets would be captured by GET /:id.
 
@@ -231,6 +246,21 @@ export function createScheduledTasksRouter(overrides = {}) {
     );
   }
 
+  // POST /presets/:id/upgrade — re-materialize a builtin preset from the catalog,
+  // keeping every installed task's enabled flag (docs §16).
+  router.post(
+    '/presets/:id/upgrade',
+    handler(async (req, res) => {
+      const body = req.body || {};
+      const result = await (await getManagement()).presets.upgradePreset(req.params.id, {
+        projectPath: body.projectPath,
+        userId: req.user?.id ?? null,
+      });
+      if (!result.ok) return sendError(res, result);
+      res.json({ preset: result.preset, tasks: result.tasks, projects: result.projects });
+    })
+  );
+
   // DELETE /presets/:id — ?purge=0 keeps the installed tasks (default purge=1)
   router.delete(
     '/presets/:id',
@@ -254,6 +284,37 @@ export function createScheduledTasksRouter(overrides = {}) {
       const result = await (await getManagement()).countRunningTasks();
       if (!result.ok) return sendError(res, result);
       res.json({ count: result.count });
+    })
+  );
+
+  // GET /:id/export — the portable single-task envelope (docs §16).
+  router.get(
+    '/:id/export',
+    handler(async (req, res) => {
+      const result = await (await getManagement()).exportTask(req.params.id);
+      if (!result.ok) return sendError(res, result);
+      res.json({
+        format: result.format,
+        version: result.version,
+        exportedAt: result.exportedAt,
+        task: result.task,
+      });
+    })
+  );
+
+  // POST /:id/copy — duplicate a task (paused unless enabled:true, docs §15).
+  router.post(
+    '/:id/copy',
+    handler(async (req, res) => {
+      const body = req.body || {};
+      const result = await (await getManagement()).copyTask(req.params.id, {
+        title: body.title,
+        projectPath: body.projectPath,
+        enabled: body.enabled,
+        userId: req.user?.id ?? null,
+      });
+      if (!result.ok) return sendError(res, result);
+      res.status(201).json({ task: result.task });
     })
   );
 

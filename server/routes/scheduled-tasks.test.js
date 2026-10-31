@@ -153,6 +153,12 @@ function makePresetsService() {
         ? { ok: false, code: 'builtin_preset', message: 'Built-in presets cannot be edited', httpStatus: 400 }
         : { ok: true, preset: { id, ...patch } }
     ),
+    upgradePreset: vi.fn(async (id) => ({
+      ok: true,
+      preset: { id, source: 'builtin', name: 'Alpha daily' },
+      tasks: [{ id: 'task-1' }],
+      projects: [{ projectPath: '/tmp/x', created: [], updated: ['task-1'], skipped: [] }],
+    })),
     deletePreset: vi.fn(async (id, options) => ({
       ok: true,
       id,
@@ -770,6 +776,64 @@ describe('GET /running (§14.3)', () => {
     const fetched = await api('GET', '/' + created.body.task.id);
     expect(fetched.status).toBe(200);
     expect(fetched.body.task.id).toBe(created.body.task.id);
+  });
+});
+
+describe('copy / import / export (§15, §16)', () => {
+  it('POST /:id/copy duplicates a task paused with 201', async () => {
+    const created = await api('POST', '/', validBody);
+    const id = created.body.task.id;
+
+    const result = await api('POST', `/${id}/copy`, { title: 'Copy of docs' });
+
+    expect(result.status).toBe(201);
+    expect(result.body.task.id).not.toBe(id);
+    expect(result.body.task).toMatchObject({
+      title: 'Copy of docs',
+      enabled: false,
+      projectPath: validBody.projectPath,
+    });
+  });
+
+  it('POST /:id/copy returns 404 for an unknown task', async () => {
+    const result = await api('POST', '/missing/copy', {});
+    expect(result.status).toBe(404);
+    expect(result.body.code).toBe('not_found');
+  });
+
+  it('GET /:id/export returns an envelope and POST /import recreates it paused', async () => {
+    const created = await api('POST', '/', validBody);
+    const id = created.body.task.id;
+
+    const exported = await api('GET', `/${id}/export`);
+    expect(exported.status).toBe(200);
+    expect(exported.body).toMatchObject({ format: 'claudecodeui.scheduled-task', version: 1 });
+    expect(exported.body.task).toMatchObject({ title: validBody.title, prompt: validBody.prompt });
+    expect(exported.body.task.id).toBeUndefined();
+
+    const imported = await api('POST', '/import', { ...exported.body, projectPath: '/tmp/other' });
+    expect(imported.status).toBe(201);
+    expect(imported.body.task).toMatchObject({ projectPath: '/tmp/other', enabled: false });
+  });
+
+  it('POST /import rejects a foreign format and never shadows GET /:id', async () => {
+    const bad = await api('POST', '/import', { format: 'nope', task: validBody });
+    expect(bad.status).toBe(400);
+    expect(bad.body.code).toBe('invalid_input');
+
+    const shadowed = await api('GET', '/import');
+    expect(shadowed.status).toBe(404);
+  });
+});
+
+describe('POST /presets/:id/upgrade (§16)', () => {
+  it('returns the upgraded projects', async () => {
+    const result = await api('POST', '/presets/alpha-daily/upgrade', {});
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      preset: { id: 'alpha-daily' },
+      projects: [{ projectPath: '/tmp/x', updated: ['task-1'], created: [], skipped: [] }],
+    });
   });
 });
 

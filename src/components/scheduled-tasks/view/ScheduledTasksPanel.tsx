@@ -1,15 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { ChangeEvent } from 'react';
 import ReactDOM from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Clock, Loader2, Plus, RefreshCw, Search, X } from 'lucide-react';
+import { Clock, Loader2, Plus, RefreshCw, Search, Upload, X } from 'lucide-react';
 import { Button } from '../../../shared/view/ui';
 import { cn } from '../../../lib/utils';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useScheduledTasks } from '../hooks/useScheduledTasks';
-import type { ScheduledTask, ScheduledTaskInput, TaskStatusFilter } from '../types';
+import { scheduledTasksApi } from '../api';
+import type { ImportTaskInput, ScheduledTask, ScheduledTaskInput, TaskStatusFilter } from '../types';
 import { taskParams } from '../utils/params';
 import ConfirmDialog from './ConfirmDialog';
+import CopyTaskDialog from './CopyTaskDialog';
+import type { CopyTaskValues } from './CopyTaskDialog';
 import { controlClassName } from './FormControls';
 import PresetsSection from './PresetsSection';
 import RunningCountBadge from './RunningCountBadge';
@@ -28,6 +32,16 @@ type ScheduledTasksPanelProps = {
 };
 
 type PanelTab = 'tasks' | 'presets';
+
+/** A filesystem-safe name for a downloaded task envelope. */
+function exportFileName(title: string): string {
+  const cleaned = title
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, '-')
+    .replace(/\s+/g, '-')
+    .slice(0, 60);
+  return `${cleaned || 'scheduled-task'}.scheduled-task.json`;
+}
 
 const STATUS_FILTERS: TaskStatusFilter[] = ['all', 'enabled', 'paused'];
 const PANEL_TABS: PanelTab[] = ['tasks', 'presets'];
@@ -55,6 +69,11 @@ export default function ScheduledTasksPanel({ onClose, runningCount = 0 }: Sched
   const [isDeleting, setIsDeleting] = useState(false);
   // Presets own their dialogs; this only stops Escape from closing the panel behind them.
   const [isPresetOverlayOpen, setIsPresetOverlayOpen] = useState(false);
+  // §15/§16 copy + portability
+  const [copyTarget, setCopyTarget] = useState<ScheduledTask | null>(null);
+  const [isCopying, setIsCopying] = useState(false);
+  const [copyError, setCopyError] = useState<string | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -63,14 +82,15 @@ export default function ScheduledTasksPanel({ onClose, runningCount = 0 }: Sched
         !isEditorOpen &&
         !pendingDelete &&
         !isPresetOverlayOpen &&
-        !runDialogTask
+        !runDialogTask &&
+        !copyTarget
       ) {
         onClose();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, isEditorOpen, pendingDelete, isPresetOverlayOpen, runDialogTask]);
+  }, [onClose, isEditorOpen, pendingDelete, isPresetOverlayOpen, runDialogTask, copyTarget]);
 
   const openCreate = () => {
     setEditorTask(null);
@@ -182,6 +202,54 @@ export default function ScheduledTasksPanel({ onClose, runningCount = 0 }: Sched
       setActionError(err instanceof Error ? err.message : t('errors.delete'));
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  const handleCopyConfirm = async (values: CopyTaskValues) => {
+    if (!copyTarget) return;
+    setIsCopying(true);
+    setCopyError(null);
+    try {
+      await scheduledTasksApi.copy(copyTarget.id, values);
+      setCopyTarget(null);
+      await refresh();
+    } catch (err) {
+      setCopyError(err instanceof Error ? err.message : t('errors.copy'));
+    } finally {
+      setIsCopying(false);
+    }
+  };
+
+  const handleExport = async (task: ScheduledTask) => {
+    setActionError(null);
+    try {
+      const envelope = await scheduledTasksApi.exportTask(task.id);
+      const blob = new Blob([JSON.stringify(envelope, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = exportFileName(task.title);
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : t('errors.export'));
+    }
+  };
+
+  const handleImportFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setActionError(null);
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text) as unknown;
+      const record = parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null;
+      const payload = (record && record.task ? record : { task: record }) as unknown as ImportTaskInput;
+      await scheduledTasksApi.importTask(payload);
+      await refresh();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : t('errors.import'));
     }
   };
 
@@ -298,6 +366,27 @@ export default function ScheduledTasksPanel({ onClose, runningCount = 0 }: Sched
               >
                 <RefreshCw className={cn('h-4 w-4', isLoading && 'animate-spin')} />
               </Button>
+              <input
+                ref={importInputRef}
+                type="file"
+                accept="application/json,.json"
+                className="hidden"
+                aria-label={t('actions.import')}
+                onChange={(event) => {
+                  void handleImportFile(event);
+                }}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-9 w-9 p-0 text-muted-foreground hover:text-foreground"
+                aria-label={t('actions.import')}
+                title={t('actions.import')}
+                onClick={() => importInputRef.current?.click()}
+              >
+                <Upload className="h-4 w-4" />
+              </Button>
               <Button type="button" size="sm" onClick={openCreate}>
                 <Plus className="h-4 w-4" />
                 {t('actions.newTask')}
@@ -346,11 +435,12 @@ export default function ScheduledTasksPanel({ onClose, runningCount = 0 }: Sched
                 </div>
               )}
 
+              {actionError && (
+                <p className="mb-3 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{actionError}</p>
+              )}
+
               {tasks.length > 0 && (
                 <div className="space-y-3">
-                  {actionError && (
-                    <p className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{actionError}</p>
-                  )}
                   {tasks.map((task) => (
                     <ScheduledTaskCard
                       key={task.id}
@@ -360,6 +450,13 @@ export default function ScheduledTasksPanel({ onClose, runningCount = 0 }: Sched
                       onToggleEnabled={handleToggleEnabled}
                       onRunNow={handleRunRequest}
                       onEdit={openEdit}
+                      onCopy={(task) => {
+                        setCopyError(null);
+                        setCopyTarget(task);
+                      }}
+                      onExport={(task) => {
+                        void handleExport(task);
+                      }}
                       onDelete={setPendingDelete}
                       onToggleHistory={handleToggleHistory}
                       onOpenSession={(sessionId) => {
@@ -394,6 +491,21 @@ export default function ScheduledTasksPanel({ onClose, runningCount = 0 }: Sched
           onSubmit={(values) => handleRunWithParams(runDialogTask, values)}
         />
       ) : null}
+
+      {copyTarget && (
+        <CopyTaskDialog
+          task={copyTarget}
+          isBusy={isCopying}
+          error={copyError}
+          onClose={() => {
+            setCopyTarget(null);
+            setCopyError(null);
+          }}
+          onConfirm={(values) => {
+            void handleCopyConfirm(values);
+          }}
+        />
+      )}
 
       {pendingDelete && (
         <ConfirmDialog

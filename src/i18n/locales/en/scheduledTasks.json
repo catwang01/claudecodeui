@@ -28,6 +28,7 @@
     },
     "actions": {
       "install": "Install into project",
+      "upgrade": "Update from catalog",
       "uninstall": "Uninstall",
       "delete": "Delete preset",
       "enable": "Enable preset",
@@ -99,7 +100,8 @@
       "removed_other": "Removed {{count}} tasks.",
       "detached": "Preset deleted; its tasks were kept.",
       "uninstalled": "Preset uninstalled.",
-      "created": "Preset \"{{name}}\" created."
+      "created": "Preset \"{{name}}\" created.",
+      "upgraded": "Updated {{updated}} task(s) across {{projects}} project(s)."
     },
     "errors": {
       "install": "Could not install the preset.",
@@ -107,6 +109,7 @@
       "disable": "Could not disable the preset.",
       "delete": "Could not delete the preset.",
       "create": "Could not create the preset.",
+      "upgrade": "Could not update the preset.",
       "tasks": "Could not load tasks."
     }
   },
@@ -132,6 +135,9 @@
     "edit": "Edit",
     "delete": "Delete",
     "runNow": "Run now",
+    "copy": "Duplicate",
+    "export": "Export task",
+    "import": "Import task",
     "history": "History",
     "hideHistory": "Hide history",
     "loadMore": "Load more",
@@ -178,7 +184,10 @@
     "save": "Could not save the task.",
     "delete": "Could not delete the task.",
     "run": "Could not start the task.",
-    "update": "Could not update the task."
+    "update": "Could not update the task.",
+    "copy": "Could not duplicate the task.",
+    "export": "Could not export the task.",
+    "import": "Could not import the task."
   },
   "confirmDelete": {
     "title": "Delete this task?",
@@ -343,6 +352,23 @@
     "exitCode": "Exit code",
     "params": "Parameters",
     "builtinsHint": "Every run also exports the predefined variables (SCHEDULED_TASK_ID, TITLE, PROJECT, CWD, DIR, RUN_ID, RUN_DIR); read them instead of hardcoding paths."
+  },
+  "copyDialog": {
+    "title": "Duplicate {{title}}",
+    "defaultTitle": "{{title}} (copy)",
+    "description": "The duplicate keeps the prompt, schedule, script gate and parameters but starts with a fresh run history. It is created paused by default.",
+    "fields": {
+      "title": "Title",
+      "project": "Project",
+      "enabled": "Enable the duplicate",
+      "enabledHint": "Paused tasks keep their schedule but do not run."
+    },
+    "confirm": "Duplicate",
+    "copying": "Duplicating…",
+    "errors": {
+      "title": "Enter a title.",
+      "project": "Choose a project."
+    }
   },
   "time": {
     "unknown": "Unknown"
