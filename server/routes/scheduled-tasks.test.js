@@ -26,6 +26,7 @@ function makeRepo() {
         model: input.model ?? null,
         command: input.command ?? null,
         command_timeout_seconds: input.commandTimeoutSeconds ?? null,
+        params_json: input.paramsJson ?? null,
         kind: input.kind,
         rule_json: input.ruleJson,
         next_run_at: input.nextRunAt ?? null,
@@ -71,6 +72,7 @@ function makeRepo() {
         ruleJson: 'rule_json',
         nextRunAt: 'next_run_at',
         enabled: 'enabled',
+        paramsJson: 'params_json',
       };
       for (const [key, value] of Object.entries(patch)) {
         const column = columns[key] || key;
@@ -679,6 +681,72 @@ describe('DELETE /:id?purge=1 (§10.4)', () => {
     const purged = await api('DELETE', `/${second.body.task.id}?purge=1`);
     expect(purged.status).toBe(200);
     expect(deps.workspace.removeTaskWorkspace).toHaveBeenCalledWith(second.body.task.id);
+  });
+});
+
+
+describe('params (§12)', () => {
+  const DEFS = [
+    { name: 'region', type: 'string', default: 'eu' },
+    { name: 'threshold', type: 'number', default: 3 },
+  ];
+
+  it('round-trips params on create and rejects invalid definitions', async () => {
+    const created = await api('POST', '/', { ...validBody, params: DEFS });
+
+    expect(created.status).toBe(201);
+    expect(created.body.task.params).toEqual(DEFS);
+    expect(repo._tasks.get(created.body.task.id).params_json).toBe(JSON.stringify(DEFS));
+
+    const bad = await api('POST', '/', { ...validBody, params: [{ name: '1bad' }] });
+    expect(bad.status).toBe(400);
+    expect(bad.body.code).toBe('invalid_input');
+  });
+
+  it('updates and clears params through PATCH', async () => {
+    const created = await api('POST', '/', { ...validBody, params: DEFS });
+
+    const patched = await api('PATCH', `/${created.body.task.id}`, {
+      params: [{ name: 'x', type: 'boolean' }],
+    });
+    expect(patched.body.task.params).toEqual([{ name: 'x', type: 'boolean' }]);
+
+    const cleared = await api('PATCH', `/${created.body.task.id}`, { params: null });
+    expect(cleared.body.task.params).toEqual([]);
+  });
+
+  it('forwards per-run overrides on POST /:id/run', async () => {
+    const created = await api('POST', '/', { ...validBody, params: DEFS });
+
+    const ran = await api('POST', `/${created.body.task.id}/run`, { params: { threshold: 7 } });
+
+    expect(ran.status).toBe(202);
+    expect(deps.runNow).toHaveBeenCalledWith(created.body.task.id, { params: { threshold: 7 } });
+  });
+
+  it('rejects an unknown override before starting a run', async () => {
+    const created = await api('POST', '/', { ...validBody, params: DEFS });
+
+    const ran = await api('POST', `/${created.body.task.id}/run`, { params: { nope: 1 } });
+
+    expect(ran.status).toBe(400);
+    expect(ran.body.code).toBe('invalid_input');
+    expect(deps.runNow).not.toHaveBeenCalled();
+  });
+
+  it('forwards params on preset install', async () => {
+    const result = await api('POST', '/presets/alpha-daily/install', {
+      projectPath: '/tmp/x',
+      params: { region: 'us' },
+    });
+
+    expect(result.status).toBe(200);
+    expect(deps.presets.installPreset).toHaveBeenCalledWith('alpha-daily', {
+      projectPath: '/tmp/x',
+      enabled: undefined,
+      params: { region: 'us' },
+      userId: 7,
+    });
   });
 });
 

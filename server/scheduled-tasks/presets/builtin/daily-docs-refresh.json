@@ -9,7 +9,7 @@
       "id": "docs-refresh",
       "title": "Refresh project documentation",
       "description": "Update the docs that drifted since the last run.",
-      "prompt": "Refresh this project's documentation.\n\nWorkspace contract (this task owns its own directory on disk):\n- $SCHEDULED_TASK_DIR is the task root; $SCHEDULED_TASK_STATE_DIR is the durable state directory. Keep every long-lived cache, counter or note there (for example a state.json with the last documented commit) so the next run can continue instead of starting over.\n- The current run has its own runs/<runId>/ directory with run.json, prompt.md, output.md, logs/ and tmp/. Use its tmp/ for scratch files; it is removed when the run finishes. The task-wide tmp/ is wiped at the start of every run, so never keep anything you need across runs there.\n- Never write outside the task root and the project directory.\n\nSteps:\n1. Read $SCHEDULED_TASK_STATE_DIR/state.json if it exists and diff the project against the recorded commit/state.\n2. Update the affected Markdown files, the README and any API docs.\n3. Write the new state back to $SCHEDULED_TASK_STATE_DIR/state.json and finish with a short summary of what changed.",
+      "prompt": "Refresh this project's documentation.\n\nThe documentation directory for this run is $SCHEDULED_TASK_PARAM_DOCS_DIR (default: docs). Read it from the environment; never hardcode \"docs\".\n\nWorkspace contract (this task owns its own directory on disk):\n- $SCHEDULED_TASK_DIR is the task root; $SCHEDULED_TASK_STATE_DIR is the durable state directory. Keep every long-lived cache, counter or note there (for example a state.json with the last documented commit) so the next run can continue instead of starting over.\n- The current run has its own runs/<runId>/ directory with run.json, prompt.md, output.md, logs/ and tmp/. Use its tmp/ for scratch files; it is removed when the run finishes. The task-wide tmp/ is wiped at the start of every run, so never keep anything you need across runs there.\n- Never write outside the task root and the project directory.\n\nSteps:\n1. Read $SCHEDULED_TASK_STATE_DIR/state.json if it exists and diff the project against the recorded commit/state.\n2. Update the affected Markdown files under $SCHEDULED_TASK_PARAM_DOCS_DIR (default docs), the README and any API docs.\n3. Write the new state back to $SCHEDULED_TASK_STATE_DIR/state.json and finish with a short summary of what changed.",
       "rule": {
         "kind": "weekly",
         "time": "08:30",
@@ -21,7 +21,15 @@
           4,
           5
         ]
-      }
+      },
+      "params": [
+        {
+          "name": "docs_dir",
+          "type": "string",
+          "default": "docs",
+          "description": "Documentation directory (relative to the project root) this run reads and updates."
+        }
+      ]
     }
   ]
 }

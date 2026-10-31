@@ -79,6 +79,7 @@ beforeEach(() => {
     session_id: null,
     output: null,
     error: null,
+    params_json: input.paramsJson ?? null,
   }));
   scheduledTasksDb.attachRunSession.mockReset().mockReturnValue({});
   scheduledTasksDb.finishRun.mockReset().mockImplementation((id, patch) => ({
@@ -581,6 +582,134 @@ describe('workspace (§10.4)', () => {
     expect(result.promptUsed).toBe('do stuff');
     expect(queryClaudeSDK).toHaveBeenCalledWith('do stuff', expect.anything(), expect.anything());
     expect(fs.readdirSync(dataDir)).toEqual([]);
+  });
+});
+
+
+describe('parameters (§12)', () => {
+  const DEFS = JSON.stringify([
+    { name: 'region', type: 'string', default: 'eu' },
+    { name: 'threshold', type: 'number', default: 3 },
+    { name: 'dryRun', type: 'boolean', default: false },
+  ]);
+  const RESOLVED = '{"region":"eu","threshold":3,"dryRun":false}';
+
+  it('stores the resolved values on the run row and in run.json', async () => {
+    process.env.SCHEDULED_TASK_DRY_RUN = '1';
+
+    const result = await startTaskRun(makeTask({ params_json: DEFS })).done;
+
+    expect(result.status).toBe('success');
+    expect(scheduledTasksDb.createRun).toHaveBeenCalledWith(
+      expect.objectContaining({ paramsJson: RESOLVED })
+    );
+    const record = JSON.parse(
+      fs.readFileSync(path.join(runDir('t1', 'run-1'), 'run.json'), 'utf8')
+    );
+    expect(record.params).toEqual({ region: 'eu', threshold: 3, dryRun: false });
+  });
+
+  it('exports the parameters to the script gate after the workspace variables', async () => {
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scheduled-runner-params-'));
+    queryClaudeSDK.mockResolvedValue(undefined);
+
+    try {
+      // The gate cannot echo SCHEDULED_TASK_PARAMS inside its JSON envelope (the
+      // value's own quotes would break it), so it writes the values to disk.
+      const command =
+        'printf "%s" "$SCHEDULED_TASK_PARAM_REGION|$SCHEDULED_TASK_PARAM_THRESHOLD|$SCHEDULED_TASK_PARAM_DRYRUN" > "$SCHEDULED_TASK_TMP_DIR/params.txt"; ' +
+        'printf "%s" "$SCHEDULED_TASK_PARAMS" > "$SCHEDULED_TASK_TMP_DIR/params.json"; ' +
+        'printf \'{"skip":true,"reason":"gated"}\'';
+      const result = await startTaskRun(
+        makeTask({ project_path: projectDir, params_json: DEFS, command })
+      ).done;
+
+      expect(result.status).toBe('skipped');
+      expect(fs.readFileSync(path.join(taskTmpDir('t1'), 'params.txt'), 'utf8')).toBe('eu|3|false');
+      expect(fs.readFileSync(path.join(taskTmpDir('t1'), 'params.json'), 'utf8')).toBe(RESOLVED);
+    } finally {
+      fs.rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('passes options.env to the agent and prefixes the Parameters block', async () => {
+    queryClaudeSDK.mockResolvedValue(undefined);
+
+    const result = await startTaskRun(makeTask({ params_json: DEFS })).done;
+
+    const [prompt, options] = queryClaudeSDK.mock.calls[0];
+    expect(options.env).toEqual({
+      SCHEDULED_TASK_PARAM_REGION: 'eu',
+      SCHEDULED_TASK_PARAM_THRESHOLD: '3',
+      SCHEDULED_TASK_PARAM_DRYRUN: 'false',
+      SCHEDULED_TASK_PARAMS: RESOLVED,
+    });
+    expect(prompt).toContain('## Scheduled task parameters');
+    expect(prompt).toContain('$SCHEDULED_TASK_PARAM_REGION');
+    expect(prompt).toContain('do stuff');
+    expect(result.promptUsed).toBe('do stuff');
+
+    const promptFile = fs.readFileSync(path.join(runDir('t1', 'run-1'), 'prompt.md'), 'utf8');
+    expect(promptFile).toContain('## Scheduled task parameters');
+  });
+
+  it('lets a per-run override win over the default and coerces it', async () => {
+    queryClaudeSDK.mockResolvedValue(undefined);
+
+    await startTaskRun(makeTask({ params_json: DEFS }), { params: { threshold: '9', dryrun: 'true' } })
+      .done;
+
+    const [, options] = queryClaudeSDK.mock.calls[0];
+    expect(options.env.SCHEDULED_TASK_PARAM_THRESHOLD).toBe('9');
+    expect(options.env.SCHEDULED_TASK_PARAM_DRYRUN).toBe('true');
+    expect(scheduledTasksDb.createRun).toHaveBeenCalledWith(
+      expect.objectContaining({ paramsJson: '{"region":"eu","threshold":9,"dryRun":true}' })
+    );
+  });
+
+  it('fails a missing required parameter without a gate or agent call', async () => {
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scheduled-runner-required-'));
+    const spawn = vi.fn();
+    const runner = createTaskRunner({
+      scheduledTasksDb,
+      queryClaudeSDK,
+      addProjectManually,
+      abortClaudeSDKSession,
+      spawn,
+    });
+
+    try {
+      const result = await runner.startTaskRun(
+        makeTask({
+          project_path: projectDir,
+          params_json: '[{"name":"token","type":"string","required":true}]',
+          command: 'echo hi',
+        })
+      ).done;
+
+      expect(result.status).toBe('error');
+      expect(result.error).toBe('missing_required_param');
+      expect(spawn).not.toHaveBeenCalled();
+      expect(queryClaudeSDK).not.toHaveBeenCalled();
+      expect(scheduledTasksDb.createRun).toHaveBeenCalledWith(
+        expect.objectContaining({ paramsJson: null })
+      );
+    } finally {
+      fs.rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves the no-params environment and prompt untouched', async () => {
+    queryClaudeSDK.mockResolvedValue(undefined);
+
+    await startTaskRun(makeTask()).done;
+
+    const [prompt, options] = queryClaudeSDK.mock.calls[0];
+    expect(options.env).toBeUndefined();
+    expect(prompt).not.toContain('Scheduled task parameters');
+    expect(scheduledTasksDb.createRun).toHaveBeenCalledWith(
+      expect.objectContaining({ paramsJson: null })
+    );
   });
 });
 

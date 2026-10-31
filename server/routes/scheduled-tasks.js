@@ -116,6 +116,7 @@ export function createScheduledTasksRouter(overrides = {}) {
         model: body.model,
         command: body.command,
         commandTimeoutSeconds: body.commandTimeoutSeconds,
+        params: body.params,
         rule: body.rule,
       });
       if (!result.ok) return sendError(res, result);
@@ -202,6 +203,7 @@ export function createScheduledTasksRouter(overrides = {}) {
       const result = await (await getManagement()).presets.installPreset(req.params.id, {
         projectPath: body.projectPath,
         enabled: body.enabled,
+        params: body.params,
         userId: req.user?.id ?? null,
       });
       if (!result.ok) return sendError(res, result);
@@ -265,6 +267,7 @@ export function createScheduledTasksRouter(overrides = {}) {
         model: body.model,
         command: body.command,
         commandTimeoutSeconds: body.commandTimeoutSeconds,
+        params: body.params,
         enabled: body.enabled,
         rule: body.rule,
       });
@@ -284,11 +287,13 @@ export function createScheduledTasksRouter(overrides = {}) {
     })
   );
 
-  // POST /:id/run — start a run immediately (202 with the 'running' run row)
+  // POST /:id/run — start a run immediately (202 with the 'running' run row).
+  // The optional body { params } carries §12.3 per-run overrides.
   router.post(
     '/:id/run',
     handler(async (req, res) => {
-      const result = await (await getManagement()).runTaskNow(req.params.id);
+      const body = req.body || {};
+      const result = await (await getManagement()).runTaskNow(req.params.id, {}, { params: body.params });
       if (!result.ok) return sendError(res, result);
       res.status(202).json({ run: result.run });
     })

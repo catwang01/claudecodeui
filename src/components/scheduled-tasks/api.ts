@@ -123,9 +123,18 @@ export const scheduledTasksApi = {
     await parseResponse<{ id: string; deleted: boolean }>(response);
   },
 
-  async runNow(id: string): Promise<ScheduledTaskRun> {
+  /**
+   * POST /:id/run. `params` carries the per-run overrides of section 12.3;
+   * omitting it keeps the pre-section-12 request body byte-identical.
+   */
+  async runNow(
+    id: string,
+    options: { params?: Record<string, unknown> } = {},
+  ): Promise<ScheduledTaskRun> {
+    const body = options.params === undefined ? undefined : JSON.stringify({ params: options.params });
     const response = await authenticatedFetch(`${BASE_URL}/${encodeURIComponent(id)}/run`, {
       method: 'POST',
+      ...(body === undefined ? {} : { body }),
     });
     const data = await parseResponse<{ run: ScheduledTaskRun }>(response);
     return data.run;
@@ -180,15 +189,23 @@ export const scheduledTasksApi = {
     return data.preset;
   },
 
+  /**
+   * POST /presets/:id/install. `params` overrides template defaults for every
+   * installed task that declares that name (section 12.5).
+   */
   async installPreset(
     id: string,
-    options: { projectPath: string; enabled?: boolean },
+    options: { projectPath: string; enabled?: boolean; params?: Record<string, unknown> },
   ): Promise<InstallPresetResult> {
     const response = await authenticatedFetch(
       `${PRESETS_URL}/${encodeURIComponent(id)}/install`,
       {
         method: 'POST',
-        body: JSON.stringify({ projectPath: options.projectPath, enabled: options.enabled }),
+        body: JSON.stringify({
+          projectPath: options.projectPath,
+          enabled: options.enabled,
+          params: options.params,
+        }),
       },
     );
     const data = await parseResponse<Partial<InstallPresetResult>>(response);

@@ -8,9 +8,11 @@ import { cn } from '../../../lib/utils';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useScheduledTasks } from '../hooks/useScheduledTasks';
 import type { ScheduledTask, ScheduledTaskInput, TaskStatusFilter } from '../types';
+import { taskParams } from '../utils/params';
 import ConfirmDialog from './ConfirmDialog';
 import { controlClassName } from './FormControls';
 import PresetsSection from './PresetsSection';
+import RunWithParamsDialog from './RunWithParamsDialog';
 import ScheduledTaskCard from './ScheduledTaskCard';
 import TaskEditorDialog from './TaskEditorDialog';
 import type { TaskEditorValues } from './TaskEditorDialog';
@@ -39,6 +41,8 @@ export default function ScheduledTasksPanel({ onClose }: ScheduledTasksPanelProp
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [editorTask, setEditorTask] = useState<ScheduledTask | null>(null);
   const [pendingDelete, setPendingDelete] = useState<ScheduledTask | null>(null);
+  // Tasks with declared parameters open the Run with parameters dialog first.
+  const [runDialogTask, setRunDialogTask] = useState<ScheduledTask | null>(null);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -48,11 +52,19 @@ export default function ScheduledTasksPanel({ onClose }: ScheduledTasksPanelProp
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !isEditorOpen && !pendingDelete && !isPresetOverlayOpen) onClose();
+      if (
+        event.key === 'Escape' &&
+        !isEditorOpen &&
+        !pendingDelete &&
+        !isPresetOverlayOpen &&
+        !runDialogTask
+      ) {
+        onClose();
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, isEditorOpen, pendingDelete, isPresetOverlayOpen]);
+  }, [onClose, isEditorOpen, pendingDelete, isPresetOverlayOpen, runDialogTask]);
 
   const openCreate = () => {
     setEditorTask(null);
@@ -78,17 +90,41 @@ export default function ScheduledTasksPanel({ onClose }: ScheduledTasksPanelProp
     }
   };
 
-  const handleRunNow = async (task: ScheduledTask) => {
+  const handleRunNow = async (task: ScheduledTask, params?: Record<string, unknown>) => {
     setBusyTaskId(task.id);
     setActionError(null);
     setExpandedTaskId(task.id);
     try {
-      await runNow(task.id);
+      await runNow(task.id, params);
+      setRunDialogTask(null);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : t('errors.run'));
     } finally {
       setBusyTaskId(null);
     }
+  };
+
+  // Dialog submit: let the rejection reach the dialog so it can show the error
+  // inline and stay open for a correction.
+  const handleRunWithParams = async (task: ScheduledTask, params: Record<string, unknown>) => {
+    setBusyTaskId(task.id);
+    setActionError(null);
+    setExpandedTaskId(task.id);
+    try {
+      await runNow(task.id, params);
+      setRunDialogTask(null);
+    } finally {
+      setBusyTaskId(null);
+    }
+  };
+
+  const handleRunRequest = (task: ScheduledTask) => {
+    if (taskParams(task.params).length > 0) {
+      setActionError(null);
+      setRunDialogTask(task);
+      return;
+    }
+    void handleRunNow(task);
   };
 
   const handleToggleHistory = (task: ScheduledTask) => {
@@ -107,6 +143,7 @@ export default function ScheduledTasksPanel({ onClose }: ScheduledTasksPanelProp
         commandTimeoutSeconds: values.commandTimeoutSeconds,
         enabled: values.enabled,
         rule: values.rule,
+        params: values.params,
       });
     } else {
       const input: ScheduledTaskInput = {
@@ -118,6 +155,7 @@ export default function ScheduledTasksPanel({ onClose }: ScheduledTasksPanelProp
         command: values.command,
         commandTimeoutSeconds: values.commandTimeoutSeconds,
         rule: values.rule,
+        params: values.params,
       };
       await createTask(input);
     }
@@ -313,7 +351,7 @@ export default function ScheduledTasksPanel({ onClose }: ScheduledTasksPanelProp
                       isBusy={busyTaskId === task.id}
                       isExpanded={expandedTaskId === task.id}
                       onToggleEnabled={handleToggleEnabled}
-                      onRunNow={handleRunNow}
+                      onRunNow={handleRunRequest}
                       onEdit={openEdit}
                       onDelete={setPendingDelete}
                       onToggleHistory={handleToggleHistory}
@@ -340,6 +378,15 @@ export default function ScheduledTasksPanel({ onClose }: ScheduledTasksPanelProp
           onSubmit={handleSubmitEditor}
         />
       )}
+
+      {runDialogTask ? (
+        <RunWithParamsDialog
+          task={runDialogTask}
+          params={taskParams(runDialogTask.params)}
+          onClose={() => setRunDialogTask(null)}
+          onSubmit={(values) => handleRunWithParams(runDialogTask, values)}
+        />
+      ) : null}
 
       {pendingDelete && (
         <ConfirmDialog

@@ -22,6 +22,8 @@ export type ScheduledTaskRow = {
   updated_at: string;
   command: string | null;
   command_timeout_seconds: number | null;
+  // Parameter definitions (docs section 12.4); NULL/'' means "no parameters".
+  params_json: string | null;
   // Preset installation link (docs section 10.2); NULL for ad-hoc tasks.
   preset_id: string | null;
   preset_task_id: string | null;
@@ -41,6 +43,8 @@ export type ScheduledTaskRunRow = {
   script_exit_code: number | null;
   script_output: string | null;
   prompt_used: string | null;
+  // Resolved parameter values of this run (docs section 12.4).
+  params_json: string | null;
 };
 
 // docs section 9.1: which scheduled task started a session (the newest run wins).
@@ -78,6 +82,8 @@ export type ScheduledTaskPresetTaskRow = {
   rule_json: string;
   command: string | null;
   command_timeout_seconds: number | null;
+  // Template parameter definitions (docs section 12.4), copied into the task on install.
+  params_json: string | null;
   position: number;
   created_at: string;
   updated_at: string;
@@ -125,6 +131,9 @@ export type PresetTaskInput = {
   command?: string | null;
   commandTimeoutSeconds?: number | null;
   command_timeout_seconds?: number | null;
+  // docs section 12.4: template ParamDef[] as JSON.
+  paramsJson?: string | null;
+  params_json?: string | null;
   // Defaults to the array index in replacePresetTasks().
   position?: number;
 };
@@ -146,6 +155,9 @@ export type CreateScheduledTaskInput = {
   command?: string | null;
   commandTimeoutSeconds?: number | null;
   command_timeout_seconds?: number | null;
+  // docs section 12.4: ParamDef[] as JSON; NULL/'' means "no parameters".
+  paramsJson?: string | null;
+  params_json?: string | null;
   presetId?: string | null;
   presetTaskId?: string | null;
 };
@@ -163,6 +175,8 @@ export type ScheduledTaskUpdatePatch = Partial<{
   command: string | null;
   commandTimeoutSeconds: number | null;
   command_timeout_seconds: number | null;
+  paramsJson: string | null;
+  params_json: string | null;
   presetId: string | null;
   presetTaskId: string | null;
 }>;
@@ -187,6 +201,9 @@ export type CreateScheduledTaskRunInput = {
   script_exit_code?: number | null;
   script_output?: string | null;
   prompt_used?: string | null;
+  // docs section 12.4: resolved value map as JSON.
+  paramsJson?: string | null;
+  params_json?: string | null;
 };
 
 export type FinishScheduledTaskRunPatch = {
@@ -282,8 +299,8 @@ function serializeRule(task: PresetTaskInput): string {
 const INSERT_TASK_SQL =
   'INSERT INTO scheduled_tasks (id, user_id, title, prompt, project_path, provider, model, kind, rule_json, ' +
   'next_run_at, last_run_at, last_status, last_error, enabled, run_count, created_at, updated_at, ' +
-  'command, command_timeout_seconds, preset_id, preset_task_id) ' +
-  'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, 0, ?, ?, ?, ?, ?, ?)';
+  'command, command_timeout_seconds, params_json, preset_id, preset_task_id) ' +
+  'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, 0, ?, ?, ?, ?, ?, ?, ?)';
 
 const INSERT_PRESET_SQL =
   'INSERT INTO scheduled_task_presets (id, user_id, source, name, description, icon, version, enabled, ' +
@@ -291,12 +308,12 @@ const INSERT_PRESET_SQL =
 
 const INSERT_PRESET_TASK_SQL =
   'INSERT INTO scheduled_task_preset_tasks (id, preset_id, title, description, prompt, provider, model, kind, ' +
-  'rule_json, command, command_timeout_seconds, position, created_at, updated_at) ' +
-  'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+  'rule_json, command, command_timeout_seconds, params_json, position, created_at, updated_at) ' +
+  'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
 
 const INSERT_RUN_SQL =
-  'INSERT INTO scheduled_task_runs (id, task_id, status, "trigger", scheduled_for, started_at, finished_at, session_id, output, error, script_exit_code, script_output, prompt_used) ' +
-  'VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?)';
+  'INSERT INTO scheduled_task_runs (id, task_id, status, "trigger", scheduled_for, started_at, finished_at, session_id, output, error, script_exit_code, script_output, prompt_used, params_json) ' +
+  'VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?, ?)';
 
 // docs section 9.1: one row per run, LEFT JOIN so a run whose task row is gone still resolves
 // (title falls back to the task id). The correlated rowid pick keeps exactly the newest run
@@ -334,6 +351,7 @@ export const scheduledTasksDb = {
         timestamp,
         input.command ?? null,
         pick(input.commandTimeoutSeconds, input.command_timeout_seconds) ?? null,
+        pick(input.paramsJson, input.params_json) ?? null,
         input.presetId ?? null,
         input.presetTaskId ?? null
       );
@@ -385,6 +403,7 @@ export const scheduledTasksDb = {
     pushAssignment(assignments, values, 'next_run_at', patch.nextRunAt);
     pushAssignment(assignments, values, 'command', patch.command);
     pushAssignment(assignments, values, 'command_timeout_seconds', pick(patch.commandTimeoutSeconds, patch.command_timeout_seconds));
+    pushAssignment(assignments, values, 'params_json', pick(patch.paramsJson, patch.params_json));
     pushAssignment(assignments, values, 'preset_id', patch.presetId);
     pushAssignment(assignments, values, 'preset_task_id', patch.presetTaskId);
     if (patch.enabled !== undefined) pushAssignment(assignments, values, 'enabled', toEnabled(patch.enabled));
@@ -447,7 +466,8 @@ export const scheduledTasksDb = {
         input.startedAt ?? currentIso(),
         pick(input.scriptExitCode, input.script_exit_code) ?? null,
         pick(input.scriptOutput, input.script_output) ?? null,
-        pick(input.promptUsed, input.prompt_used) ?? null
+        pick(input.promptUsed, input.prompt_used) ?? null,
+        pick(input.paramsJson, input.params_json) ?? null
       );
     return selectRun(id) as ScheduledTaskRunRow;
   },
@@ -637,6 +657,7 @@ export const scheduledTasksDb = {
           serializeRule(task),
           task.command ?? null,
           pick(task.commandTimeoutSeconds, task.command_timeout_seconds) ?? null,
+          pick(task.paramsJson, task.params_json) ?? null,
           task.position ?? index,
           timestamp,
           timestamp

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -38,6 +38,7 @@ function makeTaskRow(input, id) {
     model: input.model ?? null,
     command: input.command ?? null,
     command_timeout_seconds: input.commandTimeoutSeconds ?? null,
+    params_json: input.paramsJson ?? null,
     kind: input.kind,
     rule_json: input.ruleJson,
     next_run_at: input.nextRunAt ?? null,
@@ -121,6 +122,7 @@ function makeRepo() {
         rule_json: task.ruleJson ?? JSON.stringify(task.rule),
         command: task.command ?? null,
         command_timeout_seconds: task.commandTimeoutSeconds ?? null,
+        params_json: task.paramsJson ?? task.params_json ?? null,
         position: task.position ?? index,
         created_at: stamp(),
         updated_at: stamp(),
@@ -154,6 +156,7 @@ function makeRepo() {
         ruleJson: 'rule_json',
         nextRunAt: 'next_run_at',
         enabled: 'enabled',
+        paramsJson: 'params_json',
       };
       for (const [key, value] of Object.entries(patch)) {
         row[columns[key] || key] = key === 'enabled' ? (value ? 1 : 0) : value;
@@ -816,3 +819,229 @@ describe('builtin auto-doc preset (docs §11.3)', () => {
     }
   });
 });
+
+describe('parameters (§12)', () => {
+  const PARAM_CATALOG = [
+    {
+      id: 'param-preset',
+      name: 'Param preset',
+      tasks: [
+        {
+          id: 'param-task',
+          title: 'Param task',
+          prompt: 'do it',
+          rule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
+          params: [
+            { name: 'region', type: 'string', default: 'eu' },
+            { name: 'threshold', type: 'number', default: 3 },
+          ],
+        },
+      ],
+    },
+  ];
+
+  it('seeds template params and copies them onto installed tasks', async () => {
+    const { repo, service } = setup(PARAM_CATALOG);
+
+    const installed = await service.installPreset('param-preset', { projectPath: PROJECT });
+
+    expect(installed.ok).toBe(true);
+    const task = repo._tasks.get(installed.tasks[0].id);
+    expect(JSON.parse(task.params_json)).toEqual(PARAM_CATALOG[0].tasks[0].params);
+    expect(installed.tasks[0].params).toEqual(PARAM_CATALOG[0].tasks[0].params);
+  });
+
+  it('applies install overrides to every template that declares the name (unknown names ignored)', async () => {
+    const { repo, service } = setup(PARAM_CATALOG);
+
+    const installed = await service.installPreset('param-preset', {
+      projectPath: PROJECT,
+      params: { region: 'us', unknown: 'x' },
+    });
+
+    expect(installed.ok).toBe(true);
+    const task = repo._tasks.get(installed.tasks[0].id);
+    expect(JSON.parse(task.params_json)).toEqual([
+      { name: 'region', type: 'string', default: 'us' },
+      { name: 'threshold', type: 'number', default: 3 },
+    ]);
+  });
+
+  it('rejects an uncoercible install override', async () => {
+    const { service } = setup(PARAM_CATALOG);
+
+    const installed = await service.installPreset('param-preset', {
+      projectPath: PROJECT,
+      params: { threshold: 'abc' },
+    });
+
+    expect(installed).toMatchObject({ ok: false, code: 'invalid_input' });
+  });
+
+  it('rejects an invalid template ParamDef with invalid_catalog', () => {
+    const result = validateBuiltinPreset({
+      id: 'bad-preset',
+      name: 'Bad',
+      tasks: [
+        {
+          id: 'bad-task',
+          title: 'T',
+          prompt: 'p',
+          rule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
+          params: [{ name: '1bad' }],
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({ ok: false, code: 'invalid_catalog' });
+  });
+
+  it('rejects an invalid override before materializing anything (no partial install)', async () => {
+    const catalog = [
+      {
+        id: 'two-templates',
+        name: 'Two templates',
+        tasks: [
+          {
+            id: 'tpl-a',
+            title: 'A',
+            prompt: 'p',
+            rule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
+            params: [{ name: 'region', type: 'string', default: 'eu' }],
+          },
+          {
+            id: 'tpl-b',
+            title: 'B',
+            prompt: 'p',
+            rule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
+            params: [{ name: 'count', type: 'number', default: 2 }],
+          },
+        ],
+      },
+    ];
+    const { repo, service } = setup(catalog);
+
+    const result = await service.installPreset('two-templates', {
+      projectPath: PROJECT,
+      params: { count: 'abc' },
+    });
+
+    expect(result).toMatchObject({ ok: false, code: 'invalid_input' });
+    // The first template would have succeeded; nothing may be materialized.
+    expect(repo._tasks.size).toBe(0);
+    expect(repo._presets.get('two-templates').enabled).toBe(0);
+  });
+
+  it('keeps the parameter contract when a custom preset is installed in another project', async () => {
+    const { repo, service } = setup();
+    const paramsJson = JSON.stringify([
+      { name: 'region', type: 'string', default: 'eu' },
+      { name: 'threshold', type: 'number', default: 3 },
+    ]);
+    const task = repo.createTask({
+      title: 't',
+      prompt: 'p',
+      projectPath: PROJECT,
+      kind: 'daily',
+      ruleJson: JSON.stringify({ kind: 'daily', time: '09:00', timeZone: 'UTC' }),
+      paramsJson,
+    });
+    const created = await service.createCustomPreset({
+      name: 'Mine',
+      projectPath: PROJECT,
+      taskIds: [task.id],
+    });
+
+    const installed = await service.installPreset(created.preset.id, { projectPath: OTHER });
+    expect(installed.ok).toBe(true);
+    expect(JSON.parse(repo._tasks.get(installed.tasks[0].id).params_json)).toEqual([
+      { name: 'region', type: 'string', default: 'eu' },
+      { name: 'threshold', type: 'number', default: 3 },
+    ]);
+  });
+
+  it('snapshots task params into a custom preset', async () => {
+    const { repo, service } = setup();
+    const paramsJson = JSON.stringify([{ name: 'region', type: 'string', default: 'eu' }]);
+    const task = repo.createTask({
+      title: 't',
+      prompt: 'p',
+      projectPath: PROJECT,
+      kind: 'daily',
+      ruleJson: JSON.stringify({ kind: 'daily', time: '09:00', timeZone: 'UTC' }),
+      paramsJson,
+    });
+
+    const created = await service.createCustomPreset({
+      name: 'Mine',
+      projectPath: PROJECT,
+      taskIds: [task.id],
+    });
+
+    expect(created.ok).toBe(true);
+    expect(created.preset.tasks[0].params).toEqual([
+      { name: 'region', type: 'string', default: 'eu' },
+    ]);
+    expect(JSON.parse(repo._presetTasks.get(created.preset.id)[0].params_json)).toEqual([
+      { name: 'region', type: 'string', default: 'eu' },
+    ]);
+  });
+});
+
+describe('SCHEDULED_TASK_PRESET_DIR (catalog directory override)', () => {
+  afterEach(() => {
+    delete process.env.SCHEDULED_TASK_PRESET_DIR;
+    vi.resetModules();
+  });
+
+  it('keeps the shipped default when unset or blank', async () => {
+    for (const value of [undefined, '', '   ']) {
+      if (value === undefined) delete process.env.SCHEDULED_TASK_PRESET_DIR;
+      else process.env.SCHEDULED_TASK_PRESET_DIR = value;
+      vi.resetModules();
+      const mod = await import('./presets.js');
+      expect(mod.BUILTIN_PRESET_DIR).toBe(path.join(BUILTIN_PRESET_DIR));
+      expect(mod.BUILTIN_PRESET_DIR.endsWith(path.join('presets', 'builtin'))).toBe(true);
+      expect(mod.loadBuiltinCatalog().length).toBeGreaterThan(0);
+    }
+  });
+
+  it('honours an explicit directory (it becomes the whole catalog)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'scheduled-preset-dir-'));
+    try {
+      fs.writeFileSync(
+        path.join(dir, 'zeta.json'),
+        JSON.stringify({
+          id: 'zeta',
+          name: 'Zeta',
+          tasks: [
+            {
+              id: 'zeta-task',
+              title: 'Zeta task',
+              prompt: 'p',
+              rule: { kind: 'daily', time: '09:00', timeZone: 'UTC' },
+            },
+          ],
+        })
+      );
+      process.env.SCHEDULED_TASK_PRESET_DIR = dir;
+      vi.resetModules();
+      const mod = await import('./presets.js');
+
+      expect(mod.BUILTIN_PRESET_DIR).toBe(path.resolve(dir));
+      expect(mod.loadBuiltinCatalog().map((preset) => preset.id)).toEqual(['zeta']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('degrades like a missing catalog directory when the path does not exist', async () => {
+    process.env.SCHEDULED_TASK_PRESET_DIR = path.join(os.tmpdir(), 'scheduled-preset-missing-' + Date.now());
+    vi.resetModules();
+    const mod = await import('./presets.js');
+
+    expect(() => mod.loadBuiltinCatalog()).not.toThrow();
+    expect(mod.loadBuiltinCatalog()).toEqual([]);
+  });
+});
+

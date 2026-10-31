@@ -28,6 +28,11 @@
  * workspacePromptBlock(...) while promptUsed stays the effective prompt, and
  * finishOnce records output.md/run.json through finalizeRunWorkspace.
  * SCHEDULED_TASKS_WORKSPACE=0 disables the whole layer.
+ *
+ * Parameters (§12): the task's ParamDef[] is resolved before the script gate into
+ * a typed value map, exported to the gate (SCHEDULED_TASK_PARAM_* /
+ * SCHEDULED_TASK_PARAMS), handed to the agent via options.env, and written to the
+ * run row (params_json) and runs/<runId>/run.json (params).
  */
 
 import { spawn as nodeSpawn } from 'child_process';
@@ -42,6 +47,8 @@ import {
   workspaceEnv,
   workspacePromptBlock,
 } from './workspace.js';
+// §12: the parameter layer is pure; the runner only resolves and exports it.
+import { parseParamDefs, paramsPromptBlock, resolveParams } from './params.js';
 
 const DEFAULT_TIMEOUT_MS = 1800000;
 const SUPPORTED_PROVIDERS = new Set(['claude']);
@@ -70,6 +77,12 @@ function resolveTimeoutMs(override) {
 
 function isDryRun() {
   return process.env.SCHEDULED_TASK_DRY_RUN === '1';
+}
+
+/** §12.4: the task's ParamDef[] (row or view shape); unreadable JSON reads as []. */
+function taskParamDefs(task) {
+  if (!task || typeof task !== 'object') return [];
+  return parseParamDefs(task.params_json ?? task.paramsJson ?? task.params);
 }
 
 /** SCHEDULED_TASKS_COMMANDS=0 disables the script gate (commands_disabled). */
@@ -206,7 +219,7 @@ export function createTaskRunner(deps = {}) {
    * exit code, and turn the JSON envelope into a skip/prompt decision.
    * Never rejects.
    */
-  function runScriptGate(task, projectPath, workspaceVars) {
+  function runScriptGate(task, projectPath, workspaceVars, paramVars) {
     const command = task.command;
     const timeoutSeconds = resolveCommandTimeoutSeconds(task);
     const env = {
@@ -216,6 +229,8 @@ export function createTaskRunner(deps = {}) {
       SCHEDULED_TASK_PROJECT: projectPath ?? '',
       // §10.4: the workspace variables never replace the three above.
       ...(workspaceVars ?? {}),
+      // §12.5 step 2: the parameter variables are merged after the workspace ones.
+      ...(paramVars ?? {}),
     };
 
     return new Promise((resolve) => {
@@ -308,7 +323,7 @@ export function createTaskRunner(deps = {}) {
     });
   }
 
-  async function execute(task, run) {
+  async function execute(task, run, resolution) {
     // Rows are snake_case (docs §3); accept camelCase too for callers that map first.
     const projectPath = task.project_path ?? task.projectPath ?? null;
     let sessionId = null;
@@ -320,6 +335,22 @@ export function createTaskRunner(deps = {}) {
     let effectivePrompt = task.prompt;
     let scriptExitCode = null;
     let scriptOutput = null;
+
+    // §12.3/§12.5 step 1: resolve the parameters *before* the script gate. A
+    // missing required parameter (or an invalid override) fails the run with no
+    // gate and no agent call, recorded on the run row.
+    const resolved = resolution ?? resolveParams(taskParamDefs(task), {});
+    if (!resolved.ok) {
+      return finishOnce(task, run, 'error', {
+        error: resolved.code,
+        promptUsed: null,
+        scriptExitCode: null,
+        scriptOutput: null,
+      });
+    }
+    const paramValues = resolved.values;
+    const paramVars = resolved.env;
+    const paramBlock = paramsPromptBlock(resolved.params, paramValues);
 
     // §10.4 step 1: plan the on-disk workspace before the script gate, so the
     // layout exists even when the gate skips or fails the run. Best-effort.
@@ -339,7 +370,7 @@ export function createTaskRunner(deps = {}) {
         });
       }
 
-      const gate = await runScriptGate(task, projectPath, workspaceVars);
+      const gate = await runScriptGate(task, projectPath, workspaceVars, paramVars);
       scriptExitCode = gate.scriptExitCode ?? null;
       scriptOutput = gate.scriptOutput ?? null;
 
@@ -364,9 +395,15 @@ export function createTaskRunner(deps = {}) {
 
     // §10.4 step 3: prompt.md stores the full agent-facing text, which is only
     // known once the gate has decided the effective prompt.
-    ensureRunWorkspace(task, run, { effectivePrompt });
+    ensureRunWorkspace(task, run, { effectivePrompt, paramsBlock: paramBlock });
+    // §12.6: the Parameters block follows the workspace block.
+    const promptBlocks = [];
     const workspaceBlock = workspacePromptBlock(task, { runId: run.id });
-    const agentPrompt = workspaceBlock ? `${workspaceBlock}\n\n${effectivePrompt}` : effectivePrompt;
+    if (workspaceBlock) promptBlocks.push(workspaceBlock);
+    if (paramBlock) promptBlocks.push(paramBlock);
+    const agentPrompt = promptBlocks.length
+      ? `${promptBlocks.join('\n\n')}\n\n${effectivePrompt}`
+      : effectivePrompt;
 
     if (!SUPPORTED_PROVIDERS.has(task.provider ?? 'claude')) {
       return finishOnce(task, run, 'error', {
@@ -437,6 +474,9 @@ export function createTaskRunner(deps = {}) {
     // must be bypassed — same as the external API route (server/routes/agent.js).
     const options = { cwd: projectPath, permissionMode: 'bypassPermissions' };
     if (task.model) options.model = task.model;
+    // §12.5 step 3: hand the resolved parameters to the provider CLI through
+    // server/claude-sdk.js, which merges options.env into sdkOptions.env.
+    if (paramVars) options.env = paramVars;
 
     const agentResult = (status, extra = {}) =>
       finishOnce(task, run, status, {
@@ -492,16 +532,21 @@ export function createTaskRunner(deps = {}) {
     return agentResult('success', { sessionId, output: collectedOutput() });
   }
 
-  function startTaskRun(task, { trigger = 'schedule', scheduledFor = null } = {}) {
+  function startTaskRun(task, { trigger = 'schedule', scheduledFor = null, params: overrides } = {}) {
+    // §12.5 step 5: resolve up front so createRun can store the resolved value
+    // map (params_json) for audit/provenance. Resolution is pure and never throws.
+    const resolution = resolveParams(taskParamDefs(task), overrides);
     const run = db.createRun({
       taskId: task.id,
       status: 'running',
       trigger,
       scheduledFor,
       startedAt: nowIso(),
+      paramsJson:
+        resolution.ok && resolution.params.length ? JSON.stringify(resolution.values) : null,
     });
 
-    const done = execute(task, run).catch((err) => {
+    const done = execute(task, run, resolution).catch((err) => {
       // execute() only throws on unexpected internal faults (e.g. the DB layer).
       return finishOnce(task, run, 'error', { error: errorMessage(err) });
     });
@@ -516,7 +561,8 @@ const defaultRunner = createTaskRunner();
 
 /**
  * @param {object} task scheduled task row
- * @param {{ trigger?: 'schedule'|'manual', scheduledFor?: string|null }} [options]
+ * @param {{ trigger?: 'schedule'|'manual', scheduledFor?: string|null, params?: Record<string, unknown> }} [options]
+ *   options.params is the §12.3 per-run override map.
  * @returns {{ run: object, done: Promise<{ run: object, status: string, sessionId: string|null, output: string|null, error: string|null, scriptExitCode: number|null, scriptOutput: string|null, promptUsed: string|null }> }}
  */
 export function startTaskRun(task, options = {}) {

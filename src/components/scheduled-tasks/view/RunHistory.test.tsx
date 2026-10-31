@@ -20,6 +20,10 @@ vi.mock('../api', () => ({
 
 import RunHistory from './RunHistory';
 
+// Rendering these trees is cheap, but CI/dev boxes can be heavily loaded, so
+// keep a generous per-test budget instead of relying on the 5s default.
+vi.setConfig({ testTimeout: 30000 });
+
 function makeRun(id: string, sessionId: string): ScheduledTaskRun {
   return {
     id,
@@ -173,5 +177,33 @@ describe('RunHistory', () => {
     await new Promise((resolve) => setTimeout(resolve, 30));
 
     expect(listRuns).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the resolved parameter values recorded for a run', async () => {
+    listRuns.mockResolvedValueOnce({
+      runs: [
+        {
+          ...makeRun('run-1', 'session-1'),
+          params: { region: 'eu', threshold: 3, dryRun: false },
+        },
+      ],
+      total: 1,
+    });
+
+    render(<RunHistory taskId="task-1" refreshToken="1|x|y" />);
+
+    await waitFor(() => expect(screen.getByText('runs.params')).toBeTruthy());
+    expect(screen.getByText('region=eu')).toBeTruthy();
+    expect(screen.getByText('threshold=3')).toBeTruthy();
+    expect(screen.getByText('dryRun=false')).toBeTruthy();
+  });
+
+  it('omits the parameter block when the run recorded none', async () => {
+    listRuns.mockResolvedValueOnce({ runs: [makeRun('run-1', 'session-1')], total: 1 });
+
+    render(<RunHistory taskId="task-1" refreshToken="1|x|y" />);
+
+    await waitFor(() => expect(screen.getAllByText(textWith('session-1')).length).toBeGreaterThan(0));
+    expect(screen.queryByText('runs.params')).toBeNull();
   });
 });

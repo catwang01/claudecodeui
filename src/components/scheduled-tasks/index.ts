@@ -7,6 +7,8 @@ export type {
   DeletePresetResult,
   InstallPresetResult,
   IntervalUnit,
+  ParamDef,
+  ParamType,
   Preset,
   PresetEnabledResult,
   PresetPatch,

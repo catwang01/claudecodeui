@@ -19,6 +19,10 @@ vi.mock('../api', () => ({
 
 import ScheduledTaskCard from './ScheduledTaskCard';
 
+// Rendering these trees is cheap, but CI/dev boxes can be heavily loaded, so
+// keep a generous per-test budget instead of relying on the 5s default.
+vi.setConfig({ testTimeout: 30000 });
+
 function makeRun(id: string, sessionId: string): ScheduledTaskRun {
   return {
     id,
@@ -158,5 +162,45 @@ describe('ScheduledTaskCard run history freshness', () => {
       />,
     );
     expect(screen.queryByLabelText('card.scriptGate')).toBeNull();
+  });
+});
+
+describe('ScheduledTaskCard parameters', () => {
+  const renderCollapsed = (task: ScheduledTask) =>
+    render(
+      <ScheduledTaskCard
+        task={task}
+        isBusy={false}
+        isExpanded={false}
+        onToggleEnabled={noop}
+        onRunNow={noop}
+        onEdit={noop}
+        onDelete={noop}
+        onToggleHistory={noop}
+      />,
+    );
+
+  it('renders one chip per parameter with its description and env var', () => {
+    renderCollapsed(
+      makeTask({
+        params: [
+          { name: 'region', type: 'string', default: 'eu', description: 'Deploy region' },
+          { name: 'token', type: 'string', required: true, description: 'API token' },
+        ],
+      }),
+    );
+
+    // The chip shows the name (and default), while the tooltip/label carries
+    // the description plus the derived SCHEDULED_TASK_PARAM_ env var.
+    const region = screen.getByText('region=eu');
+    expect(region.getAttribute('aria-label')).toBe('Deploy region · SCHEDULED_TASK_PARAM_REGION');
+    const token = screen.getByText('token');
+    expect(token.getAttribute('aria-label')).toBe('API token · SCHEDULED_TASK_PARAM_TOKEN');
+  });
+
+  it('renders no chips for a task without parameters', () => {
+    renderCollapsed(makeTask({ params: [] }));
+    expect(screen.queryByText('region=eu')).toBeNull();
+    expect(screen.queryByLabelText('card.params')).toBeNull();
   });
 });

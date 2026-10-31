@@ -5,7 +5,9 @@ import { cn } from '../../../lib/utils';
 import SettingsToggle from '../../settings/view/SettingsToggle';
 import type { ScheduledTask } from '../types';
 import { formatDateTime, formatRelativeTime } from '../utils/format';
+import { taskParams } from '../utils/params';
 import { describeRule, normalizeRuleKind, toTaskRule } from '../utils/rules';
+import ParamChips from './ParamChips';
 import RunHistory from './RunHistory';
 
 type ScheduledTaskCardProps = {
@@ -48,6 +50,7 @@ export default function ScheduledTaskCard({
   const { t, i18n } = useTranslation('scheduledTasks');
   const locale = i18n.language;
   const rule = toTaskRule(normalizeRuleKind(task.kind || task.rule?.kind), task.rule);
+  const params = taskParams(task.params);
 
   const nextRunText = task.nextRunAt
     ? formatDateTime(task.nextRunAt, locale) + ' · ' + formatRelativeTime(task.nextRunAt, locale)
@@ -109,6 +112,9 @@ export default function ScheduledTaskCard({
             )}
             <span>{t('card.runCount', { count: task.runCount ?? 0 })}</span>
           </div>
+
+          {/* Declared parameters with their env var tooltips (section 12.7). */}
+          <ParamChips params={params} />
 
           <div className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
             <span>

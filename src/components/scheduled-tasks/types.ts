@@ -6,6 +6,28 @@
 
 export type RuleKind = 'once' | 'interval' | 'daily' | 'weekly' | 'cron';
 
+/** Parameter value kinds supported by a scheduled task (section 12.1). */
+export type ParamType = 'string' | 'number' | 'boolean';
+
+/**
+ * One declared task parameter (docs/scheduled-tasks.md section 12.1).
+ *
+ * Parameters are resolved into a flat string map at run time and exported to
+ * the script gate and the agent runtime as SCHEDULED_TASK_PARAM_<NAME> env
+ * vars, plus SCHEDULED_TASK_PARAMS as compact JSON.
+ */
+export interface ParamDef {
+  /** ^[A-Za-z_][A-Za-z0-9_]{0,63}$, unique case-insensitively within a task. */
+  name: string;
+  /** Defaults to 'string'. */
+  type?: ParamType;
+  default?: string | number | boolean;
+  /** Free-form help text, at most 500 characters. */
+  description?: string;
+  /** Defaults to false; only meaningful without a default. */
+  required?: boolean;
+}
+
 /**
  * Shape of the `rule` object as returned by the API. The backend may or may not
  * echo `kind` inside the rule, so every field is optional and validated by the
@@ -89,6 +111,8 @@ export interface ScheduledTaskRun {
   scriptOutput: string | null;
   /** Effective prompt handed to the agent (static prompt or the script's). */
   promptUsed: string | null;
+  /** Resolved parameter values recorded for this run (section 12.4). */
+  params?: Record<string, string | number | boolean> | null;
 }
 
 export interface ScheduledTask {
@@ -104,6 +128,8 @@ export interface ScheduledTask {
   commandTimeoutSeconds: number | null;
   kind: RuleKind;
   rule: RulePayload;
+  /** Declared parameters; empty or absent means the task has none (section 12). */
+  params?: ParamDef[] | null;
   nextRunAt: string | null;
   lastRunAt: string | null;
   lastStatus: RunStatus | null;
@@ -126,6 +152,8 @@ export interface ScheduledTaskInput {
   command: string | null;
   commandTimeoutSeconds: number | null;
   rule: TaskRule;
+  /** Always sent: an empty list clears the task's parameters. */
+  params?: ParamDef[];
 }
 
 export interface ScheduledTaskPatch {
@@ -138,6 +166,8 @@ export interface ScheduledTaskPatch {
   /** Explicit null clears the stored command (and its timeout). */
   command?: string | null;
   commandTimeoutSeconds?: number | null;
+  /** Replacement parameter list; an empty list removes every parameter. */
+  params?: ParamDef[];
 }
 
 export interface ProjectOption {
@@ -164,6 +194,8 @@ export interface PresetTask {
   rule: RulePayload;
   command: string | null;
   commandTimeoutSeconds: number | null;
+  /** Template parameters, copied into the task on install (section 12.4). */
+  params?: ParamDef[] | null;
   position: number;
 }
 

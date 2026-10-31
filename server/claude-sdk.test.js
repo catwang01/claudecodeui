@@ -650,3 +650,64 @@ describe('mapCliOptionsToSDK — §6.2 soft built-in Cron preference', () => {
     expect(allowed).toContain('mcp__internal__schedule_create');
   });
 });
+
+describe('mapCliOptionsToSDK — §12.5 options.env allowlist (security)', () => {
+  let mapCliOptionsToSDK;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.resetModules();
+    const mod = await import('./claude-sdk.js');
+    mapCliOptionsToSDK = mod.mapCliOptionsToSDK;
+  });
+
+  it('merges only SCHEDULED_TASK_PARAM_* and SCHEDULED_TASK_PARAMS', () => {
+    const sdkOptions = mapCliOptionsToSDK({
+      env: {
+        SCHEDULED_TASK_PARAM_REGION: 'eu',
+        SCHEDULED_TASK_PARAM_THRESHOLD: 3,
+        SCHEDULED_TASK_PARAMS: '{"region":"eu","threshold":3}',
+        SCHEDULED_TASK_PARAMETER_X: 'not-ours',
+        OTHER: 'dropped',
+      },
+    });
+
+    expect(sdkOptions.env.SCHEDULED_TASK_PARAM_REGION).toBe('eu');
+    expect(sdkOptions.env.SCHEDULED_TASK_PARAM_THRESHOLD).toBe('3');
+    expect(sdkOptions.env.SCHEDULED_TASK_PARAMS).toBe('{"region":"eu","threshold":3}');
+    expect(sdkOptions.env).not.toHaveProperty('SCHEDULED_TASK_PARAMETER_X');
+    expect(sdkOptions.env).not.toHaveProperty('OTHER');
+  });
+
+  it('never lets a client-supplied env clobber the process environment', () => {
+    // Exactly the shape a malicious chat WebSocket could forward via data.options.
+    const sdkOptions = mapCliOptionsToSDK({
+      env: {
+        PATH: '/tmp/evil:/usr/bin',
+        ANTHROPIC_BASE_URL: 'http://attacker',
+        NODE_OPTIONS: '--require /tmp/x.js',
+        LD_PRELOAD: '/tmp/x.so',
+        CLAUDECODE: '1',
+      },
+    });
+
+    expect(sdkOptions.env.PATH).toBe(process.env.PATH);
+    expect(sdkOptions.env.PATH).not.toBe('/tmp/evil:/usr/bin');
+    expect(sdkOptions.env.ANTHROPIC_BASE_URL).toBe(process.env.ANTHROPIC_BASE_URL);
+    expect(sdkOptions.env.ANTHROPIC_BASE_URL).not.toBe('http://attacker');
+    expect(sdkOptions.env.NODE_OPTIONS).toBe(process.env.NODE_OPTIONS);
+    expect(sdkOptions.env.NODE_OPTIONS).not.toBe('--require /tmp/x.js');
+    expect(sdkOptions.env.LD_PRELOAD).toBe(process.env.LD_PRELOAD);
+    expect(sdkOptions.env.LD_PRELOAD).not.toBe('/tmp/x.so');
+    // CLAUDECODE is explicitly deleted before the merge and must stay gone.
+    expect(sdkOptions.env.CLAUDECODE).toBeUndefined();
+  });
+
+  it('leaves the environment unchanged when options.env is absent', () => {
+    const expected = { ...process.env };
+    delete expected.CLAUDECODE;
+
+    expect(mapCliOptionsToSDK({}).env).toEqual(expected);
+  });
+});
+

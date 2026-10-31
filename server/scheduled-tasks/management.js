@@ -16,6 +16,8 @@
  */
 
 import { normalizeProjectPath } from '../shared/utils.js';
+// §12: the pure parameter layer owns the model, coercion and resolution.
+import { normalizeParamDefs, parseParamDefs, resolveParams } from './params.js';
 
 const TASK_STATUSES = new Set(['active', 'paused', 'all']);
 const DEFAULT_RUNS_LIMIT = 20;
@@ -90,6 +92,28 @@ function parseJson(raw, fallback = null) {
   }
 }
 
+/** §12.4: resolved value map of a run; NULL/'' or unreadable JSON reads as null. */
+function parseParamValues(raw) {
+  if (raw === null || raw === undefined || raw === '') return null;
+  if (typeof raw === 'object' && !Array.isArray(raw)) return raw;
+  if (typeof raw !== 'string') return null;
+  const parsed = parseJson(raw, null);
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+}
+
+/**
+ * §12.1/§12.3: normalize a params input.
+ *   undefined => not supplied (leave the column alone)
+ *   null      => clear (params_json NULL)
+ *   array     => normalized ParamDef[] serialized for params_json
+ */
+function checkParams(value) {
+  if (value === null) return { ok: true, value: null };
+  const checked = normalizeParamDefs(value);
+  if (!checked.ok) return fail(checked.code, checked.message);
+  return { ok: true, value: JSON.stringify(checked.params) };
+}
+
 /** DB row (snake_case) -> Task JSON (camelCase). */
 export function taskRowToJson(row) {
   if (!row) return null;
@@ -104,6 +128,8 @@ export function taskRowToJson(row) {
     model: row.model ?? null,
     command: row.command ?? null,
     commandTimeoutSeconds: row.command_timeout_seconds ?? null,
+    // §12.4: NULL/'' or legacy JSON reads as [].
+    params: parseParamDefs(row.params_json ?? row.paramsJson),
     kind: row.kind,
     rule: parseJson(row.rule_json ?? row.ruleJson),
     nextRunAt: row.next_run_at ?? null,
@@ -134,6 +160,8 @@ export function runRowToJson(row) {
     scriptExitCode: row.script_exit_code ?? null,
     scriptOutput: row.script_output ?? null,
     promptUsed: row.prompt_used ?? null,
+    // §12.6: the resolved parameter values of this run.
+    params: parseParamValues(row.params_json ?? row.paramsJson),
   };
 }
 
@@ -480,6 +508,9 @@ export function createManagement(deps = {}) {
       input.commandTimeoutSeconds === undefined ? undefined : checkCommandTimeout(input.commandTimeoutSeconds);
     if (commandTimeoutSeconds && !commandTimeoutSeconds.ok) return commandTimeoutSeconds;
 
+    const params = input.params === undefined ? undefined : checkParams(input.params);
+    if (params && !params.ok) return params;
+
     const nowMs = now();
     const checked = validateAndNormalize(withIntervalAnchor(input.rule, nowMs), rules);
     if (!checked.ok) return checked;
@@ -502,6 +533,7 @@ export function createManagement(deps = {}) {
       enabled: input.enabled !== false,
       command: command ? command.value : undefined,
       commandTimeoutSeconds: commandTimeoutSeconds ? commandTimeoutSeconds.value : undefined,
+      paramsJson: params ? params.value : undefined,
       presetId: nonEmptyString(input.presetId) ?? undefined,
       presetTaskId: nonEmptyString(input.presetTaskId) ?? undefined,
     });
@@ -546,6 +578,11 @@ export function createManagement(deps = {}) {
       const checked = checkCommandTimeout(patch.commandTimeoutSeconds);
       if (!checked.ok) return checked;
       changes.commandTimeoutSeconds = checked.value;
+    }
+    if (patch.params !== undefined) {
+      const checked = checkParams(patch.params);
+      if (!checked.ok) return checked;
+      changes.paramsJson = checked.value;
     }
     if (patch.presetId !== undefined) {
       changes.presetId = nonEmptyString(patch.presetId);
@@ -626,14 +663,30 @@ export function createManagement(deps = {}) {
     return { ok: true, id, deleted: true, purged };
   }
 
-  async function runTaskNow(id, scope = {}) {
+  /**
+   * @param {string} id
+   * @param {object} [scope] { projectPath }
+   * @param {object} [options] { params } — §12.3 per-run override map
+   */
+  async function runTaskNow(id, scope = {}, options = {}) {
     const row = await findTask(id, scope);
     if (!row) return notFound();
+
+    const overrides = options.params;
+    const hasOverrides = overrides !== undefined && overrides !== null;
+    if (hasOverrides) {
+      // §12.3: an override naming an undeclared parameter, or an uncoercible
+      // value, is invalid_input at request time. A missing *required* parameter
+      // is deliberately not rejected here: the run is created and records
+      // missing_required_param on its run row (no gate, no agent call).
+      const checked = resolveParams(parseParamDefs(row.params_json ?? row.paramsJson), overrides);
+      if (!checked.ok && checked.code === 'invalid_input') return fail(checked.code, checked.message);
+    }
 
     const runNow = await getRunNow();
     let result;
     try {
-      result = await runNow(id);
+      result = hasOverrides ? await runNow(id, { params: overrides }) : await runNow(id);
     } catch (err) {
       return fail('internal_error', errorMessage(err), 500);
     }

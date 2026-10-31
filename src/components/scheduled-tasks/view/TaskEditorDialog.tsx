@@ -6,9 +6,11 @@ import { Button } from '../../../shared/view/ui';
 import { cn } from '../../../lib/utils';
 import SettingsToggle from '../../settings/view/SettingsToggle';
 import { scheduledTasksApi } from '../api';
-import type { ProjectOption, RuleDraft, ScheduledTask, TaskRule } from '../types';
+import type { ParamDef, ProjectOption, RuleDraft, ScheduledTask, TaskRule } from '../types';
 import { createDefaultRuleDraft, draftToRule, normalizeRuleKind, ruleToDraft, toTaskRule } from '../utils/rules';
+import { draftsToParams, paramsToDrafts, type ParamDraft } from '../utils/params';
 import { FormField, controlClassName, textAreaClassName } from './FormControls';
+import ParamsEditor from './ParamsEditor';
 import RuleEditor from './RuleEditor';
 
 export type TaskEditorValues = {
@@ -22,6 +24,8 @@ export type TaskEditorValues = {
   commandTimeoutSeconds: number | null;
   enabled: boolean;
   rule: TaskRule;
+  /** Declared parameters, normalized for the API (section 12.1). */
+  params: ParamDef[];
 };
 
 type TaskEditorDialogProps = {
@@ -54,6 +58,7 @@ export default function TaskEditorDialog({ task, onClose, onSubmit }: TaskEditor
   );
   const [enabled, setEnabled] = useState(task?.enabled ?? true);
   const [draft, setDraft] = useState<RuleDraft>(() => initialDraft(task));
+  const [paramDrafts, setParamDrafts] = useState<ParamDraft[]>(() => paramsToDrafts(task?.params));
   const [projectOptions, setProjectOptions] = useState<ProjectOption[]>([]);
   const [projectsError, setProjectsError] = useState(false);
   const [validationKey, setValidationKey] = useState<string | null>(null);
@@ -122,6 +127,12 @@ export default function TaskEditorDialog({ task, onClose, onSubmit }: TaskEditor
       return;
     }
 
+    const paramValidation = draftsToParams(paramDrafts);
+    if (!paramValidation.ok) {
+      setValidationKey(paramValidation.errorKey);
+      return;
+    }
+
     setIsSaving(true);
     try {
       await onSubmit({
@@ -133,6 +144,7 @@ export default function TaskEditorDialog({ task, onClose, onSubmit }: TaskEditor
         commandTimeoutSeconds,
         enabled,
         rule: validation.rule,
+        params: paramValidation.params,
       });
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : String(err));
@@ -247,6 +259,10 @@ export default function TaskEditorDialog({ task, onClose, onSubmit }: TaskEditor
               />
             </FormField>
           </div>
+
+          <div className="h-px bg-border" />
+
+          <ParamsEditor drafts={paramDrafts} onChange={setParamDrafts} disabled={isSaving} />
 
           <div className="h-px bg-border" />
 

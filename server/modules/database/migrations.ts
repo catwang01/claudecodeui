@@ -165,6 +165,12 @@ export function runMigrations(): void {
   addColumnIfMissing(db, 'scheduled_tasks', 'preset_task_id', 'TEXT');
   db.exec('CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_preset ON scheduled_tasks(preset_id)');
 
+  // Parametrized scheduled tasks (docs section 12.4). Additive only: existing rows
+  // keep NULL, which reads as [] and reproduces the pre-§12 environment exactly.
+  addColumnIfMissing(db, 'scheduled_tasks', 'params_json', 'TEXT');
+  addColumnIfMissing(db, 'scheduled_task_runs', 'params_json', 'TEXT');
+  addColumnIfMissing(db, 'scheduled_task_preset_tasks', 'params_json', 'TEXT');
+
   // Data migrations
   migrateLegacySessionNames(db);
 

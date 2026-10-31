@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { createManagement, taskRowToJson } from './management.js';
+import { createManagement, runRowToJson, taskRowToJson } from './management.js';
 import * as rules from './rules.js';
 
 const NOW = Date.parse('2030-06-03T12:00:00.000Z');
@@ -28,6 +28,7 @@ function makeRepo() {
         model: input.model ?? null,
         command: input.command ?? null,
         command_timeout_seconds: input.commandTimeoutSeconds ?? null,
+        params_json: input.paramsJson ?? null,
         kind: input.kind,
         rule_json: input.ruleJson,
         next_run_at: input.nextRunAt ?? null,
@@ -61,6 +62,7 @@ function makeRepo() {
         ruleJson: 'rule_json',
         nextRunAt: 'next_run_at',
         enabled: 'enabled',
+        paramsJson: 'params_json',
         presetId: 'preset_id',
         presetTaskId: 'preset_task_id',
       };
@@ -221,3 +223,83 @@ describe('preset service delegation (§10.3)', () => {
     expect(presets.deletePreset).toHaveBeenCalledWith('p1', { purge: false }, { projectPath: PROJECT });
   });
 });
+
+describe('parameters (§12)', () => {
+  it('normalizes and stores params on create', async () => {
+    const { repo, management } = setup();
+    const result = await management.createTask({
+      ...baseTask,
+      params: [
+        { name: 'region', default: 'eu', description: ' target region ' },
+        { name: 'threshold', type: 'number', default: '3' },
+      ],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.task.params).toEqual([
+      { name: 'region', type: 'string', default: 'eu', description: 'target region' },
+      { name: 'threshold', type: 'number', default: 3 },
+    ]);
+    expect(repo._tasks.get(result.task.id).params_json).toBe(JSON.stringify(result.task.params));
+  });
+
+  it('rejects an invalid definition with invalid_input before the repository', async () => {
+    const { repo, management } = setup();
+    const result = await management.createTask({ ...baseTask, params: [{ name: '1bad' }] });
+
+    expect(result).toMatchObject({ ok: false, code: 'invalid_input' });
+    expect(repo._tasks.size).toBe(0);
+  });
+
+  it('updates and clears params', async () => {
+    const { management } = setup();
+    const created = await management.createTask({ ...baseTask, params: [{ name: 'a' }] });
+
+    const updated = await management.updateTask(created.task.id, {
+      params: [{ name: 'b', type: 'boolean' }],
+    });
+    expect(updated.task.params).toEqual([{ name: 'b', type: 'boolean' }]);
+
+    const cleared = await management.updateTask(created.task.id, { params: null });
+    expect(cleared.task.params).toEqual([]);
+  });
+
+  it('maps params on the task and run views (legacy JSON reads as [])', () => {
+    expect(taskRowToJson({ params_json: '[{"name":"a"}]' }).params).toEqual([
+      { name: 'a', type: 'string' },
+    ]);
+    expect(taskRowToJson({ params_json: 'not json' }).params).toEqual([]);
+    expect(taskRowToJson({}).params).toEqual([]);
+    expect(runRowToJson({ params_json: '{"a":1}' }).params).toEqual({ a: 1 });
+    expect(runRowToJson({}).params).toBeNull();
+  });
+
+  it('forwards per-run overrides and rejects unknown names at request time', async () => {
+    const runNow = vi.fn(async (taskId) => ({
+      run: { id: 'run-1', task_id: taskId, status: 'running', trigger: 'manual' },
+    }));
+    const { management } = setup({ deps: { runNow } });
+    const created = await management.createTask({ ...baseTask, params: [{ name: 'region', default: 'eu' }] });
+
+    const ok = await management.runTaskNow(created.task.id, {}, { params: { region: 'us' } });
+    expect(ok.ok).toBe(true);
+    expect(runNow).toHaveBeenCalledWith(created.task.id, { params: { region: 'us' } });
+
+    const bad = await management.runTaskNow(created.task.id, {}, { params: { nope: 1 } });
+    expect(bad).toMatchObject({ ok: false, code: 'invalid_input' });
+    expect(runNow).toHaveBeenCalledTimes(1);
+  });
+
+  it('still starts the run when a required parameter has no value (recorded on the run)', async () => {
+    const runNow = vi.fn(async (taskId) => ({
+      run: { id: 'run-1', task_id: taskId, status: 'running', trigger: 'manual' },
+    }));
+    const { management } = setup({ deps: { runNow } });
+    const created = await management.createTask({ ...baseTask, params: [{ name: 'token', required: true }] });
+
+    const result = await management.runTaskNow(created.task.id, {}, { params: {} });
+    expect(result.ok).toBe(true);
+    expect(runNow).toHaveBeenCalledWith(created.task.id, { params: {} });
+  });
+});
+

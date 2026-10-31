@@ -153,7 +153,8 @@
   "card": {
     "runCount_other": "{{count}} 次运行",
     "model": "模型",
-    "scriptGate": "运行智能体前会先执行脚本门控"
+    "scriptGate": "运行智能体前会先执行脚本门控",
+    "params": "参数"
   },
   "empty": {
     "title": "还没有定时任务",
@@ -200,6 +201,38 @@
       "commandTimeout": "脚本超时（秒）",
       "commandHint": "脚本会在智能体运行前，以 sh -c 在项目目录中执行。其标准输出必须是 JSON：{\"prompt\": \"...\"} 表示用该提示词运行智能体，{\"skip\": true, \"reason\": \"...\"} 表示跳过本次运行，{\"skip\": false} 表示使用任务自身的提示词。退出码非零或 JSON 无效时任务会失败且不会调用智能体。留空则直接运行智能体。"
     },
+    "params": {
+      "title": "参数（可选）",
+      "hint": "每个参数都会以 SCHEDULED_TASK_PARAM_<NAME> 导出到运行环境，并以紧凑 JSON 形式提供 SCHEDULED_TASK_PARAMS。默认值留空表示运行时必须提供。",
+      "add": "添加参数",
+      "remove": "删除参数",
+      "none": "尚未声明参数。",
+      "envPlaceholder": "SCHEDULED_TASK_PARAM_…",
+      "name": "名称",
+      "namePlaceholder": "region",
+      "type": "类型",
+      "types": {
+        "string": "字符串",
+        "number": "数字",
+        "boolean": "布尔值"
+      },
+      "default": "默认值",
+      "noDefault": "无默认值",
+      "description": "说明",
+      "descriptionPlaceholder": "这个值的用途",
+      "required": "必填",
+      "requiredNoDefault": "必填参数需要在运行时提供。",
+      "errors": {
+        "nameRequired": "每个参数都需要名称。",
+        "nameInvalid": "名称需以字母或下划线开头，且只能包含字母、数字和下划线（最多 64 个字符）。",
+        "nameDuplicate": "参数名称必须唯一（不区分大小写）。",
+        "tooMany": "一个任务最多声明 32 个参数。",
+        "description": "说明最多 500 个字符。",
+        "numberInvalid": "默认值必须是有效数字。",
+        "booleanInvalid": "布尔默认值必须是 true 或 false。",
+        "tooLarge": "参数定义超过 16 KiB 上限。"
+      }
+    },
     "errors": {
       "title": "请输入标题。",
       "prompt": "请输入提示词。",
@@ -214,6 +247,20 @@
       "cronRequired": "请输入 cron 表达式。",
       "cronInvalid": "必须为 5 个字段：分 时 日 月 周。",
       "commandTimeout": "脚本超时必须在 1 到 3600 秒之间。"
+    }
+  },
+  "runParams": {
+    "title": "带参数运行",
+    "hint": "留空的字段将使用任务默认值。没有默认值的必填参数必须填写。",
+    "required": "必填",
+    "defaultHint": "默认值：{{value}}",
+    "noDefault": "无默认值",
+    "useDefault": "使用默认值",
+    "confirm": "运行任务",
+    "running": "正在启动…",
+    "errors": {
+      "required": "{{name}} 为必填且没有默认值。",
+      "invalid": "{{name}} 的值无效。"
     }
   },
   "rule": {
@@ -266,7 +313,8 @@
     "noReason": "未提供原因",
     "effectivePrompt": "实际提示词",
     "scriptOutput": "脚本输出",
-    "exitCode": "退出码"
+    "exitCode": "退出码",
+    "params": "参数"
   },
   "time": {
     "unknown": "未知"

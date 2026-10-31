@@ -65,8 +65,9 @@ export function useScheduledTasks(params: { status: TaskStatusFilter; search: st
   );
 
   const runNow = useCallback(
-    async (id: string): Promise<void> => {
-      await scheduledTasksApi.runNow(id);
+    async (id: string, params?: Record<string, unknown>): Promise<void> => {
+      // No params key at all keeps the request byte-identical to pre-section-12.
+      await scheduledTasksApi.runNow(id, params === undefined ? {} : { params });
       await refresh();
     },
     [refresh],

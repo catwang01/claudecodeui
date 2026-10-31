@@ -720,4 +720,133 @@ the existing preset keeps working untouched):
    call under `SCHEDULED_TASK_DRY_RUN=1`).
 Plus the full `npx vitest run`, `tsc --noEmit` for both configs and `eslint src/ server/`.
 
+---
+
+## 12. Parametrized scheduled tasks（第十轮，issue #14）
+
+### 12.1 Model
+
+Every scheduled task may declare **parameters**: named, typed, optionally-defaulted values. At run
+time they are **resolved** into a flat string map and exported to both the script gate and the agent
+runtime as environment variables, so any code the task runs — the gate shell script, files it
+invokes, and the agent's own shell — can read them without knowing anything about this app.
+
+```ts
+type ParamType = 'string' | 'number' | 'boolean';
+
+type ParamDef = {
+  name: string;              // ^[A-Za-z_][A-Za-z0-9_]{0,63}$, unique case-insensitively
+  type?: ParamType;          // default 'string'
+  default?: string | number | boolean;
+  description?: string;      // <= 500 chars
+  required?: boolean;        // default false; only meaningful without a default
+};
+```
+
+Limits: at most **32** parameters per task; `JSON.stringify(params)` at most **16 KiB**.
+Resolved **values** are bounded as well (§12.3): each value at most **4096 characters**, the compact
+resolved JSON at most **16 KiB**, and no value may contain NUL (`\u0000`) — these keep the exported
+environment far below the OS `E2BIG` limit and bound what a run may persist.
+
+### 12.2 Env contract（framework-agnostic core）
+
+For a task with parameters `{region: 'eu', threshold: 3, dryRun: false}`:
+
+| Variable | Value |
+|---|---|
+| `SCHEDULED_TASK_PARAM_REGION` | `eu` |
+| `SCHEDULED_TASK_PARAM_THRESHOLD` | `3` |
+| `SCHEDULED_TASK_PARAM_DRYRUN` | `false` |
+| `SCHEDULED_TASK_PARAMS` | `{"region":"eu","threshold":3,"dryRun":false}` (compact JSON) |
+
+* Derived name = `SCHEDULED_TASK_PARAM_` + `name.toUpperCase()`. The `_PARAM_` infix makes a
+  collision with the reserved `SCHEDULED_TASK_*` / `SCHEDULED_TASK_*_DIR` variables impossible, and two
+  parameters can never collide because names are unique case-insensitively.
+* Booleans are `'true'`/`'false'`; numbers use `String(value)`; strings pass through verbatim.
+* With no parameters declared **no** `SCHEDULED_TASK_PARAM_*` variable is exported and
+  `SCHEDULED_TASK_PARAMS` is not set at all — byte-for-byte the pre-§12 environment.
+* `SCHEDULED_TASK_PARAMS` is the framework-neutral escape hatch: a consumer can parse one JSON
+  variable instead of knowing each name. Nothing in this section may reference a vendor-specific
+  directory, tool or API.
+
+### 12.3 Resolution（precedence, low → high）
+
+1. the `ParamDef.default` stored on the task;
+2. the **per-run override** (`POST /:id/run` body / `schedule_run` args / UI *Run with parameters*).
+
+A missing `required` parameter with no value from either source ⇒ the run fails with
+`missing_required_param` (recorded on the run row, no gate, no agent call). Type coercion applies to
+defaults and overrides alike; an uncoercible default is `invalid_input` at creation, an uncoercible
+override is `invalid_input` at request time. An override naming a parameter the task does not declare
+is `invalid_input`.
+
+### 12.4 Storage (additive)
+
+| Table | Column | Meaning |
+|---|---|---|
+| `scheduled_tasks` | `params_json` TEXT NULL | `ParamDef[]` (JSON). NULL/'' ⇒ no parameters |
+| `scheduled_task_runs` | `params_json` TEXT NULL | resolved value map for that run (audit/provenance) |
+| `scheduled_task_preset_tasks` | `params_json` TEXT NULL | template `ParamDef[]`, copied into the task on install |
+
+Migration uses `addColumnIfMissing` only — no data rewrite. Unreadable/legacy JSON is read as `[]`.
+
+### 12.5 Module contracts
+
+* **`server/scheduled-tasks/params.js` (new, pure — no I/O):** single source of truth.
+  * `PARAM_ENV_PREFIX = 'SCHEDULED_TASK_PARAM_'`, `PARAMS_ENV_NAME = 'SCHEDULED_TASK_PARAMS'`
+  * `normalizeParamDefs(input)` → `{ ok: true, params } | { ok: false, code: 'invalid_input', message }`
+  * `resolveParams(params, overrides)` → `{ ok: true, values, json, env } | { ok: false, code, message }`
+  * `paramEnv(params, overrides)` → `Record<string,string> | null` (`null` ⇒ export nothing)
+* `management.createTask`/`updateTask` accept `params` (normalized + coerced) and reject on `invalid_input`.
+* `runner.execute()`:
+  1. resolve params **before** the script gate; on failure `finishOnce(..., 'error', { error })`;
+  2. merge `paramEnv` into the script-gate env (after `workspaceEnv`);
+  3. pass `env: paramEnv` in the agent options — `server/claude-sdk.js` merges `options.env` into
+     `sdkOptions.env` so the spawned provider CLI inherits them;
+  4. prefix the agent prompt with the §12.6 parameters block;
+  5. `createRun` stores `params_json` = resolved values.
+* REST: `POST /:id/run` accepts `{ params?: Record<string, unknown> }`;
+  `POST /presets/:id/install` accepts `{ params?: Record<string, unknown> }`, applied to every
+  installed task whose template declares that name.
+* Agent tools: `schedule_create` / `schedule_update` gain `params`; `schedule_run` and
+  `schedule_preset_install` gain `params`. Every description keeps the §6 precedence sentence.
+
+### 12.6 Agent-facing text
+
+A **Parameters** block is appended to the workspace block. It lists each parameter's name, env
+variable, value and description, and states: read them from the environment
+(`$SCHEDULED_TASK_PARAM_<NAME>`, or parse `$SCHEDULED_TASK_PARAMS`); the values are fixed for this run;
+never hardcode them. It also names the reserved variables. `runs/<runId>/run.json` records `params`.
+Tasks without parameters get no block (prompt byte-identical to pre-§12).
+
+### 12.7 Frontend
+
+* Task form: a **Parameters** section — add/remove rows (`name`, `type`, `default`,
+  `description`, `required`) with client-side validation mirroring §12.1.
+* Manual run: a *Run with parameters* dialog prefilled with current defaults; blank ⇒ default;
+  required-without-default blocks submit.
+* Task card/detail: chips per parameter (tooltip = description + env var); a run's history shows the
+  resolved values of that run.
+* i18n keys in the `scheduledTasks` namespace (`en` + `zh-CN`).
+
+### 12.8 Write scopes (one owner per file)
+
+| Owner | Files |
+|---|---|
+| backend-params | `server/modules/database/**`, `server/scheduled-tasks/**`, `server/routes/scheduled-tasks.js` (+ test), `server/claude-sdk.js` |
+| frontend-params | `src/components/scheduled-tasks/**`, `src/i18n/locales/{en,zh-CN}/scheduledTasks.json` |
+| verify | `scripts/verify-scheduled-task-params.mjs` |
+| lead | `docs/scheduled-tasks.md` |
+
+### 12.9 Acceptance
+
+`node scripts/verify-scheduled-task-params.mjs` boots the real server (throwaway DB, temp
+`SCHEDULED_TASK_DATA_DIR`, `SCHEDULED_TASK_DRY_RUN=1`) and asserts: create-with-params round-trips;
+invalid definitions are rejected; a dry run records the resolved values; the gate sees
+`SCHEDULED_TASK_PARAM_*` and `SCHEDULED_TASK_PARAMS`; a per-run override wins over the default; a run
+missing a required parameter fails with `missing_required_param` and never calls the agent; a task
+without parameters exports no `SCHEDULED_TASK_PARAM_*`; and reinstalling a preset preserves the
+parameter contract. Plus the full `npx vitest run`, `tsc --noEmit` for both configs and
+`eslint src/ server/`.
+
 

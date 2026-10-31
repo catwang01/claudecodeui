@@ -27,11 +27,22 @@ import { normalizeProjectPath } from '../shared/utils.js';
 // only imports this module lazily (inside getPresets()), so this is a one-way
 // static dependency, not a cycle.
 import { taskRowToJson } from './management.js';
+// §12: the pure parameter layer (definition validation + install overrides).
+import { applyParamOverrides, normalizeParamDefs, parseParamDefs } from './params.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
-/** Absolute directory of the shipped catalog. */
-export const BUILTIN_PRESET_DIR = path.join(HERE, 'presets', 'builtin');
+/**
+ * Absolute directory of the shipped catalog.
+ *
+ * SCHEDULED_TASK_PRESET_DIR overrides it (issue #4: "or make it configurable").
+ * Unset/empty keeps the shipped default; a path that does not exist degrades
+ * exactly like a missing catalog directory always did — readdirSync throws, is
+ * caught and the catalog seeds nothing.
+ */
+export const BUILTIN_PRESET_DIR = process.env.SCHEDULED_TASK_PRESET_DIR?.trim()
+  ? path.resolve(process.env.SCHEDULED_TASK_PRESET_DIR.trim())
+  : path.join(HERE, 'presets', 'builtin');
 
 const KEBAB_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const RULE_KINDS = new Set(['once', 'interval', 'daily', 'weekly', 'cron']);
@@ -72,6 +83,19 @@ function parseJson(raw, fallback = null) {
 
 function toIso(ms) {
   return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
+
+/** §12.4: serialize a template ParamDef[] for params_json; empty => NULL. */
+function serializeParams(params) {
+  const defs = Array.isArray(params) ? params : [];
+  return defs.length ? JSON.stringify(defs) : null;
+}
+
+/** §12.4: raw params_json already stored on a row. */
+function paramsJsonOf(row) {
+  const raw = row ? (row.params_json ?? row.paramsJson) : null;
+  if (typeof raw === 'string' && raw.trim()) return raw;
+  return serializeParams(parseParamDefs(row ? (raw ?? row.params) : null));
 }
 
 /** Key-order-insensitive JSON so template comparison is stable. */
@@ -146,6 +170,13 @@ export function validateBuiltinPreset(raw, context = {}) {
     ) {
       return invalid(`tasks[${index}].commandTimeoutSeconds must be an integer between 1 and ${MAX_COMMAND_TIMEOUT_SECONDS}`);
     }
+    // §12.1: optional ParamDef[] on a template.
+    let params = [];
+    if (task.params !== undefined && task.params !== null) {
+      const checkedParams = normalizeParamDefs(task.params);
+      if (!checkedParams.ok) return invalid(`tasks[${index}].params: ${checkedParams.message}`);
+      params = checkedParams.params;
+    }
     tasks.push({
       id: taskId,
       title,
@@ -156,6 +187,7 @@ export function validateBuiltinPreset(raw, context = {}) {
       rule: task.rule,
       command: nonEmptyString(task.command),
       commandTimeoutSeconds: task.commandTimeoutSeconds ?? null,
+      params,
     });
   }
 
@@ -306,6 +338,8 @@ export function createPresetService(deps = {}) {
       rule: parseJson(row.rule_json ?? row.ruleJson),
       command: row.command ?? null,
       commandTimeoutSeconds: row.command_timeout_seconds ?? null,
+      // §12.4: NULL/legacy JSON reads as [].
+      params: parseParamDefs(row.params_json ?? row.paramsJson),
       position: row.position ?? 0,
     };
   }
@@ -350,6 +384,7 @@ export function createPresetService(deps = {}) {
       rule: task.rule,
       command: task.command ?? null,
       commandTimeoutSeconds: task.commandTimeoutSeconds ?? null,
+      paramsJson: serializeParams(task.params),
       position: index,
     }));
   }
@@ -367,6 +402,9 @@ export function createPresetService(deps = {}) {
       if ((row.kind ?? null) !== (task.rule.kind ?? null)) return false;
       if ((row.command ?? null) !== (task.command ?? null)) return false;
       if ((row.command_timeout_seconds ?? null) !== (task.commandTimeoutSeconds ?? null)) return false;
+      if (stableStringify(parseParamDefs(row.params_json ?? row.paramsJson)) !== stableStringify(task.params ?? [])) {
+        return false;
+      }
       if (stableStringify(parseJson(row.rule_json ?? row.ruleJson)) !== stableStringify(task.rule)) return false;
     }
     return true;
@@ -491,6 +529,17 @@ export function createPresetService(deps = {}) {
       const row = repo.getPreset(id);
       if (!row) return notFound();
 
+      // §12.5: install-time parameter overrides, applied to every installed task
+      // whose template declares that name (other names are ignored).
+      const overrides = options.params;
+      if (
+        overrides !== undefined &&
+        overrides !== null &&
+        (typeof overrides !== 'object' || Array.isArray(overrides))
+      ) {
+        return fail('invalid_input', 'params must be an object');
+      }
+
       const rules = await getRules();
       const workspace = await getWorkspace();
       const templates = typeof repo.listPresetTasks === 'function' ? repo.listPresetTasks(id) || [] : [];
@@ -503,6 +552,21 @@ export function createPresetService(deps = {}) {
       const created = [];
       const updated = [];
       const skipped = [];
+
+      // §12.5/N2: resolve every template's install overrides *before* creating or
+      // updating anything, so a rejected override materializes nothing instead of
+      // leaving a partially installed preset behind.
+      const templateParamsById = new Map();
+      for (const template of templates) {
+        const templateDefs = parseParamDefs(template.params_json ?? template.paramsJson);
+        let templateParams = templateDefs;
+        if (overrides !== undefined && overrides !== null) {
+          const applied = applyParamOverrides(templateDefs, overrides);
+          if (!applied.ok) return fail(applied.code, applied.message);
+          templateParams = applied.params;
+        }
+        templateParamsById.set(template.id, templateParams);
+      }
 
       for (const template of templates) {
         const rule = prepareRule(parseJson(template.rule_json ?? template.ruleJson), rules, nowMs);
@@ -517,6 +581,9 @@ export function createPresetService(deps = {}) {
             (task.preset_task_id ?? task.presetTaskId ?? null) === template.id &&
             samePath(rowProjectPath(task), projectPath)
         );
+        const templateParams =
+          templateParamsById.get(template.id) ??
+          parseParamDefs(template.params_json ?? template.paramsJson);
         const patch = {
           title: template.title,
           prompt: template.prompt,
@@ -527,6 +594,7 @@ export function createPresetService(deps = {}) {
           ruleJson: JSON.stringify(rule),
           command: template.command ?? null,
           commandTimeoutSeconds: template.command_timeout_seconds ?? null,
+          paramsJson: serializeParams(templateParams),
           enabled: effective,
           nextRunAt: effective ? nextIso : null,
         };
@@ -639,6 +707,7 @@ export function createPresetService(deps = {}) {
           rule: parseJson(task.rule_json ?? task.ruleJson),
           command: task.command ?? null,
           commandTimeoutSeconds: task.command_timeout_seconds ?? null,
+          paramsJson: paramsJsonOf(task),
           position: index,
         }))
       );

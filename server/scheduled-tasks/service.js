@@ -133,7 +133,7 @@ export function createScheduler(deps = {}) {
     }
   }
 
-  async function prepareAndStart(task, trigger, nowMs) {
+  async function prepareAndStart(task, trigger, nowMs, options = {}) {
     const repo = await getRepo();
     const runner = await getRunner();
 
@@ -159,7 +159,8 @@ export function createScheduler(deps = {}) {
     }
 
     const scheduledFor = trigger === 'schedule' ? (task.next_run_at ?? null) : null;
-    const { run, done } = runner.startTaskRun(task, { trigger, scheduledFor });
+    // §12.3: a manual run may carry a per-run parameter override map.
+    const { run, done } = runner.startTaskRun(task, { trigger, scheduledFor, params: options.params });
 
     const settled = Promise.resolve(done)
       .catch((err) => ({
@@ -196,9 +197,9 @@ export function createScheduler(deps = {}) {
    * 'settled' promise resolves when the run and its bookkeeping are done.
    * Never rejects.
    */
-  function launch(task, trigger, nowMs) {
+  function launch(task, trigger, nowMs, options = {}) {
     const started = (async () => {
-      const { run, settled } = await prepareAndStart(task, trigger, nowMs);
+      const { run, settled } = await prepareAndStart(task, trigger, nowMs, options);
       return { run, settled };
     })();
 
@@ -274,14 +275,14 @@ export function createScheduler(deps = {}) {
     }
   }
 
-  async function runNow(taskId) {
+  async function runNow(taskId, options = {}) {
     const repo = await getRepo();
     const task = repo.getTask(taskId);
     if (!task) return { error: 'not_found' };
     if (inFlight.has(taskId)) return { error: 'in_flight' };
 
     inFlight.add(taskId);
-    const { run } = await launch(task, 'manual', now());
+    const { run } = await launch(task, 'manual', now(), options);
     if (!run) {
       inFlight.delete(taskId);
       return { error: 'internal_error' };
@@ -326,10 +327,11 @@ export function stopScheduledTaskService() {
 
 /**
  * @param {string} taskId
+ * @param {{ params?: Record<string, unknown> }} [options] §12.3 per-run overrides
  * @returns {Promise<{ run: object } | { error: 'not_found'|'in_flight'|'internal_error' }>}
  */
-export async function runScheduledTaskNow(taskId) {
-  return getDefaultScheduler().runNow(taskId);
+export async function runScheduledTaskNow(taskId, options = {}) {
+  return getDefaultScheduler().runNow(taskId, options);
 }
 
 export function getSchedulerState() {

@@ -146,6 +146,41 @@ const selectorFields = {
     .optional(),
 };
 
+// §12 parameters: named, typed, optionally-defaulted values that are resolved per
+// run and exported to the script gate and the agent environment.
+const paramDefFields = z.object({
+  name: z.string().describe('Parameter name: ^[A-Za-z_][A-Za-z0-9_]{0,63}$, unique case-insensitively.'),
+  type: z.enum(['string', 'number', 'boolean']).describe("Parameter type. Defaults to 'string'.").optional(),
+  default: z
+    .union([z.string(), z.number(), z.boolean()])
+    .describe('Default value, coerced to the declared type.')
+    .optional(),
+  description: z.string().describe('Short human-readable description (at most 500 characters).').optional(),
+  required: z
+    .boolean()
+    .describe('Without a default, the run fails when no value is supplied. Defaults to false.')
+    .optional(),
+});
+
+const paramsField = z
+  .array(paramDefFields)
+  .describe(
+    'Parameter definitions (at most 32, names unique case-insensitively). At run time they are exported to the script gate and the agent as SCHEDULED_TASK_PARAM_<NAME> plus the compact JSON SCHEDULED_TASK_PARAMS.'
+  )
+  .optional();
+
+const paramsNullableField = z
+  .union([z.array(paramDefFields), z.null()])
+  .describe('Replace the parameter definitions; pass null to remove every parameter.')
+  .optional();
+
+const paramOverridesField = z
+  .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
+  .describe(
+    'Per-run parameter overrides keyed by parameter name (docs §12.3); they win over the task defaults. Unknown names or uncoercible values are invalid_input.'
+  )
+  .optional();
+
 // §7 script gate. The command must print a JSON envelope on stdout so a
 // "nothing to do" check never reaches the model.
 const gateFields = {
@@ -192,6 +227,7 @@ export function createScheduleTools(options = {}) {
       provider: 'claude',
       command: args.command,
       commandTimeoutSeconds: args.command_timeout_seconds,
+      params: args.params,
       rule: selector.rule,
       userId,
     });
@@ -226,18 +262,21 @@ export function createScheduleTools(options = {}) {
     if (args.command_timeout_seconds !== undefined) {
       patch.commandTimeoutSeconds = args.command_timeout_seconds;
     }
+    if (args.params !== undefined) patch.params = args.params;
 
     if (
       patch.title === undefined &&
       patch.prompt === undefined &&
       patch.command === undefined &&
       patch.commandTimeoutSeconds === undefined &&
+      patch.params === undefined &&
       !patch.rule
     ) {
       return {
         ok: false,
         code: 'invalid_input',
-        message: 'Nothing to update: provide title, prompt, command, command timeout or one selector',
+        message:
+          'Nothing to update: provide title, prompt, params, command, command timeout or one selector',
       };
     }
     const result = await management.updateTask(args.id, patch, scope);
@@ -251,7 +290,7 @@ export function createScheduleTools(options = {}) {
   });
 
   const run = guarded('schedule_run', async (args) => {
-    const result = await management.runTaskNow(args.id, scope);
+    const result = await management.runTaskNow(args.id, scope, { params: args.params });
     if (!result.ok) return result;
     return { run: result.run };
   });
@@ -282,6 +321,7 @@ export function createScheduleTools(options = {}) {
     const result = await management.presets.installPreset(args.id, {
       projectPath: args.project_path || projectPath,
       enabled: args.enabled,
+      params: args.params,
       userId,
     });
     if (!result.ok) return result;
@@ -327,6 +367,7 @@ export function createScheduleTools(options = {}) {
         SCHEDULER_STORAGE_NOTE +
         ' Create a scheduled task that starts a new agent run in this project. Provide exactly one schedule selector (after_seconds, at, every_seconds, daily, weekly or cron).' +
         ' Optionally add a script gate via command/command_timeout_seconds: the command runs first and its stdout JSON envelope ({"skip":true,"reason":"..."} | {"prompt":"..."} | {"skip":false}) decides whether the agent runs and with which prompt.' +
+        ' Optionally declare params: each run resolves them and exports them to the script gate and the agent as SCHEDULED_TASK_PARAM_<NAME> plus the compact JSON SCHEDULED_TASK_PARAMS.' +
         WORKSPACE_LAYOUT_NOTE,
       {
         prompt: z.string().describe('Prompt sent to the agent when the task runs.'),
@@ -335,6 +376,7 @@ export function createScheduleTools(options = {}) {
           .string()
           .describe('Target project path; defaults to the current session project.')
           .optional(),
+        params: paramsField,
         ...selectorFields,
         ...gateFields,
       },
@@ -360,12 +402,14 @@ export function createScheduleTools(options = {}) {
     tool(
       'schedule_update',
       SCHEDULER_PRECEDENCE_NOTE +
-        ' Update a scheduled task title, prompt, script gate (command/command_timeout_seconds) and/or its schedule (at most one selector).' +
-        ' A command gate runs before the agent and prints a JSON envelope ({"skip":true,"reason":"..."} | {"prompt":"..."} | {"skip":false}); null clears the gate.',
+        ' Update a scheduled task title, prompt, params, script gate (command/command_timeout_seconds) and/or its schedule (at most one selector).' +
+        ' A command gate runs before the agent and prints a JSON envelope ({"skip":true,"reason":"..."} | {"prompt":"..."} | {"skip":false}); null clears the gate.' +
+        ' params replaces the parameter definitions; null removes every parameter.',
       {
         id: z.string().describe('Scheduled task id.'),
         title: z.string().optional(),
         prompt: z.string().optional(),
+        params: paramsNullableField,
         ...selectorFields,
         ...gateFields,
       },
@@ -381,8 +425,12 @@ export function createScheduleTools(options = {}) {
     ),
     tool(
       'schedule_run',
-      SCHEDULER_PRECEDENCE_NOTE + ' Start a scheduled task immediately (manual trigger).',
-      { id: z.string().describe('Scheduled task id.') },
+      SCHEDULER_PRECEDENCE_NOTE +
+        ' Start a scheduled task immediately (manual trigger). Pass params to override the task parameter defaults for this run only (docs §12.3).',
+      {
+        id: z.string().describe('Scheduled task id.'),
+        params: paramOverridesField,
+      },
       run,
       { annotations: { readOnlyHint: false } }
     ),
@@ -412,6 +460,7 @@ export function createScheduleTools(options = {}) {
       'schedule_preset_install',
       SCHEDULER_PRECEDENCE_NOTE +
         ' Install a preset into this project: every task template becomes a real scheduled task linked back to the preset, so enabling or disabling the preset switches them all at once. Installing again is idempotent — linked tasks are updated, never duplicated.' +
+        ' Optional params overrides are applied to every installed task whose template declares that parameter name (docs §12.5).' +
         WORKSPACE_LAYOUT_NOTE,
       {
         id: z.string().describe('Preset id (see schedule_preset_list).'),
@@ -423,6 +472,7 @@ export function createScheduleTools(options = {}) {
           .boolean()
           .describe('Install the preset enabled. Defaults to true; pass false to install it paused.')
           .optional(),
+        params: paramOverridesField,
       },
       presetInstall,
       { annotations: { readOnlyHint: false } }

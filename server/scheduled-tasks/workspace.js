@@ -24,6 +24,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+// §12: params.js is the single source of truth for the parameter model; this
+// module only renders the definition list into task.json/run.json and the prompt.
+import { parseParamDefs } from './params.js';
+
 export const SCHEDULED_TASK_SCHEMA_VERSION = 1;
 
 const DISABLED_VALUES = new Set(['0', 'false', 'off', 'no']);
@@ -177,6 +181,30 @@ function parseRule(task) {
   return null;
 }
 
+/** §12.4: ParamDef[] of a task row/view; unreadable JSON reads as []. */
+function paramDefsOf(task) {
+  if (!task || typeof task !== 'object') return [];
+  return parseParamDefs(task.params_json ?? task.paramsJson ?? task.params);
+}
+
+/** §12.4/§12.6: resolved value map of a run row/view, when it has one. */
+function paramValuesOf(run) {
+  if (!run || typeof run !== 'object') return null;
+  const direct = run.params;
+  if (direct && typeof direct === 'object' && !Array.isArray(direct)) return direct;
+  const raw = run.params_json ?? run.paramsJson;
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+  if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 /** task.json: machine snapshot of the task definition (§10.4). */
 function taskSnapshot(task, now) {
   const snapshot = {
@@ -194,6 +222,9 @@ function taskSnapshot(task, now) {
   };
   const url = task && typeof task === 'object' ? task.url : null;
   if (typeof url === 'string' && url.trim()) snapshot.url = url;
+  // §12.4: the parameter definitions belong to the task definition snapshot.
+  const params = paramDefsOf(task);
+  if (params.length) snapshot.params = params;
   return snapshot;
 }
 
@@ -256,11 +287,17 @@ function layoutText(task, { runId } = {}) {
   ].join('\n');
 }
 
-/** Full agent-facing prompt: workspace block + effective prompt. */
-function agentPromptText(task, prompt, runId) {
+/**
+ * Full agent-facing prompt: workspace block, then the §12.6 Parameters block,
+ * then the effective prompt.
+ */
+function agentPromptText(task, prompt, runId, paramsBlock) {
+  const blocks = [];
   const block = layoutText(task, { runId });
+  if (block) blocks.push(block);
+  if (typeof paramsBlock === 'string' && paramsBlock.trim()) blocks.push(paramsBlock);
   const effective = typeof prompt === 'string' ? prompt : '';
-  return block ? `${block}\n\n${effective}` : effective;
+  return blocks.length ? `${blocks.join('\n\n')}\n\n${effective}` : effective;
 }
 
 /** run.json: run metadata + workspace paths (§10.4). */
@@ -296,6 +333,9 @@ function writeRunJson(dir, task, run, patch = {}) {
       runDir: ws.runDir ?? dir,
     },
   };
+  // §12.6: run.json records the resolved parameter values of this run.
+  const params = paramValuesOf(run) ?? (existing.params && typeof existing.params === 'object' ? existing.params : null);
+  if (params !== null) record.params = params;
   writeJson(path.join(dir, 'run.json'), record);
   return record;
 }
@@ -365,7 +405,7 @@ export function ensureTaskWorkspace(task) {
  * refresh prompt.md with the full agent-facing text.
  * @returns {{root, taskDir, stateDir, tmpDir, runDir}|null}
  */
-export function ensureRunWorkspace(task, run, { effectivePrompt } = {}) {
+export function ensureRunWorkspace(task, run, { effectivePrompt, paramsBlock } = {}) {
   if (!isWorkspaceEnabled()) return null;
   return safe('ensureRunWorkspace', () => {
     const taskId = taskIdOf(task) ?? run?.task_id ?? run?.taskId ?? null;
@@ -375,7 +415,7 @@ export function ensureRunWorkspace(task, run, { effectivePrompt } = {}) {
     fs.mkdirSync(path.join(dir, 'logs'), { recursive: true });
     fs.mkdirSync(path.join(dir, 'tmp'), { recursive: true });
     const prompt = effectivePrompt === undefined || effectivePrompt === null ? promptOf(task) : effectivePrompt;
-    writeFile(path.join(dir, 'prompt.md'), agentPromptText(task, prompt, runId));
+    writeFile(path.join(dir, 'prompt.md'), agentPromptText(task, prompt, runId, paramsBlock));
     writeRunJson(dir, task, run);
     return workspacePaths(taskId, runId);
   });

@@ -25,6 +25,7 @@ function makeTaskRow(input, id) {
     model: input.model ?? null,
     command: input.command ?? null,
     command_timeout_seconds: input.commandTimeoutSeconds ?? null,
+    params_json: input.paramsJson ?? null,
     kind: input.kind,
     rule_json: input.ruleJson,
     next_run_at: input.nextRunAt ?? null,
@@ -88,6 +89,7 @@ function makeRepo() {
         ruleJson: 'rule_json',
         nextRunAt: 'next_run_at',
         enabled: 'enabled',
+        paramsJson: 'params_json',
       };
       for (const [key, value] of Object.entries(patch)) {
         row[columns[key] || key] = key === 'enabled' ? (value ? 1 : 0) : value;
@@ -757,3 +759,89 @@ describe('preset tools (§10.6)', () => {
   });
 });
 
+
+describe('params (§12)', () => {
+  const DEFS = [
+    { name: 'region', type: 'string', default: 'eu' },
+    { name: 'threshold', type: 'number', default: 3 },
+  ];
+
+  it('creates a task with normalized parameter definitions', async () => {
+    const { call, repo } = setup();
+
+    const created = await call('schedule_create', {
+      title: 'a',
+      prompt: 'p',
+      every_seconds: 60,
+      params: DEFS,
+    });
+
+    expect(created.params).toEqual(DEFS);
+    expect(repo._tasks.get(created.id).params_json).toBe(JSON.stringify(DEFS));
+  });
+
+  it('rejects an invalid parameter definition', async () => {
+    const { call, repo } = setup();
+
+    const result = await call('schedule_create', {
+      title: 'a',
+      prompt: 'p',
+      every_seconds: 60,
+      params: [{ name: '1bad' }],
+    });
+
+    expect(result).toMatchObject({ code: 'invalid_input' });
+    expect(repo.createTask).not.toHaveBeenCalled();
+  });
+
+  it('updates and clears parameter definitions', async () => {
+    const { call } = setup();
+    const created = await call('schedule_create', { title: 'a', prompt: 'p', every_seconds: 60, params: DEFS });
+
+    const updated = await call('schedule_update', { id: created.id, params: [{ name: 'x', type: 'boolean' }] });
+    expect(updated.params).toEqual([{ name: 'x', type: 'boolean' }]);
+
+    const cleared = await call('schedule_update', { id: created.id, params: null });
+    expect(cleared.params).toEqual([]);
+  });
+
+  it('forwards per-run overrides to schedule_run and rejects unknown names', async () => {
+    const { call, runNow } = setup();
+    const created = await call('schedule_create', { title: 'a', prompt: 'p', every_seconds: 60, params: DEFS });
+
+    await call('schedule_run', { id: created.id, params: { threshold: 7 } });
+    expect(runNow).toHaveBeenCalledWith(created.id, { params: { threshold: 7 } });
+
+    const bad = await call('schedule_run', { id: created.id, params: { nope: 1 } });
+    expect(bad).toMatchObject({ code: 'invalid_input' });
+    expect(runNow).toHaveBeenCalledTimes(1);
+  });
+
+  it('forwards install params to the preset service', async () => {
+    const installPreset = vi.fn(async (id, options) => ({
+      ok: true,
+      preset: { id },
+      tasks: [],
+      created: [],
+      updated: [],
+      skipped: [],
+    }));
+    const { call } = setup({ presets: { installPreset } });
+
+    await call('schedule_preset_install', { id: 'alpha-daily', params: { region: 'us' } });
+
+    expect(installPreset).toHaveBeenCalledWith('alpha-daily', {
+      projectPath: PROJECT,
+      enabled: undefined,
+      params: { region: 'us' },
+      userId: null,
+    });
+  });
+
+  it('documents the parameter environment on schedule_create and schedule_run', () => {
+    const { byName } = setup();
+    expect(byName.schedule_create.description).toContain('SCHEDULED_TASK_PARAM_');
+    expect(byName.schedule_run.description).toMatch(/params/);
+    expect(byName.schedule_update.description).toMatch(/parameter/i);
+  });
+});

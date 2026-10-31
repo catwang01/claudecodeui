@@ -233,7 +233,10 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
   -- this column is created in migrations after addColumnIfMissing so that databases
   -- created before the feature are upgraded too.
   preset_id TEXT,
-  preset_task_id TEXT
+  preset_task_id TEXT,
+  -- Parametrized scheduled tasks (docs section 12.4). NULL/'' => no parameters;
+  -- databases created before the feature get the column through migrations.ts.
+  params_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due ON scheduled_tasks(enabled, next_run_at);`;
 
@@ -253,7 +256,9 @@ CREATE TABLE IF NOT EXISTS scheduled_task_runs (
   -- Script gate (docs section 7)
   script_exit_code INTEGER,
   script_output TEXT,
-  prompt_used TEXT
+  prompt_used TEXT,
+  -- Resolved parameter values of the run (docs section 12.4).
+  params_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_scheduled_task_runs_task ON scheduled_task_runs(task_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_scheduled_task_runs_session ON scheduled_task_runs(session_id);`;
@@ -290,6 +295,8 @@ CREATE TABLE IF NOT EXISTS scheduled_task_preset_tasks (
   rule_json TEXT NOT NULL,
   command TEXT,
   command_timeout_seconds INTEGER,
+  -- Template parameter definitions (docs section 12.4).
+  params_json TEXT,
   position INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL

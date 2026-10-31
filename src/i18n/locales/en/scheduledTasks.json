@@ -159,7 +159,8 @@
     "runCount_one": "{{count}} run",
     "runCount_other": "{{count}} runs",
     "model": "Model",
-    "scriptGate": "Runs a script gate before the agent"
+    "scriptGate": "Runs a script gate before the agent",
+    "params": "Parameters"
   },
   "empty": {
     "title": "No scheduled tasks yet",
@@ -206,6 +207,38 @@
       "commandTimeout": "Script timeout (seconds)",
       "commandHint": "The command runs with sh -c in the project directory before the agent. Its stdout must be JSON: {\"prompt\": \"...\"} runs the agent with that prompt, {\"skip\": true, \"reason\": \"...\"} skips the run, {\"skip\": false} keeps the task prompt. A non-zero exit or invalid JSON fails the run without calling the agent. Leave empty to run the agent directly."
     },
+    "params": {
+      "title": "Parameters (optional)",
+      "hint": "Each parameter is exported to the run environment as SCHEDULED_TASK_PARAM_<NAME>, plus SCHEDULED_TASK_PARAMS as compact JSON. Leave the default empty for a value that must be supplied when running.",
+      "add": "Add parameter",
+      "remove": "Remove parameter",
+      "none": "No parameters declared.",
+      "envPlaceholder": "SCHEDULED_TASK_PARAM_…",
+      "name": "Name",
+      "namePlaceholder": "region",
+      "type": "Type",
+      "types": {
+        "string": "String",
+        "number": "Number",
+        "boolean": "Boolean"
+      },
+      "default": "Default",
+      "noDefault": "No default",
+      "description": "Description",
+      "descriptionPlaceholder": "What this value controls",
+      "required": "Required",
+      "requiredNoDefault": "Required parameters must be supplied at run time.",
+      "errors": {
+        "nameRequired": "Every parameter needs a name.",
+        "nameInvalid": "Names must start with a letter or underscore and contain only letters, digits and underscores (max 64).",
+        "nameDuplicate": "Parameter names must be unique, ignoring case.",
+        "tooMany": "A task can declare at most 32 parameters.",
+        "description": "Descriptions are limited to 500 characters.",
+        "numberInvalid": "Enter a valid number as the default.",
+        "booleanInvalid": "Boolean defaults must be true or false.",
+        "tooLarge": "The parameter definitions exceed the 16 KiB limit."
+      }
+    },
     "errors": {
       "title": "Enter a title.",
       "prompt": "Enter a prompt.",
@@ -220,6 +253,20 @@
       "cronRequired": "Enter a cron expression.",
       "cronInvalid": "Use exactly 5 fields: minute hour day-of-month month day-of-week.",
       "commandTimeout": "The script timeout must be between 1 and 3600 seconds."
+    }
+  },
+  "runParams": {
+    "title": "Run with parameters",
+    "hint": "Blank fields use the task default. Required parameters without a default must be filled in.",
+    "required": "Required",
+    "defaultHint": "Default: {{value}}",
+    "noDefault": "No default",
+    "useDefault": "Use default",
+    "confirm": "Run task",
+    "running": "Starting…",
+    "errors": {
+      "required": "{{name}} is required and has no default.",
+      "invalid": "{{name}} has an invalid value."
     }
   },
   "rule": {
@@ -272,7 +319,8 @@
     "noReason": "No reason provided",
     "effectivePrompt": "Effective prompt",
     "scriptOutput": "Script output",
-    "exitCode": "Exit code"
+    "exitCode": "Exit code",
+    "params": "Parameters"
   },
   "time": {
     "unknown": "Unknown"

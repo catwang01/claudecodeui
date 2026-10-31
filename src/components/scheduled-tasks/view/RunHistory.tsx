@@ -6,6 +6,7 @@ import type { Project } from '../../../types/app';
 import { scheduledTasksApi } from '../api';
 import type { ScheduledTaskRun } from '../types';
 import { formatDateTime, formatDuration, formatRelativeTime, truncate } from '../utils/format';
+import { formatParamValue } from '../utils/params';
 import { findSessionInProjects } from '../utils/sessionLookup';
 import StatusPill from './StatusPill';
 
@@ -40,6 +41,21 @@ function RunRow({
           {t('runs.duration')}: {duration}
         </span>
       </div>
+
+      {/* Resolved parameter values recorded for this run (section 12.4). */}
+      {run.params && Object.keys(run.params).length > 0 && (
+        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1" aria-label={t('runs.params')}>
+          <span className="text-[11px] font-medium text-muted-foreground">{t('runs.params')}</span>
+          {Object.entries(run.params).map(([name, value]) => (
+            <span
+              key={name}
+              className="rounded-full bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground/80"
+            >
+              {name}={formatParamValue(value)}
+            </span>
+          ))}
+        </div>
+      )}
 
       {run.sessionId && (
         <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">

@@ -960,3 +960,52 @@ describe('scheduledTasksDb', () => {
     expect(scheduledTasksDb.deletePreset(presetId)).toBe(true);
   });
 });
+
+describe('parameters (docs section 12.4)', () => {
+  const columns = (table: string): string[] =>
+    (getConnection().prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((row) => row.name);
+
+  it('adds params_json to a database created before the feature and reads legacy rows as NULL', () => {
+    // The database was created from the pre-script-gate DDL in beforeAll(), so these
+    // columns exist only because migrations.ts added them.
+    expect(columns('scheduled_tasks')).toContain('params_json');
+    expect(columns('scheduled_task_runs')).toContain('params_json');
+    expect(columns('scheduled_task_preset_tasks')).toContain('params_json');
+
+    expect(must(scheduledTasksDb.getTask(legacyTaskId)).params_json).toBeNull();
+  });
+
+  it('round-trips params_json on tasks, runs and preset templates', () => {
+    const paramsJson = JSON.stringify([{ name: 'region', type: 'string', default: 'eu' }]);
+    const task = makeTask({ title: 'Param task ' + tag(), paramsJson });
+    expect(task.params_json).toBe(paramsJson);
+    expect(must(scheduledTasksDb.getTask(task.id)).params_json).toBe(paramsJson);
+
+    expect(must(scheduledTasksDb.updateTask(task.id, { paramsJson: '[]' })).params_json).toBe('[]');
+    expect(must(scheduledTasksDb.updateTask(task.id, { paramsJson: null })).params_json).toBeNull();
+
+    const run = scheduledTasksDb.createRun({
+      taskId: task.id,
+      status: 'running',
+      trigger: 'manual',
+      paramsJson: '{"region":"eu"}',
+    });
+    expect(run.params_json).toBe('{"region":"eu"}');
+    expect(must(scheduledTasksDb.listRuns(task.id, 5)[0]).params_json).toBe('{"region":"eu"}');
+
+    const presetId = 'params-' + tag();
+    scheduledTasksDb.createPreset({ id: presetId, source: 'custom', name: 'P' });
+    const templates = scheduledTasksDb.replacePresetTasks(presetId, [
+      { id: 'tpl-params', title: 'T', prompt: 'p', kind: 'daily', rule: { kind: 'daily' }, paramsJson },
+    ]);
+    expect(templates[0].params_json).toBe(paramsJson);
+
+    // snake_case alias for callers that already hold a serialized row.
+    const aliased = scheduledTasksDb.replacePresetTasks(presetId, [
+      { id: 'tpl-params-2', title: 'T2', prompt: 'p', kind: 'daily', rule: { kind: 'daily' }, params_json: '[]' },
+    ]);
+    expect(aliased[0].params_json).toBe('[]');
+    scheduledTasksDb.deletePreset(presetId);
+  });
+});
+

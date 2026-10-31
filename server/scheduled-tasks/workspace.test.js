@@ -482,3 +482,39 @@ describe('workspacePromptBlock', () => {
     expect(workspacePromptBlock({ id: '../evil' })).toContain('<task root>');
   });
 });
+
+describe('parameters (§12)', () => {
+  it('records the parameter definitions on task.json', () => {
+    ensureTaskWorkspace(makeTask({ params_json: '[{"name":"region","type":"string","default":"eu"}]' }));
+
+    const snapshot = readJson(path.join(taskDir('task-1'), 'task.json'));
+    expect(snapshot.params).toEqual([{ name: 'region', type: 'string', default: 'eu' }]);
+  });
+
+  it('omits params from task.json when the task declares none', () => {
+    ensureTaskWorkspace(makeTask());
+    expect(readJson(path.join(taskDir('task-1'), 'task.json'))).not.toHaveProperty('params');
+  });
+
+  it('records the resolved values on run.json and the Parameters block in prompt.md', () => {
+    const task = makeTask();
+    const run = makeRun({ params_json: '{"region":"eu"}' });
+    const paramsBlock = '## Scheduled task parameters\n\n- region = eu';
+
+    ensureRunWorkspace(task, run, { effectivePrompt: 'p', paramsBlock });
+
+    const record = readJson(path.join(runDir('task-1', 'run-1'), 'run.json'));
+    expect(record.params).toEqual({ region: 'eu' });
+
+    const block = workspacePromptBlock(task, { runId: 'run-1' });
+    expect(fs.readFileSync(path.join(runDir('task-1', 'run-1'), 'prompt.md'), 'utf8')).toBe(
+      `${block}\n\n${paramsBlock}\n\np`
+    );
+  });
+
+  it('keeps run.json free of params when the run has none', () => {
+    ensureRunWorkspace(makeTask(), makeRun());
+    expect(readJson(path.join(runDir('task-1', 'run-1'), 'run.json'))).not.toHaveProperty('params');
+  });
+});
+
