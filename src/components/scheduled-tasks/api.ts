@@ -225,6 +225,17 @@ export const scheduledTasksApi = {
     return { id, deleted: data.deleted ?? true, removedTasks: data.removedTasks ?? 0 };
   },
 
+  /**
+   * Full projects payload, including each project's session collections.
+   * Run history fetches this once per mount to resolve a run's session id into
+   * a readable project + title (see utils/sessionLookup.ts).
+   */
+  async listProjects(): Promise<Project[]> {
+    const response = await authenticatedFetch('/api/projects');
+    const payload = await parseResponse<unknown>(response);
+    return extractProjects(payload);
+  },
+
   async listProjectOptions(): Promise<ProjectOption[]> {
     const response = await authenticatedFetch('/api/projects');
     const payload = await parseResponse<unknown>(response);

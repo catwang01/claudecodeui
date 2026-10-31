@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ScheduledTaskRun } from '../types';
 
-const { listRuns } = vi.hoisted(() => ({ listRuns: vi.fn() }));
+const { listRuns, listProjects } = vi.hoisted(() => ({ listRuns: vi.fn(), listProjects: vi.fn() }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -14,6 +14,7 @@ vi.mock('react-i18next', () => ({
 vi.mock('../api', () => ({
   scheduledTasksApi: {
     listRuns: (id: string, options: { limit?: number; offset?: number }) => listRuns(id, options),
+    listProjects: () => listProjects(),
   },
 }));
 
@@ -42,6 +43,8 @@ const textWith = (needle: string) => (content: string) => content.includes(needl
 describe('RunHistory', () => {
   beforeEach(() => {
     listRuns.mockReset();
+    listProjects.mockReset();
+    listProjects.mockResolvedValue([]);
   });
 
   it('re-fetches an already mounted history when the task record advances', async () => {
@@ -101,6 +104,63 @@ describe('RunHistory', () => {
     // A skipped run must not be presented as a generic output/error run.
     expect(body).not.toContain('runs.output');
     expect(body).not.toContain('runs.error');
+  });
+
+  it('shows the run session as a readable title instead of only a bare id', async () => {
+    listRuns.mockResolvedValueOnce({ runs: [makeRun('run-1', 'session-1')], total: 1 });
+    listProjects.mockResolvedValueOnce([
+      {
+        name: '-tmp-alpha',
+        displayName: 'Alpha',
+        fullPath: '/tmp/alpha',
+        sessions: [{ id: 'session-1', title: 'Fix the login bug' }],
+      },
+    ]);
+
+    render(<RunHistory taskId="task-1" refreshToken="1|x|y" />);
+
+    await waitFor(() => expect(screen.getByText('Fix the login bug')).toBeTruthy());
+    // The project is exposed as the tooltip, and the raw id is still rendered.
+    expect(screen.getByText('Fix the login bug').getAttribute('title')).toBe('Alpha');
+    expect(screen.getAllByText(textWith('session-1')).length).toBeGreaterThan(0);
+  });
+
+  it('keeps the Open session action clickable when the session is unknown to the payload', async () => {
+    // The lookup is display-only: an id the payload does not know must not turn
+    // an otherwise working action into a dead button.
+    listRuns.mockResolvedValueOnce({ runs: [makeRun('run-1', 'session-missing')], total: 1 });
+    listProjects.mockResolvedValueOnce([]);
+    const onOpenSession = vi.fn();
+
+    render(<RunHistory taskId="task-1" refreshToken="1|x|y" onOpenSession={onOpenSession} />);
+
+    const button = (await screen.findByText('runs.openSession')).closest('button') as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+    expect(onOpenSession).toHaveBeenCalledWith('session-missing');
+  });
+
+  it('keeps the Open session action clickable when the projects payload fails', async () => {
+    listRuns.mockResolvedValueOnce({ runs: [makeRun('run-1', 'session-1')], total: 1 });
+    listProjects.mockRejectedValueOnce(new Error('boom'));
+    const onOpenSession = vi.fn();
+
+    render(<RunHistory taskId="task-1" refreshToken="1|x|y" onOpenSession={onOpenSession} />);
+
+    const button = (await screen.findByText('runs.openSession')).closest('button') as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+    expect(onOpenSession).toHaveBeenCalledWith('session-1');
+  });
+
+  it('still renders the runs when the projects payload fails', async () => {
+    listRuns.mockResolvedValueOnce({ runs: [makeRun('run-1', 'session-1')], total: 1 });
+    listProjects.mockRejectedValueOnce(new Error('boom'));
+
+    render(<RunHistory taskId="task-1" refreshToken="1|x|y" />);
+
+    await waitFor(() => expect(screen.getAllByText(textWith('session-1')).length).toBeGreaterThan(0));
+    expect(screen.getByText('runs.title')).toBeTruthy();
   });
 
   it('does not re-fetch while the refresh token is unchanged', async () => {

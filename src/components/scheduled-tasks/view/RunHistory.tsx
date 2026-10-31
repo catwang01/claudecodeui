@@ -2,9 +2,11 @@ import { MessageSquare } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../../shared/view/ui';
+import type { Project } from '../../../types/app';
 import { scheduledTasksApi } from '../api';
 import type { ScheduledTaskRun } from '../types';
 import { formatDateTime, formatDuration, formatRelativeTime, truncate } from '../utils/format';
+import { findSessionInProjects } from '../utils/sessionLookup';
 import StatusPill from './StatusPill';
 
 const PAGE_SIZE = 20;
@@ -12,14 +14,20 @@ const PAGE_SIZE = 20;
 function RunRow({
   run,
   locale,
+  projects,
   onOpenSession,
 }: {
   run: ScheduledTaskRun;
   locale: string;
+  /** Projects payload fetched once per history mount; null while it loads. */
+  projects: Project[] | null;
   onOpenSession?: (sessionId: string) => void;
 }) {
   const { t } = useTranslation('scheduledTasks');
   const duration = run.status === 'running' ? t('runs.inProgress') : formatDuration(run.startedAt, run.finishedAt);
+  // Display-only: a null result means the payload does not know this id yet, so
+  // the row falls back to showing the raw id and the action stays available.
+  const resolvedSession = run.sessionId && projects ? findSessionInProjects(projects, run.sessionId) : null;
 
   return (
     <li className="rounded-lg border border-border/60 bg-background/40 p-3">
@@ -38,6 +46,14 @@ function RunRow({
           <p className="truncate font-mono text-[11px] text-muted-foreground">
             {t('runs.session')}: {run.sessionId}
           </p>
+          {resolvedSession && (
+            <span
+              className="min-w-0 max-w-72 truncate text-[11px] text-foreground/80"
+              title={resolvedSession.projectName}
+            >
+              {resolvedSession.title}
+            </span>
+          )}
           {onOpenSession && (
             <Button
               type="button"
@@ -133,6 +149,7 @@ export default function RunHistory({ taskId, refreshToken, onOpenSession }: RunH
   const [total, setTotal] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [projects, setProjects] = useState<Project[] | null>(null);
 
   const requestIdRef = useRef(0);
 
@@ -163,6 +180,24 @@ export default function RunHistory({ taskId, refreshToken, onOpenSession }: RunH
     void load(0);
   }, [load, refreshToken]);
 
+  // Resolve each run's session id against the projects payload. Fetched once per
+  // mount (and per taskId change) because every row only needs the local lookup.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const loaded = await scheduledTasksApi.listProjects();
+        if (!cancelled) setProjects(loaded);
+      } catch {
+        // Display-only data: leave it null and rows keep showing the raw id.
+        if (!cancelled) setProjects(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [taskId]);
+
   const hasMore = runs.length < total;
 
   return (
@@ -183,7 +218,13 @@ export default function RunHistory({ taskId, refreshToken, onOpenSession }: RunH
       {runs.length > 0 && (
         <ul className="mt-2 space-y-2">
           {runs.map((run) => (
-            <RunRow key={run.id} run={run} locale={locale} onOpenSession={onOpenSession} />
+            <RunRow
+              key={run.id}
+              run={run}
+              locale={locale}
+              projects={projects}
+              onOpenSession={onOpenSession}
+            />
           ))}
         </ul>
       )}
