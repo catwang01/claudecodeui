@@ -510,46 +510,6 @@ const sessionDb = {
     ).run(provider, sessionId, sessionId);
   },
 
-  // Records a forked session created by auto-doc
-  markAsAutoDocSession: (forkedSessionId, sourceSessionId, provider) => {
-    db.prepare(`
-      INSERT OR IGNORE INTO auto_doc_sessions (forked_session_id, source_session_id, provider, created_at)
-      VALUES (?, ?, ?, ?)
-    `).run(forkedSessionId, sourceSessionId, provider, new Date().toISOString());
-  },
-
-  // Batch lookup — returns Set of forked session IDs that are auto-doc sessions
-  getAutoDocSessionIds: (sessionIds, provider) => {
-    if (!sessionIds.length) return new Set();
-    const placeholders = sessionIds.map(() => '?').join(',');
-    const rows = db.prepare(
-      `SELECT forked_session_id FROM auto_doc_sessions
-       WHERE forked_session_id IN (${placeholders}) AND provider = ?`
-    ).all(...sessionIds, provider);
-    return new Set(rows.map(r => r.forked_session_id));
-  },
-
-  // Returns Set of all forked session IDs for a provider (for pre-fetching)
-  getAllAutoDocSessionIds: (provider) => {
-    const rows = db.prepare(
-      'SELECT forked_session_id FROM auto_doc_sessions WHERE provider = ?'
-    ).all(provider);
-    return new Set(rows.map(r => r.forked_session_id));
-  },
-
-  // Batch lookup — returns Map of sourceSessionId -> most recent created_at
-  getLastAutoDocTimestamps: (sourceSessionIds, provider) => {
-    if (!sourceSessionIds.length) return new Map();
-    const placeholders = sourceSessionIds.map(() => '?').join(',');
-    const rows = db.prepare(
-      `SELECT source_session_id, MAX(created_at) as last_auto_doc_at
-       FROM auto_doc_sessions
-       WHERE source_session_id IN (${placeholders}) AND provider = ?
-       GROUP BY source_session_id`
-    ).all(...sourceSessionIds, provider);
-    return new Map(rows.map(r => [r.source_session_id, r.last_auto_doc_at]));
-  },
-
   // Returns Set of all session IDs hidden from recents for a provider
   getAllHiddenSessionIds: (provider) => {
     const rows = db.prepare(
@@ -600,39 +560,6 @@ function applyHiddenFromRecents(sessions, provider) {
   }
 }
 
-// Mark sessions that were created by auto-doc forks
-function applyAutoDocFlag(sessions, provider) {
-  if (!sessions?.length) return;
-  try {
-    const ids = sessions.map(s => s.id);
-    const summaryIds = sessionDb.getAutoDocSessionIds(ids, provider);
-    if (!summaryIds.size) return;
-    for (const session of sessions) {
-      if (summaryIds.has(session.id)) {
-        session.isAutoDoc = true;
-      }
-    }
-  } catch (error) {
-    console.warn(`[DB] Failed to apply auto-doc flag for ${provider}:`, error.message);
-  }
-}
-
-// Set lastAutoDocAt on source sessions that have been processed by auto-doc
-function applyLastAutoDocAt(sessions, provider) {
-  if (!sessions?.length) return;
-  try {
-    const ids = sessions.map(s => s.id);
-    const timestamps = sessionDb.getLastAutoDocTimestamps(ids, provider);
-    if (!timestamps.size) return;
-    for (const session of sessions) {
-      const ts = timestamps.get(session.id);
-      if (ts) session.lastAutoDocAt = ts;
-    }
-  } catch (error) {
-    console.warn(`[DB] Failed to apply lastAutoDocAt for ${provider}:`, error.message);
-  }
-}
-
 // Apply fork parent relationship on sessions for sidebar tree rendering.
 function applyForkParent(sessions, provider) {
   if (!sessions?.length) return;
@@ -649,25 +576,9 @@ function applyForkParent(sessions, provider) {
   }
 }
 
-// Remove auto-doc sessions from the array when the hide setting is enabled.
-// Must be called after applyAutoDocFlag.
-function filterHiddenAutoDocSessions(sessions) {
-  if (!sessions?.length) return;
-  try {
-    const hideRaw = appConfigDb.get('auto_doc_hide_sessions');
-    const hide = hideRaw === null ? true : hideRaw === 'true';
-    if (!hide) return;
-    for (let i = sessions.length - 1; i >= 0; i--) {
-      if (sessions[i].isAutoDoc) sessions.splice(i, 1);
-    }
-  } catch (error) {
-    console.warn('[DB] Failed to filter hidden auto-doc sessions:', error.message);
-  }
-}
-
 // Tag sessions that were started by a scheduled task run.
-// docs/scheduled-tasks.md section 9.2: mirrors applyAutoDocFlag; claude-only because the
-// scheduler always starts Claude sessions. Hiding is presentation-only (client filter).
+// docs/scheduled-tasks.md section 9.2: claude-only because the scheduler always starts
+// Claude sessions. Hiding is presentation-only (client filter).
 function applyScheduledTaskOrigin(sessions, provider = 'claude') {
   if (!sessions?.length || provider !== 'claude') return;
   try {
@@ -895,7 +806,7 @@ const sessionFileCache = {
     ).run(normalizedPath);
   },
 
-  // Return the most recent N rows ordered by last_activity (for auto-doc session collection).
+  // Return the most recent N rows ordered by last_activity.
   // Only returns rows for claude JSONL files that have been fully indexed (session_id + cwd).
   getRecentClaude: (limit) =>
     db.prepare(`
@@ -941,10 +852,7 @@ export {
   sessionFileCache,
   applyCustomSessionNames,
   applyHiddenFromRecents,
-  applyAutoDocFlag,
-  applyLastAutoDocAt,
   applyForkParent,
-  filterHiddenAutoDocSessions,
   applyScheduledTaskOrigin,
   applyReadState,
   appConfigDb,

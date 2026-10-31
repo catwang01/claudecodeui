@@ -642,4 +642,82 @@ elsewhere; uninstall removes tasks without touching the catalog; the on-disk lay
 appears after a dry run; the script gate sees the `SCHEDULED_TASK_*_DIR` env vars; and
 `?purge=1` removes the task directory.
 
+## 11. AutoDoc retirement → covered by a built-in preset（第九轮，issue #4 后续）
+
+Issue #4 follow-up: AutoDoc is taken offline. The same job — keep a project's docs in sync with the
+recent conversations — is now expressed as a normal, visible Scheduled Task preset, which is simpler
+than a separate background feature with its own config surface.
+
+### 11.1 What is removed
+
+AutoDoc is **deleted**, not merely switched off:
+
+| Surface | File | Action |
+|---|---|---|
+| Timer + fork/summarize job | `server/auto-doc.js` | delete the module |
+| Timer start | `server/index.js` | drop the import and the `startAutoDocTimer()` call |
+| Settings + legacy routes | `server/routes/settings.js` | drop `AUTO_DOC_DEFAULT_*`, the auto-doc fields of `readAutomationsConfig` / `applyAutomationsConfig`, and the `GET/PUT /auto-doc` routes |
+| Session decoration | `server/database/db.js` | drop `markAsAutoDocSession`, `getAutoDocSessionIds`, `getAllAutoDocSessionIds`, `getLastAutoDocTimestamps`, the `isAutoDoc` flag and the `lastAutoDocAt` decoration |
+| Projects payload | `server/projects.js` | keep the exclusion mechanism for hidden + scheduled-task sessions; drop the auto-doc id source and rename the `autoDocPreFilter` seam to `sessionExclusionFilter` |
+| Settings UI | `src/components/settings/**` | tab id `auto-doc` → `automations`, holding only the scheduled-task session toggle |
+| Sidebar | `src/components/sidebar/**` | drop the `hideAutoDoc` state/filter and every `isAutoDoc` / `lastAutoDocAt` badge |
+| Types | `src/types/app.ts` | drop `isAutoDoc` / `lastAutoDocAt` |
+| i18n | `src/i18n/locales/*/settings.json` | drop the auto-doc keys (en, zh-CN, de, ja, ko, ru) |
+
+Kept on purpose (no destructive migration): the `auto_doc_sessions` table and its rows stay in the
+database but nothing reads or writes them any more; sessions previously forked by AutoDoc become
+ordinary sessions (no longer hidden or badged); the inert `auto_doc_*` rows in `app_config` stay;
+`docs/superpowers/specs/2026-05-03-auto-summary-design.md` stays as historical material.
+
+### 11.2 Settings contract after the change
+
+`GET /api/settings/automations` → `{ hideScheduledTaskSessions: boolean }` (default `true`).
+`POST /api/settings/automations` accepts `{ hideScheduledTaskSessions?: boolean }`; unknown or
+legacy keys (`hideAutoDoc`, `intervalMs`, `prompt`, `minMessageCount`, `model`, `enabled`) are
+ignored, never a 400. `GET/PUT /api/settings/auto-doc` are gone → 404.
+
+### 11.3 Replacement preset（内置 `auto-doc`）
+
+New catalog file `server/scheduled-tasks/presets/builtin/auto-doc.json`, id `auto-doc`, one task
+template `auto-doc-docs-refresh` (template ids are unique across the whole catalog — §10.3 — and
+`daily-docs-refresh` already owns `docs-refresh`, so the AutoDoc template carries the preset prefix;
+the existing preset keeps working untouched):
+
+- Rule: `daily` at 21:00 `Asia/Shanghai` (the user can change it in the panel like any task).
+- `command` (script gate, self-contained `node -e`, no extra files): locate the project's Claude
+  session directory with the app's own rule (`absolutePath.replace(/[^a-zA-Z0-9]/g, '-')` under
+  `~/.claude/projects`), compare the newest transcript's mtime with the cursor kept in
+  `$SCHEDULED_TASK_STATE_DIR/autodoc-cursor.json`, then either print
+  `{"skip":true,"reason":"no new conversations since <ts>"}` (no model call) or
+  `{"prompt":"<the refresh prompt>"}`.
+- `prompt`: read the conversations/changes since the cursor and update the project's docs
+  (`docs/` plus `CLAUDE.md` when present); keep notes and the new cursor under the task's
+  `state/` directory (the layout of §10.4).
+- Generated runs are ordinary sessions of the target project and are hidden from the sidebar by
+  default through the existing scheduled-task rule (§9), which replaces AutoDoc's own hiding.
+
+### 11.4 Ownership
+
+| Owner | Files |
+|---|---|
+| backend-removal | `server/auto-doc.js`, `server/index.js`, `server/routes/settings.js`, `server/projects.js`, `server/database/db.js` + their tests |
+| frontend-removal | `src/components/settings/**`, `src/components/sidebar/**`, `src/types/app.ts`, `src/i18n/locales/*/settings.json` |
+| preset | `server/scheduled-tasks/presets/builtin/auto-doc.json`, `server/scheduled-tasks/presets.test.js` |
+| verify | `scripts/verify-autodoc-retirement.mjs` |
+| lead | `docs/scheduled-tasks.md` |
+
+### 11.5 Acceptance
+
+`node scripts/verify-autodoc-retirement.mjs` boots the real server (throwaway DB) and asserts:
+1. `GET /api/settings/auto-doc` → 404; `GET /api/settings/automations` returns only
+   `hideScheduledTaskSessions`; `POST` ignores legacy auto-doc keys.
+2. The timer is gone: no `[auto-doc]` log output, and `auto_doc_sessions` neither grows nor is
+   dropped while the server runs.
+3. `/api/projects` sessions carry no `isAutoDoc` / `lastAutoDocAt` fields, and a session id present
+   in `auto_doc_sessions` comes back as an ordinary session.
+4. The `auto-doc` builtin preset seeds and installs (default enabled), and its gate returns
+   `skip` with a reason on a project without new conversations (run recorded `skipped`, no model
+   call under `SCHEDULED_TASK_DRY_RUN=1`).
+Plus the full `npx vitest run`, `tsc --noEmit` for both configs and `eslint src/ server/`.
+
 

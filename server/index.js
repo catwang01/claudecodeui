@@ -140,8 +140,7 @@ import scheduledTasksRoutes from './routes/scheduled-tasks.js';
 import { createNormalizedMessage } from './providers/types.js';
 import { getProvider } from './providers/registry.js';
 import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
-import { initializeDatabase, sessionNamesDb, sessionDb, sessionFileCache, sessionsDb, applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, applyLastAutoDocAt, applyReadState, appConfigDb } from './database/db.js';
-import { startAutoDocTimer } from './auto-doc.js';
+import { initializeDatabase, sessionNamesDb, sessionDb, sessionFileCache, sessionsDb, applyCustomSessionNames, applyHiddenFromRecents, applyReadState } from './database/db.js';
 import { startScheduledTaskService, stopScheduledTaskService } from './scheduled-tasks/service.js';
 import { stopAllTapSessions, tapViewerProxyForSession } from './tap.js';
 import { sessionSynchronizerService, initializeSessionsWatcher } from './modules/providers/index.js';
@@ -814,17 +813,9 @@ app.get('/api/sessions/recent', authenticateToken, async (req, res) => {
 app.get('/api/projects/:projectName/sessions', authenticateToken, async (req, res) => {
     try {
         const { limit = 5, offset = 0 } = req.query;
-        const hideAutoDocRaw = appConfigDb.get('auto_doc_hide_sessions');
-        const hideAutoDoc = hideAutoDocRaw === null ? true : hideAutoDocRaw === 'true';
-        const summarySessionIds = hideAutoDoc ? sessionDb.getAllAutoDocSessionIds('claude') : null;
-        const preFilter = summarySessionIds
-            ? (sessions) => sessions.filter(s => !summarySessionIds.has(s.id))
-            : null;
-        const result = await getSessions(req.params.projectName, parseInt(limit), parseInt(offset), preFilter);
+        const result = await getSessions(req.params.projectName, parseInt(limit), parseInt(offset));
         applyCustomSessionNames(result.sessions, 'claude');
         applyHiddenFromRecents(result.sessions, 'claude');
-        applyAutoDocFlag(result.sessions, 'claude');
-        applyLastAutoDocAt(result.sessions, 'claude');
         applyReadState(result.sessions, 'claude');
         res.json(result);
     } catch (error) {
@@ -3063,9 +3054,6 @@ async function startServer() {
                 console.error('[sessions-sync] Initial sync failed:', err);
                 console.error('[sessions-sync] Error stack:', err.stack);
             }
-
-            // Start auto-doc background timer
-            startAutoDocTimer();
 
             // Start the scheduled-tasks tick loop (no-op when SCHEDULED_TASKS_ENABLED is off)
             startScheduledTaskService();

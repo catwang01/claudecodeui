@@ -1,5 +1,5 @@
 import { memo, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, Clock, Edit2, EyeOff, Folder, GitFork, Loader2, Sparkles, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Clock, Edit2, EyeOff, Folder, GitFork, Loader2, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { Badge, Button } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
@@ -230,9 +230,6 @@ export default memo(function SidebarSessionItem(props: SidebarSessionItemProps) 
                 {isFork && (
                   <GitFork className="h-2.5 w-2.5 flex-shrink-0 text-sky-500" aria-label="Forked session" />
                 )}
-                {session.isAutoDoc && (
-                  <Sparkles className="h-2.5 w-2.5 flex-shrink-0 text-amber-500" aria-label="Auto Doc" />
-                )}
                 {sessionView.sessionName}
               </span>
             )}
@@ -328,14 +325,6 @@ export default memo(function SidebarSessionItem(props: SidebarSessionItemProps) 
               </>
             )}
           </div>
-          {!isRenaming && session.lastAutoDocAt && (
-            <div className="mt-0.5 flex items-center gap-1 pl-5">
-              <Sparkles className="h-2.5 w-2.5 flex-shrink-0 text-amber-400" />
-              <span className="text-[10px] text-amber-500/70">
-                summarized {formatTimeAgo(session.lastAutoDocAt as string, currentTime, t)}
-              </span>
-            </div>
-          )}
         </div>
       </div>
     );
@@ -435,9 +424,6 @@ export default memo(function SidebarSessionItem(props: SidebarSessionItemProps) 
 
             <div className="min-w-0 flex-1">
               <div className="min-w-0 truncate text-xs font-medium text-foreground flex items-center gap-1">
-                {session.isAutoDoc && (
-                  <Sparkles className="h-2.5 w-2.5 flex-shrink-0 text-amber-500" aria-label="Auto Doc" />
-                )}
                 {sessionView.sessionName}
               </div>
               <div className="mt-0.5 flex items-center gap-1">
@@ -455,14 +441,6 @@ export default memo(function SidebarSessionItem(props: SidebarSessionItemProps) 
                   <SessionProviderLogo provider={session.__provider} className="h-3 w-3" />
                 </span>
               </div>
-              {session.lastAutoDocAt && (
-                <div className="mt-0.5 flex items-center gap-1">
-                  <Sparkles className="h-2.5 w-2.5 flex-shrink-0 text-amber-400" />
-                  <span className="text-xs text-amber-500/70">
-                    summarized {formatTimeAgo(session.lastAutoDocAt, currentTime, t)}
-                  </span>
-                </div>
-              )}
             </div>
 
             <button
@@ -506,9 +484,6 @@ export default memo(function SidebarSessionItem(props: SidebarSessionItemProps) 
             <SessionProviderLogo provider={session.__provider} className="mt-0.5 h-3 w-3 flex-shrink-0" />
             <div className="min-w-0 flex-1">
               <div className="min-w-0 truncate text-xs font-medium text-foreground flex items-center gap-1">
-                {session.isAutoDoc && (
-                  <Sparkles className="h-2.5 w-2.5 flex-shrink-0 text-amber-500" aria-label="Auto Doc" />
-                )}
                 {sessionView.sessionName}
               </div>
               <div className="mt-0.5 flex items-center gap-1">
@@ -529,14 +504,6 @@ export default memo(function SidebarSessionItem(props: SidebarSessionItemProps) 
                   <SessionProviderLogo provider={session.__provider} className="h-3 w-3" />
                 </span>
               </div>
-              {session.lastAutoDocAt && (
-                <div className="mt-0.5 flex items-center gap-1">
-                  <Sparkles className="h-2.5 w-2.5 flex-shrink-0 text-amber-400" />
-                  <span className="text-xs text-amber-500/70">
-                    summarized {formatTimeAgo(session.lastAutoDocAt, currentTime, t)}
-                  </span>
-                </div>
-              )}
             </div>
           </div>
         </Button>

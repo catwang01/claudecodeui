@@ -15,6 +15,7 @@ let paginateRecentSessionRows;
 let sessionFileCache;
 let sessionDb;
 let sessionsDb;
+let db;
 let matchesExcludePattern;
 
 const tmpBase = path.join(os.homedir(), '.claude', 'projects');
@@ -59,6 +60,7 @@ beforeEach(async () => {
   sessionFileCache = dbMod.sessionFileCache;
   sessionDb = dbMod.sessionDb;
   sessionsDb = dbMod.sessionsDb;
+  db = dbMod.db;
 });
 
 afterEach(async () => {
@@ -161,7 +163,8 @@ describe('getSessionFileMeta', () => {
     });
 
     const cached = sessionFileCache.getBatchBySessionIds([sessionId]).get(sessionId);
-    expect(cached.file_path).toBe(activePath.toLowerCase());
+    // normalizeSessionCachePath() lower-cases paths on Windows only.
+    expect(cached.file_path).toBe(process.platform === 'win32' ? activePath.toLowerCase() : activePath);
     expect(cached.message_count).toBe(10);
     sessionFileCache.delete(activePath);
     sessionFileCache.delete(stalePath);
@@ -563,6 +566,10 @@ describe('getSessions', () => {
       ]);
     }
 
+    // Warm the session index: the first getSessions call syncs missing JSONL files into SQLite,
+    // so paging before that completes would see a growing set and shift the page boundaries.
+    await getSessions(projectName, 50, 0);
+
     const page1 = await getSessions(projectName, 2, 0);
     const page2 = await getSessions(projectName, 2, 2);
 
@@ -572,6 +579,36 @@ describe('getSessions', () => {
     const ids2 = page2.sessions.map(s => s.id);
     expect(ids1.some(id => ids2.includes(id))).toBe(false);
     expect(page1.hasMore).toBe(true);
+  });
+
+  it('returns sessions without any AutoDoc decoration', async () => {
+    const sid = 'test-session-autodoc-undecorated';
+    const sourceId = 'test-session-autodoc-source';
+    await writeSession('autodoc-undecorated.jsonl', [
+      makeLine(sid, 'user', 'Ordinary session', '2024-07-01T00:00:00.000Z'),
+    ]);
+    await writeSession('autodoc-source.jsonl', [
+      makeLine(sourceId, 'user', 'Source session', '2024-07-01T00:00:01.000Z'),
+    ]);
+
+    // The auto_doc_sessions table is kept for historical data but nothing reads it any more
+    // (docs/scheduled-tasks.md section 11.1). A session listed there is an ordinary session.
+    db.prepare(
+      `INSERT OR IGNORE INTO auto_doc_sessions (forked_session_id, source_session_id, provider, created_at)
+       VALUES (?, ?, ?, ?)`
+    ).run(sid, sourceId, 'claude', '2024-07-01T00:00:02.000Z');
+
+    try {
+      const result = await getSessions(projectName, 10, 0);
+      expect(result.sessions.find(session => session.id === sid)).toBeTruthy();
+      expect(result.sessions.find(session => session.id === sourceId)).toBeTruthy();
+      for (const session of result.sessions) {
+        expect(session).not.toHaveProperty('isAutoDoc');
+        expect(session).not.toHaveProperty('lastAutoDocAt');
+      }
+    } finally {
+      db.prepare('DELETE FROM auto_doc_sessions WHERE forked_session_id = ?').run(sid);
+    }
   });
 });
 

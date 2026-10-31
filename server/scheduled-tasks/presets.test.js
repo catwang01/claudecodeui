@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import {
@@ -676,5 +679,140 @@ describe('deletePreset (§10.3)', () => {
   it('is not_found for unknown or out-of-scope custom presets', async () => {
     const { service } = setup();
     expect((await service.deletePreset('nope')).code).toBe('not_found');
+  });
+});
+
+const AUTODOC_PRESET_ID = 'auto-doc';
+const AUTODOC_TEMPLATE_ID = 'auto-doc-docs-refresh';
+
+function shippedAutoDocService() {
+  const repo = makeRepo();
+  const service = createPresetService({
+    repo,
+    rules,
+    catalog: loadBuiltinCatalog(),
+    workspace: { ensureTaskWorkspace: vi.fn(() => null) },
+    now: () => NOW,
+    logger: { warn: vi.fn(), error: vi.fn() },
+  });
+  return { repo, service };
+}
+
+function autoDocTemplate() {
+  return loadBuiltinCatalog().find((entry) => entry.id === AUTODOC_PRESET_ID).tasks[0];
+}
+
+describe('builtin auto-doc preset (docs §11.3)', () => {
+  it('loads the shipped catalog with a globally unique template id', () => {
+    const catalog = loadBuiltinCatalog();
+    const ids = catalog.flatMap((entry) => entry.tasks.map((task) => task.id));
+    expect(new Set(ids).size).toBe(ids.length);
+
+    const preset = catalog.find((entry) => entry.id === AUTODOC_PRESET_ID);
+    expect(preset, 'auto-doc.json must ship in the builtin catalog').toBeDefined();
+    expect(preset.tasks).toHaveLength(1);
+    const [template] = preset.tasks;
+    expect(template.id).toBe(AUTODOC_TEMPLATE_ID);
+    expect(template.rule).toEqual({ kind: 'daily', time: '21:00', timeZone: 'Asia/Shanghai' });
+    expect(typeof template.command).toBe('string');
+    expect(template.command.length).toBeGreaterThan(0);
+    expect(template.prompt).toContain('CLAUDE.md');
+    expect(template.prompt).toContain('SCHEDULED_TASK_STATE_DIR');
+  });
+
+  it('lists the preset and installs one enabled task', async () => {
+    const { repo, service } = shippedAutoDocService();
+    const listed = await service.listPresets();
+    expect(listed.ok).toBe(true);
+    const preset = listed.presets.find((entry) => entry.id === AUTODOC_PRESET_ID);
+    expect(preset).toMatchObject({ source: 'builtin', taskCount: 1 });
+    expect(preset.tasks[0].id).toBe(AUTODOC_TEMPLATE_ID);
+
+    const installed = await service.installPreset(AUTODOC_PRESET_ID, { projectPath: PROJECT });
+    expect(installed.ok).toBe(true);
+    expect(installed.created).toHaveLength(1);
+    expect(installed.skipped).toEqual([]);
+    const row = repo._tasks.get(installed.created[0]);
+    expect(row).toMatchObject({
+      project_path: PROJECT,
+      preset_id: AUTODOC_PRESET_ID,
+      preset_task_id: AUTODOC_TEMPLATE_ID,
+      enabled: 1,
+      command_timeout_seconds: 60,
+    });
+    // The installed task really carries the self-contained script gate (node -e '...').
+    expect(row.command).toContain('autodoc-cursor.json');
+    expect(row.command.startsWith("node -e '")).toBe(true);
+    expect(row.command.split("'")).toHaveLength(3);
+    // daily 21:00 Asia/Shanghai; NOW is 2030-06-03T12:00:00Z = 20:00 in Shanghai.
+    expect(row.next_run_at).toBe('2030-06-03T13:00:00.000Z');
+  });
+
+  const itPosix = process.platform === 'win32' ? it.skip : it;
+
+  itPosix('gate skips while the conversations are unchanged and wakes on a newer transcript', () => {
+    const template = autoDocTemplate();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'autodoc-preset-'));
+    try {
+      const home = path.join(tmp, 'home');
+      const project = path.join(tmp, 'project');
+      const stateDir = path.join(tmp, 'state');
+      fs.mkdirSync(project, { recursive: true });
+      fs.mkdirSync(stateDir, { recursive: true });
+      const sessions = path.join(home, '.claude', 'projects', project.replace(/[^a-zA-Z0-9]/g, '-'));
+      fs.mkdirSync(sessions, { recursive: true });
+
+      const runGate = () => {
+        const env = {
+          ...process.env,
+          PATH: path.dirname(process.execPath) + path.delimiter + (process.env.PATH || ''),
+          HOME: home,
+          SCHEDULED_TASK_PROJECT: project,
+          SCHEDULED_TASK_DIR: tmp,
+          SCHEDULED_TASK_STATE_DIR: stateDir,
+          SCHEDULED_TASK_TMP_DIR: path.join(tmp, 'tmp'),
+        };
+        const stdout = execFileSync('sh', ['-c', template.command], { cwd: project, env, encoding: 'utf8' });
+        return JSON.parse(stdout.trim());
+      };
+
+      // No transcript at all and no cursor: skip, never an error and never a model call.
+      const empty = runGate();
+      expect(empty.skip).toBe(true);
+      expect(empty.reason).toMatch(/no new conversations since/);
+
+      // A transcript appears: the gate hands the agent the refresh prompt.
+      const first = path.join(sessions, 'session-a.jsonl');
+      fs.writeFileSync(first, '{"type":"user"}\n');
+      const t1 = Date.parse('2026-10-30T10:00:00Z') / 1000;
+      fs.utimesSync(first, t1, t1);
+      const woke = runGate();
+      expect(typeof woke.prompt).toBe('string');
+      expect(woke.prompt).toContain('CLAUDE.md');
+      expect(woke.prompt).toContain('docs/');
+      expect(woke.prompt).toContain(sessions);
+
+      // The cursor caught up with the newest transcript: skip with its timestamp.
+      const cursorMs = fs.statSync(first).mtimeMs;
+      fs.writeFileSync(
+        path.join(stateDir, 'autodoc-cursor.json'),
+        JSON.stringify({ lastMessageMs: cursorMs, updatedAt: new Date(cursorMs).toISOString() })
+      );
+      expect(runGate()).toEqual({
+        skip: true,
+        reason: 'no new conversations since ' + new Date(cursorMs).toISOString(),
+      });
+
+      // A newer transcript wakes it again.
+      const second = path.join(sessions, 'session-b.jsonl');
+      fs.writeFileSync(second, '{"type":"user"}\n');
+      const t2 = Date.parse('2026-10-31T09:00:00Z') / 1000;
+      fs.utimesSync(second, t2, t2);
+      const again = runGate();
+      expect(typeof again.prompt).toBe('string');
+      expect(again.prompt).toContain(new Date(fs.statSync(second).mtimeMs).toISOString());
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

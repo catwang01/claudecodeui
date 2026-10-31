@@ -1,0 +1,22 @@
+{
+  "id": "auto-doc",
+  "name": "AutoDoc docs refresh",
+  "description": "The retired AutoDoc, now a normal scheduled task: refresh the project documentation from new Claude Code conversations. A self-contained script gate skips the agent entirely when nothing changed.",
+  "icon": "BookOpen",
+  "version": "1.0.0",
+  "tasks": [
+    {
+      "id": "auto-doc-docs-refresh",
+      "title": "AutoDoc docs refresh",
+      "description": "Refresh docs/ and CLAUDE.md from the Claude Code conversations recorded since the last cursor; skipped by the gate when nothing changed.",
+      "prompt": "Refresh the project documentation from the Claude Code conversations recorded since the last AutoDoc cursor.\n\nWorkspace contract: $SCHEDULED_TASK_DIR is the task root and $SCHEDULED_TASK_STATE_DIR is its durable state directory; keep the cursor ($SCHEDULED_TASK_STATE_DIR/autodoc-cursor.json) and every long-lived note (for example autodoc-notes.md) there so the next run can continue instead of starting over. This run owns runs/<runId>/ (run.json, prompt.md, output.md, logs/ and tmp/); the task tmp/ directory is wiped at the start of every run, so never keep anything you need across runs there. Only write inside the task root and the project directory.\n\n1. Read this project's Claude Code transcripts under ~/.claude/projects/<encoded> that changed after the cursor (read every transcript on a first run).\n2. Update the project documentation: the Markdown files under docs/ and CLAUDE.md when it exists. Document only what the conversations support.\n3. Write the new cursor as lastMessageMs plus updatedAt back to $SCHEDULED_TASK_STATE_DIR/autodoc-cursor.json and finish with a short summary of the documentation updates.",
+      "command": "node -e 'const fs=require(\"fs\"),path=require(\"path\"),os=require(\"os\");\nconst project=process.env.SCHEDULED_TASK_PROJECT||process.cwd();\nconst enc=String(project).replace(/[^a-zA-Z0-9]/g,\"-\");\nconst dir=path.join(os.homedir(),\".claude\",\"projects\",enc);\nconst state=process.env.SCHEDULED_TASK_STATE_DIR||\"\";\nconst cursorFile=path.join(state,\"autodoc-cursor.json\");\nconst say=function(o){process.stdout.write(JSON.stringify(o));};\nlet cursor=null;\ntry{cursor=JSON.parse(fs.readFileSync(cursorFile,\"utf8\"));}catch(err){cursor=null;}\nconst last=Number(cursor&&(cursor.lastMessageMs||cursor.mtimeMs||cursor.at))||0;\nlet newest=0;\ntry{for(const f of fs.readdirSync(dir)){if(!f.endsWith(\".jsonl\"))continue;const m=fs.statSync(path.join(dir,f)).mtimeMs;if(m>newest)newest=m;}}catch(err){}\nif(newest<=last){say({skip:true,reason:\"no new conversations since \"+(last>0?new Date(last).toISOString():\"never\")+(newest>0?\"\":\" (no Claude transcripts in \"+dir+\")\")});}\nelse{\nconst prompt=\"AutoDoc refresh for \"+project+\". New Claude Code conversations appeared since the last cursor (newest transcript mtime \"+new Date(newest).toISOString()+\").\\n\\n\"\n +\"The project transcripts live in \"+dir+\"; read the ones that changed after the cursor in $SCHEDULED_TASK_STATE_DIR/autodoc-cursor.json (read every transcript on a first run).\\n\"\n +\"1. Extract what actually changed in this project (decisions, features, bugs, commands, file layout).\\n\"\n +\"2. Update the project documentation: the Markdown files under docs/ and CLAUDE.md when it exists. Document only what the conversations support.\\n\"\n +\"3. Keep long-lived notes in $SCHEDULED_TASK_STATE_DIR (for example autodoc-notes.md); the task tmp/ directory is wiped at the start of every run, so never keep anything you need across runs there.\\n\"\n +\"4. Write the new cursor back to $SCHEDULED_TASK_STATE_DIR/autodoc-cursor.json as {\\\"lastMessageMs\\\":<newest transcript mtime in ms>,\\\"updatedAt\\\":\\\"<ISO timestamp>\\\"}.\\n\"\n +\"5. Never write outside the task root ($SCHEDULED_TASK_DIR) and the project directory, then finish with a short summary of the documentation updates.\";\nsay({prompt:prompt});\n}'",
+      "commandTimeoutSeconds": 60,
+      "rule": {
+        "kind": "daily",
+        "time": "21:00",
+        "timeZone": "Asia/Shanghai"
+      }
+    }
+  ]
+}

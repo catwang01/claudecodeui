@@ -129,7 +129,6 @@ export default function SidebarContent({
   const [scrollTargetProject, setScrollTargetProject] = useState<string | null>(null);
 
   const [hiddenSessions, setHiddenSessions] = useState<Map<string, string>>(new Map());
-  const [hideAutoDoc, setHideAutoDoc] = useState(true);
   // Server default is "hidden" (app_config.scheduled_task_hide_sessions); keep the same
   // initial value so the first paint does not flash the scheduled-task sessions.
   const [hideScheduledTaskSessions, setHideScheduledTaskSessions] = useState(true);
@@ -143,15 +142,6 @@ export default function SidebarContent({
   );
   const toggleCollapseFork = useCallback((sessionId: string) => {
     forkTreeStore.toggleCollapse(sessionId);
-  }, []);
-
-  useEffect(() => {
-    authenticatedFetch('/api/settings/auto-doc')
-      .then((res) => res.json())
-      .then((data) => setHideAutoDoc(!!data.hideAutoDoc))
-      .catch(() => {
-        /* keep default false */
-      });
   }, []);
 
   useEffect(() => {
@@ -289,7 +279,6 @@ export default function SidebarContent({
     }
     return all
       .filter(({ session }) => {
-        if (hideAutoDoc && session.isAutoDoc) return false;
         if (hideScheduledTaskSessions && session.scheduledTaskOrigin) return false;
         const provider = session.__provider || 'claude';
         const hiddenAt = hiddenSessions.get(`${session.id}:${provider}`);
@@ -301,20 +290,19 @@ export default function SidebarContent({
         return true;
       })
       .sort((a, b) => compareSessionActivity(a.session, b.session, projectListProps.processingSessionStartTimes));
-  }, [searchMode, projectListProps, globalRecentSessions, hiddenSessions, hideAutoDoc, hideScheduledTaskSessions]);
+  }, [searchMode, projectListProps, globalRecentSessions, hiddenSessions, hideScheduledTaskSessions]);
 
   const filteredProjectListProps = useMemo(() => {
-    if (!hideAutoDoc && !hideScheduledTaskSessions) return projectListProps;
+    if (!hideScheduledTaskSessions) return projectListProps;
     return {
       ...projectListProps,
       getProjectSessions: (project: Parameters<typeof projectListProps.getProjectSessions>[0]) =>
         projectListProps.getProjectSessions(project).filter((s) => {
-          if (hideAutoDoc && s.isAutoDoc) return false;
           if (hideScheduledTaskSessions && s.scheduledTaskOrigin) return false;
           return true;
         }),
     };
-  }, [projectListProps, hideAutoDoc, hideScheduledTaskSessions]);
+  }, [projectListProps, hideScheduledTaskSessions]);
 
   const [selectedProjectFilter, setSelectedProjectFilter] = useState<string | null>(null);
 

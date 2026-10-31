@@ -276,76 +276,24 @@ router.post('/push/unsubscribe', async (req, res) => {
 });
 
 // ===============================
-// Auto-Doc Configuration
+// Automations Configuration
 // ===============================
 
-const AUTO_DOC_DEFAULT_INTERVAL_MS = 30 * 60 * 1000;
-const AUTO_DOC_DEFAULT_PROMPT = 'Based on this conversation, please organize and update the relevant project documentation.';
-const AUTO_DOC_DEFAULT_MIN_MESSAGE_COUNT = 20;
-const AUTO_DOC_DEFAULT_MODEL = 'claude-opus-4.7';
-
-// docs/scheduled-tasks.md section 9.3: the automations settings group. The legacy /auto-doc
-// routes (GET+PUT) and the group-level /automations routes (GET+POST) read and write the same
-// app_config keys through these helpers, so the two surfaces cannot drift.
+// docs/scheduled-tasks.md section 11.2: the automations group now holds only the
+// scheduled-task session toggle.
 function readAutomationsConfig() {
-  const intervalMs = parseInt(appConfigDb.get('auto_doc_interval_ms'), 10) || AUTO_DOC_DEFAULT_INTERVAL_MS;
-  const prompt = appConfigDb.get('auto_doc_prompt') || AUTO_DOC_DEFAULT_PROMPT;
-  const minMessageCount = parseInt(appConfigDb.get('auto_doc_min_message_count'), 10) || AUTO_DOC_DEFAULT_MIN_MESSAGE_COUNT;
-  const hideAutoDocRaw = appConfigDb.get('auto_doc_hide_sessions');
-  const hideAutoDoc = hideAutoDocRaw === null ? true : hideAutoDocRaw === 'true';
   const hideScheduledTaskSessionsRaw = appConfigDb.get('scheduled_task_hide_sessions');
   const hideScheduledTaskSessions = hideScheduledTaskSessionsRaw === null ? true : hideScheduledTaskSessionsRaw === 'true';
-  const model = appConfigDb.get('auto_doc_model') || AUTO_DOC_DEFAULT_MODEL;
-  const enabledRaw = appConfigDb.get('auto_doc_enabled');
-  const enabled = enabledRaw === null ? true : enabledRaw === 'true';
-  return { intervalMs, prompt, minMessageCount, hideAutoDoc, hideScheduledTaskSessions, model, enabled };
+  return { hideScheduledTaskSessions };
 }
 
-// Applies a partial automations patch. Returns an error message when a field is invalid,
-// otherwise null (fields left out are untouched).
+// Applies a partial automations patch. Unknown or legacy keys (intervalMs, prompt,
+// minMessageCount, model, enabled) are ignored on purpose, never a 400.
 function applyAutomationsConfig(body = {}) {
-  const { intervalMs, prompt, minMessageCount, hideAutoDoc, hideScheduledTaskSessions, model, enabled } = body || {};
-
-  if (intervalMs != null) {
-    const ms = parseInt(intervalMs, 10);
-    if (isNaN(ms) || ms < 60000) {
-      return 'intervalMs must be at least 60000 (1 minute)';
-    }
-    appConfigDb.set('auto_doc_interval_ms', String(ms));
-  }
-
-  if (prompt != null) {
-    if (typeof prompt !== 'string' || !prompt.trim()) {
-      return 'prompt must be a non-empty string';
-    }
-    appConfigDb.set('auto_doc_prompt', prompt.trim());
-  }
-
-  if (minMessageCount != null) {
-    const n = parseInt(minMessageCount, 10);
-    if (isNaN(n) || n < 1 || n > 10000) {
-      return 'minMessageCount must be between 1 and 10000';
-    }
-    appConfigDb.set('auto_doc_min_message_count', String(n));
-  }
-
-  if (hideAutoDoc != null) {
-    appConfigDb.set('auto_doc_hide_sessions', hideAutoDoc ? 'true' : 'false');
-  }
+  const { hideScheduledTaskSessions } = body || {};
 
   if (hideScheduledTaskSessions != null) {
     appConfigDb.set('scheduled_task_hide_sessions', hideScheduledTaskSessions ? 'true' : 'false');
-  }
-
-  if (enabled != null) {
-    appConfigDb.set('auto_doc_enabled', enabled ? 'true' : 'false');
-  }
-
-  if (model != null) {
-    if (typeof model !== 'string' || !model.trim()) {
-      return 'model must be a non-empty string';
-    }
-    appConfigDb.set('auto_doc_model', model.trim());
   }
 
   return null;
@@ -371,14 +319,18 @@ function handleUpdateAutomations(req, res) {
   }
 }
 
-// Legacy auto-doc surface (kept for existing clients: settings tab, older bundles).
-router.get('/auto-doc', handleGetAutomations);
-router.put('/auto-doc', handleUpdateAutomations);
-
-// Group-level aliases per docs/scheduled-tasks.md section 9.3: GET additionally returns
-// hideScheduledTaskSessions, POST accepts it exactly like hideAutoDoc.
+// Automations group per docs/scheduled-tasks.md section 11.2.
 router.get('/automations', handleGetAutomations);
 router.post('/automations', handleUpdateAutomations);
+
+// docs/scheduled-tasks.md section 11.2: the legacy AutoDoc surface is gone and must answer 404.
+// Without these explicit tombstones a GET would fall through to the SPA catch-all, which answers
+// 200 (built dist) or 302 (dev redirect to Vite) — never the 404 the contract promises. PUT has no
+// catch-all, but keeping both methods here documents the removal in one place.
+const handleRetiredAutoDoc = (_req, res) =>
+  res.status(404).json({ error: 'AutoDoc has been retired', code: 'not_found' });
+router.get('/auto-doc', handleRetiredAutoDoc);
+router.put('/auto-doc', handleRetiredAutoDoc);
 
 // ===============================
 // Claude-tap (API traffic inspector) — per-session

@@ -230,7 +230,7 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
 
               {activeTab === 'plugins' && <PluginSettingsTab />}
 
-              {activeTab === 'auto-doc' && <AutomationsSettingsTab />}
+              {activeTab === 'automations' && <AutomationsSettingsTab />}
 
               {activeTab === 'privacy' && <PrivacySettingsTab />}
 

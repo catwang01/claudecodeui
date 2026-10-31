@@ -67,7 +67,7 @@ import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import os from 'os';
 import sessionManager from './sessionManager.js';
-import { applyCustomSessionNames, applyHiddenFromRecents, applyAutoDocFlag, applyLastAutoDocAt, filterHiddenAutoDocSessions, applyScheduledTaskOrigin, applyReadState, applyForkParent, appConfigDb, sessionDb, sessionFileCache, userDb, userSettingsDb } from './database/db.js';
+import { applyCustomSessionNames, applyHiddenFromRecents, applyScheduledTaskOrigin, applyReadState, applyForkParent, sessionDb, sessionFileCache, userDb, userSettingsDb } from './database/db.js';
 import { projectsDb, sessionsDb } from './modules/database/index.js';
 import { claudeSessionSynchronizer } from './modules/providers/list/claude/claude-session-synchronizer.provider.js';
 import { matchesExcludePattern } from '../shared/excludePatterns.js';
@@ -549,11 +549,11 @@ async function extractProjectDirectory(projectName) {
   }
 }
 
-// TTL cache for buildExcludedSessionIds — these sets (auto-doc IDs + scheduled-task IDs + hidden IDs) change
-// very rarely (only when user creates/hides sessions), but are queried on every fast-path
-// surgicallyUpdateSession call (2-3× per second during active sessions).
-// A 15-second TTL eliminates ~90 redundant SQLite queries per minute without any staleness risk.
-const _excludedSessionIdsCache = new Map(); // provider → { set, time, hideAutoDoc, hideScheduled }
+// TTL cache for buildExcludedSessionIds — the set changes very rarely (only when the user
+// hides or unhides sessions), but is queried on every fast-path surgicallyUpdateSession call
+// (2-3× per second during active sessions). A 15-second TTL eliminates ~90 redundant SQLite
+// queries per minute without any staleness risk.
+const _excludedSessionIdsCache = new Map(); // provider → { set, time }
 const EXCLUDED_IDS_TTL_MS = 15_000;
 
 function invalidateExcludedSessionIdsCache() {
@@ -561,26 +561,20 @@ function invalidateExcludedSessionIdsCache() {
 }
 
 // Returns a Set of session IDs that should be excluded from all views:
-// auto-doc fork sessions + scheduled-task sessions (while hidden) + user-hidden-from-recents sessions.
+// user-hidden-from-recents sessions.
 // Used by getProjects, getRecentSessions and searchConversations to keep filtering consistent.
 function buildExcludedSessionIds(provider = 'claude') {
-  // Toggling the auto-doc switch must invalidate the TTL entry immediately, otherwise the
-  // cached Set would contradict the requested state.
-  const hideAutoDocRaw = appConfigDb.get('auto_doc_hide_sessions');
-  const hideAutoDoc = hideAutoDocRaw === null ? true : hideAutoDocRaw === 'true';
-
   const cached = _excludedSessionIdsCache.get(provider);
-  if (cached && cached.hideAutoDoc === hideAutoDoc && Date.now() - cached.time < EXCLUDED_IDS_TTL_MS) {
+  if (cached && Date.now() - cached.time < EXCLUDED_IDS_TTL_MS) {
     return cached.set;
   }
 
-  const autoDocIds = hideAutoDoc ? sessionDb.getAllAutoDocSessionIds(provider) : new Set();
   // docs/scheduled-tasks.md section 9.2: scheduled-task sessions are deliberately NOT excluded
   // here. They stay in the payload so /session/<id> can resolve them, and the sidebar filters
   // them client-side according to the same setting.
   const hiddenIds = sessionDb.getAllHiddenSessionIds(provider);
-  const result = new Set([...autoDocIds, ...hiddenIds]);
-  _excludedSessionIdsCache.set(provider, { set: result, time: Date.now(), hideAutoDoc });
+  const result = new Set(hiddenIds);
+  _excludedSessionIdsCache.set(provider, { set: result, time: Date.now() });
   return result;
 }
 
@@ -588,7 +582,7 @@ function buildExcludedSessionIds(provider = 'claude') {
  * Process a single dbProject row and return its full ProjectData object.
  * Shared by getProjects (parallel all-projects rebuild) and getProject (targeted single-project refresh).
  */
-async function getProjectData(dbProject, codexSessionsIndexRef, autoDocPreFilter) {
+async function getProjectData(dbProject, codexSessionsIndexRef, sessionExclusionFilter) {
   const _tp = Date.now();
   const projectPath = dbProject.project_path;
   const claudeDirName = dbProject.claude_dir_name || pathToClaudeProjectName(projectPath);
@@ -623,12 +617,9 @@ async function getProjectData(dbProject, codexSessionsIndexRef, autoDocPreFilter
   const claudeSessions = buildSessionsFromCache(claudeRows);
   claudeSessions.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
 
-  const filteredClaude = autoDocPreFilter ? autoDocPreFilter(claudeSessions) : claudeSessions;
+  const filteredClaude = sessionExclusionFilter ? sessionExclusionFilter(claudeSessions) : claudeSessions;
   applyCustomSessionNames(filteredClaude, 'claude');
   applyHiddenFromRecents(filteredClaude, 'claude');
-  applyAutoDocFlag(filteredClaude, 'claude');
-  applyLastAutoDocAt(filteredClaude, 'claude');
-  filterHiddenAutoDocSessions(filteredClaude);
   applyScheduledTaskOrigin(filteredClaude, 'claude');
   applyReadState(filteredClaude, 'claude');
   applyForkParent(filteredClaude, 'claude');
@@ -728,7 +719,7 @@ function refreshProjectSessions(cachedProject, projectPath) {
   if (!dbProject || !cachedProject) return false;
 
   const excludedSessionIds = buildExcludedSessionIds('claude');
-  const autoDocPreFilter = excludedSessionIds.size > 0
+  const sessionExclusionFilter = excludedSessionIds.size > 0
     ? (sessions) => sessions.filter(s => !excludedSessionIds.has(s.id))
     : null;
 
@@ -739,12 +730,9 @@ function refreshProjectSessions(cachedProject, projectPath) {
   const claudeSessions = buildSessionsFromCache(claudeRows);
   claudeSessions.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
 
-  const filteredClaude = autoDocPreFilter ? autoDocPreFilter(claudeSessions) : claudeSessions;
+  const filteredClaude = sessionExclusionFilter ? sessionExclusionFilter(claudeSessions) : claudeSessions;
   applyCustomSessionNames(filteredClaude, 'claude');
   applyHiddenFromRecents(filteredClaude, 'claude');
-  applyAutoDocFlag(filteredClaude, 'claude');
-  applyLastAutoDocAt(filteredClaude, 'claude');
-  filterHiddenAutoDocSessions(filteredClaude);
   applyScheduledTaskOrigin(filteredClaude, 'claude');
   applyReadState(filteredClaude, 'claude');
   applyForkParent(filteredClaude, 'claude');
@@ -817,16 +805,13 @@ function surgicallyUpdateSession(cachedProject, sessionId) {
   const sessionArr = [session];
   applyCustomSessionNames(sessionArr, 'claude');
   applyHiddenFromRecents(sessionArr, 'claude');
-  applyAutoDocFlag(sessionArr, 'claude');
-  applyLastAutoDocAt(sessionArr, 'claude');
-  filterHiddenAutoDocSessions(sessionArr);
   applyScheduledTaskOrigin(sessionArr, 'claude');
   applyReadState(sessionArr, 'claude');
   applyForkParent(sessionArr, 'claude');
 
   const idx = cachedProject.sessions.findIndex(s => s.id === sessionId);
   if (sessionArr.length === 0) {
-    // Filtered out by a decorator (e.g. hidden auto-doc) — remove from cache
+    // Filtered out by a decorator (e.g. hidden from recents) — remove from cache
     if (idx >= 0) cachedProject.sessions.splice(idx, 1);
   } else {
     if (idx >= 0) {
@@ -858,10 +843,10 @@ async function getProject(projectPath) {
   const codexIndex = await getCachedCodexIndex();
   const codexSessionsIndexRef = { sessionsByProject: codexIndex };
   const excludedSessionIds = buildExcludedSessionIds('claude');
-  const autoDocPreFilter = excludedSessionIds.size > 0
+  const sessionExclusionFilter = excludedSessionIds.size > 0
     ? (sessions) => sessions.filter(s => !excludedSessionIds.has(s.id))
     : null;
-  return getProjectData(dbProject, codexSessionsIndexRef, autoDocPreFilter);
+  return getProjectData(dbProject, codexSessionsIndexRef, sessionExclusionFilter);
 }
 
 // Inflight dedup: if getProjects() is already running, new callers share the same Promise
@@ -883,7 +868,7 @@ async function _getProjectsImpl(progressCallback = null) {
   const codexSessionsIndexRef = { sessionsByProject: codexIndex };
 
   const excludedSessionIds = buildExcludedSessionIds('claude');
-  const autoDocPreFilter = excludedSessionIds.size > 0
+  const sessionExclusionFilter = excludedSessionIds.size > 0
     ? (sessions) => sessions.filter(s => !excludedSessionIds.has(s.id))
     : null;
 
@@ -914,7 +899,7 @@ async function _getProjectsImpl(progressCallback = null) {
         currentProject: path.basename(dbProject.project_path),
       });
     }
-    return getProjectData(dbProject, codexSessionsIndexRef, autoDocPreFilter);
+    return getProjectData(dbProject, codexSessionsIndexRef, sessionExclusionFilter);
   })));
 
   if (progressCallback) {
@@ -937,7 +922,7 @@ async function getProjectsLegacy(progressCallback = null) {
   let directories = [];
 
   const excludedSessionIds = buildExcludedSessionIds('claude');
-  const autoDocPreFilter = excludedSessionIds.size > 0
+  const sessionExclusionFilter = excludedSessionIds.size > 0
     ? (sessions) => sessions.filter(s => !excludedSessionIds.has(s.id))
     : null;
 
@@ -985,7 +970,7 @@ async function getProjectsLegacy(progressCallback = null) {
 
       const [sessionResult, cursorSessions, codexSessions, geminiResult, taskMasterResult] =
         await Promise.allSettled([
-          getSessions(entry.name, 15, 0, autoDocPreFilter),
+          getSessions(entry.name, 15, 0, sessionExclusionFilter),
           getCursorSessions(actualProjectDir),
           getCodexSessions(actualProjectDir, { indexRef: codexSessionsIndexRef }),
           (async () => {
@@ -1005,9 +990,6 @@ async function getProjectsLegacy(progressCallback = null) {
       }
       applyCustomSessionNames(project.sessions, 'claude');
       applyHiddenFromRecents(project.sessions, 'claude');
-      applyAutoDocFlag(project.sessions, 'claude');
-      applyLastAutoDocAt(project.sessions, 'claude');
-      filterHiddenAutoDocSessions(project.sessions);
       applyScheduledTaskOrigin(project.sessions, 'claude');
       applyReadState(project.sessions, 'claude');
       applyForkParent(project.sessions, 'claude');
@@ -1244,8 +1226,6 @@ async function getRecentSessions(limit = 50, offset = 0) {
     applyReadState(providerSessions, provider);
     applyForkParent(providerSessions, provider);
     if (provider === 'claude') {
-      applyAutoDocFlag(providerSessions, provider);
-      applyLastAutoDocAt(providerSessions, provider);
       applyScheduledTaskOrigin(providerSessions, provider);
     }
 
@@ -2898,8 +2878,8 @@ async function searchConversations(query, limit = 50, onProjectResult = null, si
       for (const file of jsonlFiles) {
         if (totalMatches >= safeLimit || isAborted()) break;
 
-        // Skip entire file if it belongs to an auto-doc session (file-level filter).
-        // Entry-level filtering is unreliable because the SDK rewrites the file using
+        // Skip the whole file when its session is excluded (file-level filter).
+        // Entry-level filtering is unreliable because the SDK rewrites a forked file using
         // the source session's ID instead of the fork ID.
         const fileSessionId = file.replace('.jsonl', '');
         if (excludedSessionIds.has(fileSessionId)) continue;

@@ -13,9 +13,7 @@ export interface ProjectSession {
   lastActivity?: string;
   messageCount?: number;
   hiddenFromRecents?: boolean;
-  isAutoDoc?: boolean;
   isRead?: boolean;
-  lastAutoDocAt?: string;
   forkParentId?: string;
   projectPath?: string;
   __provider?: SessionProvider;
