@@ -222,6 +222,13 @@
       "descriptionPlaceholder": "这个值的用途",
       "required": "必填",
       "requiredNoDefault": "必填参数需要在运行时提供。",
+      "builtins": {
+        "title": "内置参数（始终可用）",
+        "hint": "每次运行都会额外导出以下变量；请不要在提示词或脚本门控中硬编码路径，改为从环境变量读取。",
+        "TITLE": "任务名称",
+        "CWD": "本次运行的工作目录",
+        "PROJECT": "任务所属的项目根目录"
+      },
       "errors": {
         "nameRequired": "每个参数都需要名称。",
         "nameInvalid": "名称需以字母或下划线开头，且只能包含字母、数字和下划线（最多 64 个字符）。",
@@ -314,7 +321,8 @@
     "effectivePrompt": "实际提示词",
     "scriptOutput": "脚本输出",
     "exitCode": "退出码",
-    "params": "参数"
+    "params": "参数",
+    "builtinsHint": "每次运行还会导出 SCHEDULED_TASK_TITLE、SCHEDULED_TASK_CWD 与 SCHEDULED_TASK_PROJECT；请从中读取，不要硬编码路径。"
   },
   "time": {
     "unknown": "未知"

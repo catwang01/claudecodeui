@@ -206,4 +206,13 @@ describe('RunHistory', () => {
     await waitFor(() => expect(screen.getAllByText(textWith('session-1')).length).toBeGreaterThan(0));
     expect(screen.queryByText('runs.params')).toBeNull();
   });
+
+  it('advertises the built-in parameters every run exports (section 13.7)', async () => {
+    listRuns.mockResolvedValueOnce({ runs: [makeRun('run-1', 'session-1')], total: 1 });
+
+    render(<RunHistory taskId="task-1" refreshToken="1|x|y" />);
+
+    await waitFor(() => expect(listRuns).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('runs.builtinsHint')).toBeTruthy();
+  });
 });

@@ -21,6 +21,25 @@ export const PARAMS_JSON_MAX_BYTES = 16 * 1024;
 export const PARAM_ENV_PREFIX = 'SCHEDULED_TASK_PARAM_';
 export const PARAMS_ENV_NAME = 'SCHEDULED_TASK_PARAMS';
 
+/** One of the section 13.1 built-in parameters. */
+export type BuiltinParam = {
+  /** Short name; also the i18n key suffix under editor.params.builtins. */
+  name: string;
+  /** The environment variable every run exports. */
+  envName: string;
+};
+
+/**
+ * Section 13.1: built-in parameters exported on every run, in the reserved
+ * SCHEDULED_TASK_* namespace. A declared parameter is always
+ * SCHEDULED_TASK_PARAM_<NAME>, so it can never replace one (section 13.2).
+ */
+export const BUILTIN_PARAMS: BuiltinParam[] = [
+  { name: 'TITLE', envName: 'SCHEDULED_TASK_TITLE' },
+  { name: 'CWD', envName: 'SCHEDULED_TASK_CWD' },
+  { name: 'PROJECT', envName: 'SCHEDULED_TASK_PROJECT' },
+];
+
 export const PARAM_TYPES: ParamType[] = ['string', 'number', 'boolean'];
 
 export function isParamType(value: unknown): value is ParamType {

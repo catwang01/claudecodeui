@@ -1,12 +1,19 @@
 import { describe, it, expect } from 'vitest';
 
 import {
+  BUILTIN_PARAMS,
+  BUILTIN_PARAM_ENV_NAMES,
   MAX_PARAM_COUNT,
   MAX_PARAM_JSON_BYTES,
   MAX_PARAM_VALUE_LENGTH,
   PARAM_ENV_PREFIX,
   PARAMS_ENV_NAME,
+  PREDEFINED_ENV_NAMES,
+  PREDEFINED_TASK_VARS,
+  RESERVED_SCHEDULED_TASK_ENV,
+  SESSION_ID_NOTE,
   applyParamOverrides,
+  builtinParamsEnv,
   checkParamValue,
   coerceParamValue,
   normalizeParamDefs,
@@ -15,6 +22,7 @@ import {
   paramEnvValue,
   paramsPromptBlock,
   parseParamDefs,
+  predefinedVarsPromptBlock,
   resolveParams,
 } from './params.js';
 
@@ -219,7 +227,7 @@ describe('applyParamOverrides (§12.5 install)', () => {
 });
 
 describe('paramsPromptBlock (§12.6)', () => {
-  it('returns null without parameters so the prompt stays byte-identical', () => {
+  it('returns null without parameters (only the §13.5 block is always present)', () => {
     expect(paramsPromptBlock([], {})).toBeNull();
     expect(paramsPromptBlock(undefined, {})).toBeNull();
   });
@@ -399,3 +407,120 @@ describe('value bounds (§12.1/§12.3)', () => {
   });
 });
 
+describe('predefined task variables (§13)', () => {
+  it('exports title, cwd and project root for every run', () => {
+    expect(builtinParamsEnv({ title: 'nightly', project_path: '/proj' }, { cwd: '/proj/sub' })).toEqual({
+      SCHEDULED_TASK_TITLE: 'nightly',
+      SCHEDULED_TASK_CWD: '/proj/sub',
+      SCHEDULED_TASK_PROJECT: '/proj',
+    });
+  });
+
+  it('defaults cwd to the project path and tolerates missing/unreadable tasks', () => {
+    expect(builtinParamsEnv({ title: 't', project_path: '/proj' })).toEqual({
+      SCHEDULED_TASK_TITLE: 't',
+      SCHEDULED_TASK_CWD: '/proj',
+      SCHEDULED_TASK_PROJECT: '/proj',
+    });
+    // camelCase row shape, and the empty-shape fallbacks.
+    expect(builtinParamsEnv({ title: 't', projectPath: '/camel' }).SCHEDULED_TASK_PROJECT).toBe('/camel');
+    expect(builtinParamsEnv(null)).toEqual({
+      SCHEDULED_TASK_TITLE: '',
+      SCHEDULED_TASK_CWD: '',
+      SCHEDULED_TASK_PROJECT: '',
+    });
+    expect(builtinParamsEnv(undefined).SCHEDULED_TASK_CWD).toBe('');
+  });
+
+  it('advertises the nine predefined names, grouped, with the env/agent split', () => {
+    expect(BUILTIN_PARAMS.map((entry) => entry.envName)).toEqual([
+      'SCHEDULED_TASK_TITLE',
+      'SCHEDULED_TASK_CWD',
+      'SCHEDULED_TASK_PROJECT',
+    ]);
+    expect(BUILTIN_PARAM_ENV_NAMES).toEqual(BUILTIN_PARAMS.map((entry) => entry.envName));
+    expect(PREDEFINED_ENV_NAMES).toEqual([
+      'SCHEDULED_TASK_TITLE',
+      'SCHEDULED_TASK_CWD',
+      'SCHEDULED_TASK_PROJECT',
+      'SCHEDULED_TASK_ID',
+      'SCHEDULED_TASK_DIR',
+      'SCHEDULED_TASK_STATE_DIR',
+      'SCHEDULED_TASK_TMP_DIR',
+      'SCHEDULED_TASK_RUN_ID',
+      'SCHEDULED_TASK_RUN_DIR',
+    ]);
+    expect(PREDEFINED_TASK_VARS.filter((entry) => entry.group === 'workspace')).toHaveLength(6);
+    // Only the three built-ins reach the agent environment (runner.js); the
+    // workspace group is script-gate-only and reaches the agent as prompt text.
+    expect(PREDEFINED_TASK_VARS.filter((entry) => entry.agentEnv).map((entry) => entry.envName)).toEqual(
+      BUILTIN_PARAM_ENV_NAMES
+    );
+    for (const name of PREDEFINED_ENV_NAMES) {
+      expect(RESERVED_SCHEDULED_TASK_ENV).toContain(name);
+    }
+  });
+
+  it('keeps the param namespace disjoint from every predefined name (§13.2)', () => {
+    // A declared parameter is always SCHEDULED_TASK_PARAM_<NAME>; the _PARAM_
+    // infix makes the reserved namespace unreachable, whatever the name.
+    const names = [
+      'title',
+      'cwd',
+      'project',
+      'id',
+      'dir',
+      'state_dir',
+      'tmp_dir',
+      'run_id',
+      'run_dir',
+      'params',
+      'SCHEDULED_TASK_TITLE',
+    ];
+    for (const name of names) {
+      expect(paramEnvName(name).startsWith(PARAM_ENV_PREFIX)).toBe(true);
+      expect(PREDEFINED_ENV_NAMES).not.toContain(paramEnvName(name));
+      expect(RESERVED_SCHEDULED_TASK_ENV).not.toContain(paramEnvName(name));
+      expect(paramEnvName(name)).not.toBe(PARAMS_ENV_NAME);
+    }
+
+    // A parameter literally named "title" coexists with the predefined variable.
+    const defs = normalizeParamDefs([{ name: 'title', type: 'string', default: 'shadow' }]).params;
+    const resolved = resolveParams(defs, {});
+    expect(resolved.env.SCHEDULED_TASK_PARAM_TITLE).toBe('shadow');
+    expect(PREDEFINED_ENV_NAMES).not.toContain('SCHEDULED_TASK_PARAM_TITLE');
+    const env = { ...builtinParamsEnv({ title: 'nightly' }), ...resolved.env };
+    expect(env.SCHEDULED_TASK_TITLE).toBe('nightly');
+    expect(env.SCHEDULED_TASK_PARAM_TITLE).toBe('shadow');
+  });
+
+  it('refuses a per-run override that targets a predefined name', () => {
+    // Overrides are matched against *declared* names only, so none of these can
+    // ever reach a predefined variable.
+    for (const key of ['TITLE', 'CWD', 'PROJECT', 'ID', 'DIR', 'RUN_ID', 'SCHEDULED_TASK_CWD', 'PARAMS']) {
+      expect(resolveParams([], { [key]: 'hijack' })).toMatchObject({ ok: false, code: 'invalid_input' });
+    }
+    expect(resolveParams([], {})).toMatchObject({ ok: true, env: null });
+  });
+
+  it('describes every predefined variable in the always-on prompt block (§13.5)', () => {
+    const block = predefinedVarsPromptBlock();
+
+    expect(typeof block).toBe('string');
+    expect(block.startsWith('## Predefined scheduled-task variables')).toBe(true);
+    for (const entry of PREDEFINED_TASK_VARS) {
+      expect(block).toContain('$' + entry.envName);
+      expect(block).toContain(entry.description);
+    }
+    expect(block).toContain('never hardcode');
+    expect(block).toContain('Built-in parameters');
+    expect(block).toContain('Workspace variables');
+    expect(block).toContain(PARAM_ENV_PREFIX);
+    expect(block).toContain(PARAMS_ENV_NAME);
+    // §13: the three ids are distinguished and the session id is not an env var.
+    expect(block).toContain('NOT a chat session id');
+    expect(block).toContain(SESSION_ID_NOTE);
+    // The §12.6 Parameters block stays conditional; this block never is.
+    expect(paramsPromptBlock([], {})).toBeNull();
+  });
+});

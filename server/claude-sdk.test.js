@@ -661,13 +661,16 @@ describe('mapCliOptionsToSDK — §12.5 options.env allowlist (security)', () =>
     mapCliOptionsToSDK = mod.mapCliOptionsToSDK;
   });
 
-  it('merges only SCHEDULED_TASK_PARAM_* and SCHEDULED_TASK_PARAMS', () => {
+  it('merges only SCHEDULED_TASK_PARAM_*, SCHEDULED_TASK_PARAMS and the §13.1 built-ins', () => {
     const sdkOptions = mapCliOptionsToSDK({
       env: {
         SCHEDULED_TASK_PARAM_REGION: 'eu',
         SCHEDULED_TASK_PARAM_THRESHOLD: 3,
         SCHEDULED_TASK_PARAMS: '{"region":"eu","threshold":3}',
         SCHEDULED_TASK_PARAMETER_X: 'not-ours',
+        SCHEDULED_TASK_TITLE: 'nightly',
+        SCHEDULED_TASK_CWD: '/proj',
+        SCHEDULED_TASK_PROJECT: '/proj',
         OTHER: 'dropped',
       },
     });
@@ -675,8 +678,33 @@ describe('mapCliOptionsToSDK — §12.5 options.env allowlist (security)', () =>
     expect(sdkOptions.env.SCHEDULED_TASK_PARAM_REGION).toBe('eu');
     expect(sdkOptions.env.SCHEDULED_TASK_PARAM_THRESHOLD).toBe('3');
     expect(sdkOptions.env.SCHEDULED_TASK_PARAMS).toBe('{"region":"eu","threshold":3}');
+    expect(sdkOptions.env.SCHEDULED_TASK_TITLE).toBe('nightly');
+    expect(sdkOptions.env.SCHEDULED_TASK_CWD).toBe('/proj');
+    expect(sdkOptions.env.SCHEDULED_TASK_PROJECT).toBe('/proj');
     expect(sdkOptions.env).not.toHaveProperty('SCHEDULED_TASK_PARAMETER_X');
     expect(sdkOptions.env).not.toHaveProperty('OTHER');
+  });
+
+  it('still drops reserved variables that are not §13.1 built-ins', () => {
+    // Only the three built-in names are allowed through; the rest of the
+    // reserved namespace (workspace dirs, ids) must keep being rejected.
+    const sdkOptions = mapCliOptionsToSDK({
+      env: {
+        SCHEDULED_TASK_ID: 't1',
+        SCHEDULED_TASK_DIR: '/tmp/task',
+        SCHEDULED_TASK_TMP_DIR: '/tmp/task/tmp',
+        SCHEDULED_TASK_RUN_DIR: '/tmp/task/runs/run-1',
+      },
+    });
+
+    for (const key of [
+      'SCHEDULED_TASK_ID',
+      'SCHEDULED_TASK_DIR',
+      'SCHEDULED_TASK_TMP_DIR',
+      'SCHEDULED_TASK_RUN_DIR',
+    ]) {
+      expect(sdkOptions.env).not.toHaveProperty(key);
+    }
   });
 
   it('never lets a client-supplied env clobber the process environment', () => {

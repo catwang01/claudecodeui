@@ -15,8 +15,13 @@
 import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod/v4';
 import { createScheduleTools, isScheduleToolsEnabled, SCHEDULE_TOOL_NAMES } from './scheduled-tasks/tools.js';
-// §12.2 parameter env contract. params.js is pure (no imports), so this cannot cycle.
-import { PARAM_ENV_PREFIX, PARAMS_ENV_NAME } from './scheduled-tasks/params.js';
+// §12.2 parameter env contract + §13.1 built-in parameter names. params.js is pure
+// (no imports), so this cannot cycle.
+import {
+  BUILTIN_PARAM_ENV_NAMES,
+  PARAM_ENV_PREFIX,
+  PARAMS_ENV_NAME,
+} from './scheduled-tasks/params.js';
 import { getTapSession } from './tap.js';
 import crypto from 'crypto';
 import { promises as fs } from 'fs';
@@ -399,16 +404,20 @@ export function mapCliOptionsToSDK(options = {}) {
   const env = { ...process.env };
   delete env.CLAUDECODE;
 
-  // §12.5: merge ONLY the scheduled-task parameter variables from options.env, so
-  // the spawned CLI inherits them. options.env must never be trusted as a general
-  // env override: queryClaudeSDK() is fed client input (the chat WebSocket forwards
-  // data.options verbatim), so an arbitrary options.env could otherwise clobber
-  // PATH / ANTHROPIC_BASE_URL / NODE_OPTIONS / LD_PRELOAD or re-add CLAUDECODE.
-  // The allowlist is the §12.2 contract, imported from params.js so it cannot drift.
+  // §12.5/§13.3: merge ONLY the scheduled-task parameter variables and the §13.1
+  // built-in names from options.env, so the spawned CLI inherits them. options.env
+  // must never be trusted as a general env override: queryClaudeSDK() is fed client
+  // input (the chat WebSocket forwards data.options verbatim), so an arbitrary
+  // options.env could otherwise clobber PATH / ANTHROPIC_BASE_URL / NODE_OPTIONS /
+  // LD_PRELOAD or re-add CLAUDECODE. The allowlist is the §12.2 + §13.1 contract,
+  // imported from params.js so it cannot drift.
   // Absent options.env is a strict no-op.
+  const builtinEnvNames = new Set(BUILTIN_PARAM_ENV_NAMES);
   if (options.env && typeof options.env === 'object' && !Array.isArray(options.env)) {
     for (const [key, value] of Object.entries(options.env)) {
-      if (key !== PARAMS_ENV_NAME && !key.startsWith(PARAM_ENV_PREFIX)) continue;
+      const allowed =
+        key === PARAMS_ENV_NAME || key.startsWith(PARAM_ENV_PREFIX) || builtinEnvNames.has(key);
+      if (!allowed) continue;
       if (value === undefined || value === null) continue;
       env[key] = String(value);
     }

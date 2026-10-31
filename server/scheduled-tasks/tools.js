@@ -20,6 +20,15 @@ import { createManagement } from './management.js';
 // same text is embedded in the schedule_create / schedule_preset_install
 // descriptions so an authoring agent knows the contract before the first run.
 import { workspacePromptBlock } from './workspace.js';
+// §13.6: the predefined-variable text is rendered from params.js (the same source
+// the agent prompt block uses), so the MCP descriptions cannot drift from it.
+import {
+  BUILTIN_PARAM_ENV_NAMES,
+  PARAM_ENV_PREFIX,
+  PARAMS_ENV_NAME,
+  PREDEFINED_TASK_VARS,
+  SESSION_ID_NOTE,
+} from './params.js';
 
 /** Bare tool names, in registration order. */
 export const SCHEDULE_TOOL_NAMES = [
@@ -80,6 +89,27 @@ const WORKSPACE_LAYOUT_NOTE =
   '\n\n' +
   (workspacePromptBlock() ?? WORKSPACE_FALLBACK_LAYOUT) +
   '\n\nThe script gate receives SCHEDULED_TASK_DIR, SCHEDULED_TASK_STATE_DIR, SCHEDULED_TASK_TMP_DIR, SCHEDULED_TASK_RUN_ID and SCHEDULED_TASK_RUN_DIR.';
+
+/**
+ * §13.6: the predefined-variable contract of every run, stated once and appended
+ * to every schedule_* description, so the model never creates a task that
+ * hardcodes a directory and never confuses the three ids. Rendered from
+ * params.js (PREDEFINED_TASK_VARS / SESSION_ID_NOTE), so the agent prompt block,
+ * the MCP text and the docs cannot drift.
+ */
+const PREDEFINED_VARS_NOTE =
+  ' Predefined variables every run injects into the script gate environment: ' +
+  PREDEFINED_TASK_VARS.map((entry) => entry.envName + ' (' + entry.description + ')').join('; ') +
+  '; plus the user-declared parameters ' +
+  PARAM_ENV_PREFIX +
+  '<NAME> and the compact JSON ' +
+  PARAMS_ENV_NAME +
+  '. The agent session additionally receives ' +
+  BUILTIN_PARAM_ENV_NAMES.join(', ') +
+  ' and the parameters in its environment; the workspace and id values reach it as text in the Scheduled task workspace prompt block. ' +
+  'Read these from the environment or from that block; never hardcode the task name, the project path or any workspace directory, so the task keeps working from any directory. ' +
+  'SCHEDULED_TASK_ID is the scheduled-task row id (stable across its runs), SCHEDULED_TASK_RUN_ID is this run id, and neither is the chat session id. ' +
+  SESSION_ID_NOTE;
 
 /** SCHEDULED_TASKS_TOOLS=0 (default on) removes the tools entirely. */
 export function isScheduleToolsEnabled() {
@@ -165,7 +195,7 @@ const paramDefFields = z.object({
 const paramsField = z
   .array(paramDefFields)
   .describe(
-    'Parameter definitions (at most 32, names unique case-insensitively). At run time they are exported to the script gate and the agent as SCHEDULED_TASK_PARAM_<NAME> plus the compact JSON SCHEDULED_TASK_PARAMS.'
+    'Parameter definitions (at most 32, names unique case-insensitively). At run time they are exported to the script gate and the agent as SCHEDULED_TASK_PARAM_<NAME> plus the compact JSON SCHEDULED_TASK_PARAMS. Independent of these, every run also exports the built-in SCHEDULED_TASK_TITLE, SCHEDULED_TASK_CWD and SCHEDULED_TASK_PROJECT.'
   )
   .optional();
 
@@ -368,6 +398,7 @@ export function createScheduleTools(options = {}) {
         ' Create a scheduled task that starts a new agent run in this project. Provide exactly one schedule selector (after_seconds, at, every_seconds, daily, weekly or cron).' +
         ' Optionally add a script gate via command/command_timeout_seconds: the command runs first and its stdout JSON envelope ({"skip":true,"reason":"..."} | {"prompt":"..."} | {"skip":false}) decides whether the agent runs and with which prompt.' +
         ' Optionally declare params: each run resolves them and exports them to the script gate and the agent as SCHEDULED_TASK_PARAM_<NAME> plus the compact JSON SCHEDULED_TASK_PARAMS.' +
+        PREDEFINED_VARS_NOTE +
         WORKSPACE_LAYOUT_NOTE,
       {
         prompt: z.string().describe('Prompt sent to the agent when the task runs.'),
@@ -387,14 +418,15 @@ export function createScheduleTools(options = {}) {
       'schedule_list',
       SCHEDULER_PRECEDENCE_NOTE +
         ' List scheduled tasks for this project (active only unless include_paused is true).' +
-        SCHEDULER_STORAGE_NOTE,
+        SCHEDULER_STORAGE_NOTE +
+        PREDEFINED_VARS_NOTE,
       { include_paused: z.boolean().describe('Include paused tasks. Defaults to false.').optional() },
       list,
       { annotations: { readOnlyHint: true } }
     ),
     tool(
       'schedule_get',
-      SCHEDULER_PRECEDENCE_NOTE + ' Get one scheduled task with its five most recent runs.',
+      SCHEDULER_PRECEDENCE_NOTE + ' Get one scheduled task with its five most recent runs.' + PREDEFINED_VARS_NOTE,
       { id: z.string().describe('Scheduled task id.') },
       get,
       { annotations: { readOnlyHint: true } }
@@ -404,7 +436,8 @@ export function createScheduleTools(options = {}) {
       SCHEDULER_PRECEDENCE_NOTE +
         ' Update a scheduled task title, prompt, params, script gate (command/command_timeout_seconds) and/or its schedule (at most one selector).' +
         ' A command gate runs before the agent and prints a JSON envelope ({"skip":true,"reason":"..."} | {"prompt":"..."} | {"skip":false}); null clears the gate.' +
-        ' params replaces the parameter definitions; null removes every parameter.',
+        ' params replaces the parameter definitions; null removes every parameter.' +
+        PREDEFINED_VARS_NOTE,
       {
         id: z.string().describe('Scheduled task id.'),
         title: z.string().optional(),
@@ -418,7 +451,7 @@ export function createScheduleTools(options = {}) {
     ),
     tool(
       'schedule_delete',
-      SCHEDULER_PRECEDENCE_NOTE + ' Delete a scheduled task and its run history.',
+      SCHEDULER_PRECEDENCE_NOTE + ' Delete a scheduled task and its run history.' + PREDEFINED_VARS_NOTE,
       { id: z.string().describe('Scheduled task id.') },
       remove,
       { annotations: { readOnlyHint: false } }
@@ -426,7 +459,8 @@ export function createScheduleTools(options = {}) {
     tool(
       'schedule_run',
       SCHEDULER_PRECEDENCE_NOTE +
-        ' Start a scheduled task immediately (manual trigger). Pass params to override the task parameter defaults for this run only (docs §12.3).',
+        ' Start a scheduled task immediately (manual trigger). Pass params to override the task parameter defaults for this run only (docs §12.3).' +
+        PREDEFINED_VARS_NOTE,
       {
         id: z.string().describe('Scheduled task id.'),
         params: paramOverridesField,
@@ -436,14 +470,14 @@ export function createScheduleTools(options = {}) {
     ),
     tool(
       'schedule_pause',
-      SCHEDULER_PRECEDENCE_NOTE + ' Pause a scheduled task so it stops being due until resumed.',
+      SCHEDULER_PRECEDENCE_NOTE + ' Pause a scheduled task so it stops being due until resumed.' + PREDEFINED_VARS_NOTE,
       { id: z.string().describe('Scheduled task id.') },
       pause,
       { annotations: { readOnlyHint: false } }
     ),
     tool(
       'schedule_resume',
-      SCHEDULER_PRECEDENCE_NOTE + ' Resume a paused scheduled task and recompute its next run.',
+      SCHEDULER_PRECEDENCE_NOTE + ' Resume a paused scheduled task and recompute its next run.' + PREDEFINED_VARS_NOTE,
       { id: z.string().describe('Scheduled task id.') },
       resume,
       { annotations: { readOnlyHint: false } }
@@ -451,7 +485,8 @@ export function createScheduleTools(options = {}) {
     tool(
       'schedule_preset_list',
       SCHEDULER_PRECEDENCE_NOTE +
-        ' List installable task presets: the built-in catalog plus the custom presets that belong to this project. Set include_catalog to false to list custom presets only.',
+        ' List installable task presets: the built-in catalog plus the custom presets that belong to this project. Set include_catalog to false to list custom presets only.' +
+        PREDEFINED_VARS_NOTE,
       { include_catalog: z.boolean().describe('Include the built-in catalog. Defaults to true.').optional() },
       presetList,
       { annotations: { readOnlyHint: true } }
@@ -461,6 +496,7 @@ export function createScheduleTools(options = {}) {
       SCHEDULER_PRECEDENCE_NOTE +
         ' Install a preset into this project: every task template becomes a real scheduled task linked back to the preset, so enabling or disabling the preset switches them all at once. Installing again is idempotent — linked tasks are updated, never duplicated.' +
         ' Optional params overrides are applied to every installed task whose template declares that parameter name (docs §12.5).' +
+        PREDEFINED_VARS_NOTE +
         WORKSPACE_LAYOUT_NOTE,
       {
         id: z.string().describe('Preset id (see schedule_preset_list).'),
@@ -480,7 +516,8 @@ export function createScheduleTools(options = {}) {
     tool(
       'schedule_preset_set_enabled',
       SCHEDULER_PRECEDENCE_NOTE +
-        ' Enable or disable a whole preset: the preset flag flips and every scheduled task it installed follows (enabling recomputes each next run, disabling clears it).',
+        ' Enable or disable a whole preset: the preset flag flips and every scheduled task it installed follows (enabling recomputes each next run, disabling clears it).' +
+        PREDEFINED_VARS_NOTE,
       {
         id: z.string().describe('Preset id.'),
         enabled: z.boolean().describe('true to enable the whole preset, false to disable it.'),
@@ -491,7 +528,8 @@ export function createScheduleTools(options = {}) {
     tool(
       'schedule_preset_create',
       SCHEDULER_PRECEDENCE_NOTE +
-        ' Create a custom preset by snapshotting existing scheduled tasks of this project, so the bundle can be installed and toggled as one unit. task_ids defaults to every task of the session project.',
+        ' Create a custom preset by snapshotting existing scheduled tasks of this project, so the bundle can be installed and toggled as one unit. task_ids defaults to every task of the session project.' +
+        PREDEFINED_VARS_NOTE,
       {
         name: z.string().describe('Human-readable preset name.'),
         description: z.string().describe('Optional preset description.').optional(),

@@ -223,6 +223,9 @@ export default function RunHistory({ taskId, refreshToken, onOpenSession }: RunH
         {total > 0 && <span className="text-xs text-muted-foreground">{t('runs.count', { shown: runs.length, total })}</span>}
       </div>
 
+      {/* Section 13.7: every run also exports the built-in parameters. */}
+      <p className="mt-1 text-[11px] text-muted-foreground">{t('runs.builtinsHint')}</p>
+
       {error && <p className="mt-2 text-sm text-destructive">{error}</p>}
 
       {isLoading && runs.length === 0 && <p className="mt-2 text-sm text-muted-foreground">{t('loadingRuns')}</p>}

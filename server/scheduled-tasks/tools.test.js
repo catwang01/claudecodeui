@@ -7,6 +7,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 
 import { createScheduleTools, SCHEDULE_TOOL_NAMES, isScheduleToolsEnabled } from './tools.js';
 import * as rules from './rules.js';
+import { PREDEFINED_ENV_NAMES, PREDEFINED_TASK_VARS, SESSION_ID_NOTE } from './params.js';
 
 const NOW = Date.parse('2030-06-03T12:00:00.000Z'); // a Monday
 const PROJECT = '/tmp/project-alpha';
@@ -843,5 +844,39 @@ describe('params (§12)', () => {
     expect(byName.schedule_create.description).toContain('SCHEDULED_TASK_PARAM_');
     expect(byName.schedule_run.description).toMatch(/params/);
     expect(byName.schedule_update.description).toMatch(/parameter/i);
+  });
+
+  it('lists every §13 predefined variable and the id clarification on all twelve tools', () => {
+    const { byName } = setup();
+
+    expect(PREDEFINED_ENV_NAMES).toHaveLength(9);
+    expect(Object.keys(byName)).toHaveLength(12);
+
+    for (const name of Object.keys(byName)) {
+      const description = byName[name].description;
+
+      for (const entry of PREDEFINED_TASK_VARS) {
+        // Name plus its one-line meaning, not just the bare variable.
+        expect(description, name + ' ' + entry.envName).toContain(
+          entry.envName + ' (' + entry.description + ')'
+        );
+      }
+      // The user-declared parameter namespace is named as well.
+      expect(description, name).toContain('SCHEDULED_TASK_PARAM_');
+      expect(description, name).toContain('SCHEDULED_TASK_PARAMS');
+      // Where they are readable, and the no-hardcode instruction.
+      expect(description, name).toMatch(/script gate/i);
+      expect(description, name).toMatch(/never hardcode/i);
+      // §13: SCHEDULED_TASK_ID is a task id, not the chat session id, and the
+      // session id lives on the run instead of in the environment.
+      expect(description, name).toMatch(/NOT a chat session id/i);
+      expect(description, name).toContain('sessionId');
+      expect(description, name).toContain(SESSION_ID_NOTE);
+    }
+
+    // The shared note is rendered from params.js, not hand-written: dropping a
+    // variable from PREDEFINED_TASK_VARS would remove it from every description.
+    expect(byName.schedule_create.description).toContain(PREDEFINED_TASK_VARS[3].envName);
+    expect(byName.schedule_list.description).toContain('SCHEDULED_TASK_RUN_DIR');
   });
 });

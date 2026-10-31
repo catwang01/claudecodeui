@@ -4,6 +4,7 @@ import { Button } from '../../../shared/view/ui';
 import { cn } from '../../../lib/utils';
 import type { ParamType } from '../types';
 import {
+  BUILTIN_PARAMS,
   MAX_PARAMS,
   PARAM_DESCRIPTION_MAX_LENGTH,
   PARAM_NAME_MAX_LENGTH,
@@ -60,6 +61,24 @@ export default function ParamsEditor({ drafts, onChange, disabled = false }: Par
           <Plus className="h-3.5 w-3.5" />
           {t('editor.params.add')}
         </Button>
+      </div>
+
+      {/* Section 13.1/13.7: the built-ins are always available, so the editor
+          tells the author to read them from the environment instead of
+          hardcoding a path. */}
+      <div className="rounded-lg border border-dashed border-border/60 bg-muted/10 p-3">
+        <p className="text-xs font-medium text-foreground">{t('editor.params.builtins.title')}</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">{t('editor.params.builtins.hint')}</p>
+        <ul className="mt-2 space-y-1">
+          {BUILTIN_PARAMS.map((param) => (
+            <li key={param.envName} className="flex flex-wrap items-baseline gap-x-2 text-xs">
+              <code className="font-mono text-[11px] text-foreground/80">{param.envName}</code>
+              <span className="text-muted-foreground">
+                {t('editor.params.builtins.' + param.name)}
+              </span>
+            </li>
+          ))}
+        </ul>
       </div>
 
       {drafts.length === 0 && (

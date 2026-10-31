@@ -93,4 +93,15 @@ describe('ParamsEditor', () => {
     expect(screen.queryByText('SCHEDULED_TASK_PARAM_REGION')).toBeNull();
     expect(screen.getByText('editor.params.envPlaceholder')).toBeTruthy();
   });
+
+  it('shows the section 13.1 built-ins and the no-hardcode hint', () => {
+    render(<Harness />);
+
+    expect(screen.getByText('editor.params.builtins.title')).toBeTruthy();
+    expect(screen.getByText('editor.params.builtins.hint')).toBeTruthy();
+    expect(screen.getByText('editor.params.builtins.CWD')).toBeTruthy();
+    expect(screen.getByText('SCHEDULED_TASK_TITLE')).toBeTruthy();
+    expect(screen.getByText('SCHEDULED_TASK_CWD')).toBeTruthy();
+    expect(screen.getByText('SCHEDULED_TASK_PROJECT')).toBeTruthy();
+  });
 });

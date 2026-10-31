@@ -31,6 +31,7 @@ import {
   taskTmpDir,
   workspacePromptBlock,
 } from './workspace.js';
+import { PREDEFINED_ENV_NAMES, predefinedVarsPromptBlock } from './params.js';
 
 let dataDir;
 
@@ -484,14 +485,16 @@ describe('workspace (§10.4)', () => {
     const result = await startTaskRun(makeTask()).done;
 
     const block = workspacePromptBlock(makeTask(), { runId: 'run-1' });
+    const builtinBlock = predefinedVarsPromptBlock();
+    const expectedPrompt = `${block}\n\n${builtinBlock}\n\ndo stuff`;
     expect(queryClaudeSDK).toHaveBeenCalledWith(
-      `${block}\n\ndo stuff`,
+      expectedPrompt,
       expect.objectContaining({ cwd: '/tmp/scheduled-project', permissionMode: 'bypassPermissions' }),
       expect.anything()
     );
     expect(result.promptUsed).toBe('do stuff');
     expect(fs.readFileSync(path.join(runDir('t1', 'run-1'), 'prompt.md'), 'utf8')).toBe(
-      `${block}\n\ndo stuff`
+      expectedPrompt
     );
 
     const record = readJson(path.join(runDir('t1', 'run-1'), 'run.json'));
@@ -517,14 +520,15 @@ describe('workspace (§10.4)', () => {
       ).done;
 
       const block = workspacePromptBlock(makeTask({ project_path: projectDir }), { runId: 'run-1' });
+      const expectedPrompt = `${block}\n\n${predefinedVarsPromptBlock()}\n\ngated prompt`;
       expect(result.promptUsed).toBe('gated prompt');
       expect(queryClaudeSDK).toHaveBeenCalledWith(
-        `${block}\n\ngated prompt`,
+        expectedPrompt,
         expect.anything(),
         expect.anything()
       );
       const dir = runDir('t1', 'run-1');
-      expect(fs.readFileSync(path.join(dir, 'prompt.md'), 'utf8')).toBe(`${block}\n\ngated prompt`);
+      expect(fs.readFileSync(path.join(dir, 'prompt.md'), 'utf8')).toBe(expectedPrompt);
       // Script-gate stdout is kept under logs/.
       expect(fs.readFileSync(path.join(dir, 'logs', 'gate-stdout.log'), 'utf8')).toBe(
         '{"prompt":"gated prompt"}'
@@ -580,7 +584,12 @@ describe('workspace (§10.4)', () => {
     const result = await startTaskRun(makeTask()).done;
 
     expect(result.promptUsed).toBe('do stuff');
-    expect(queryClaudeSDK).toHaveBeenCalledWith('do stuff', expect.anything(), expect.anything());
+    // §13.5: the built-in block does not depend on the workspace layer.
+    expect(queryClaudeSDK).toHaveBeenCalledWith(
+      `${predefinedVarsPromptBlock()}\n\ndo stuff`,
+      expect.anything(),
+      expect.anything()
+    );
     expect(fs.readdirSync(dataDir)).toEqual([]);
   });
 });
@@ -639,6 +648,9 @@ describe('parameters (§12)', () => {
 
     const [prompt, options] = queryClaudeSDK.mock.calls[0];
     expect(options.env).toEqual({
+      SCHEDULED_TASK_TITLE: 'Nightly docs',
+      SCHEDULED_TASK_CWD: '/tmp/scheduled-project',
+      SCHEDULED_TASK_PROJECT: '/tmp/scheduled-project',
       SCHEDULED_TASK_PARAM_REGION: 'eu',
       SCHEDULED_TASK_PARAM_THRESHOLD: '3',
       SCHEDULED_TASK_PARAM_DRYRUN: 'false',
@@ -699,17 +711,106 @@ describe('parameters (§12)', () => {
     }
   });
 
-  it('leaves the no-params environment and prompt untouched', async () => {
+  it('leaves the no-params namespace untouched and still exports the built-ins', async () => {
     queryClaudeSDK.mockResolvedValue(undefined);
 
     await startTaskRun(makeTask()).done;
 
     const [prompt, options] = queryClaudeSDK.mock.calls[0];
-    expect(options.env).toBeUndefined();
+    // §13.4: no SCHEDULED_TASK_PARAM_* / SCHEDULED_TASK_PARAMS, but the built-ins
+    // are exported to the agent on every run.
+    expect(options.env).toEqual({
+      SCHEDULED_TASK_TITLE: 'Nightly docs',
+      SCHEDULED_TASK_CWD: '/tmp/scheduled-project',
+      SCHEDULED_TASK_PROJECT: '/tmp/scheduled-project',
+    });
+    // §13.3: the workspace group and SCHEDULED_TASK_ID stay script-gate-only; the
+    // agent reads them as text in the workspace block, never from its env.
+    for (const key of ['SCHEDULED_TASK_ID', 'SCHEDULED_TASK_DIR', 'SCHEDULED_TASK_STATE_DIR', 'SCHEDULED_TASK_RUN_ID']) {
+      expect(options.env).not.toHaveProperty(key);
+    }
+    expect(prompt).toContain('## Predefined scheduled-task variables');
     expect(prompt).not.toContain('Scheduled task parameters');
     expect(scheduledTasksDb.createRun).toHaveBeenCalledWith(
       expect.objectContaining({ paramsJson: null })
     );
+  });
+});
+
+describe('built-in parameters (§13)', () => {
+  it('exports the built-ins to the script gate of a zero-parameter task', async () => {
+    queryClaudeSDK.mockResolvedValue(undefined);
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scheduled-runner-builtin-'));
+
+    try {
+      const command =
+        'printf "%s" "$SCHEDULED_TASK_TITLE|$SCHEDULED_TASK_CWD|$SCHEDULED_TASK_PROJECT" > "$SCHEDULED_TASK_TMP_DIR/builtins.txt"; ' +
+        'printf \'{"skip":true,"reason":"gated"}\'';
+      const result = await startTaskRun(makeTask({ project_path: projectDir, command })).done;
+
+      expect(result.status).toBe('skipped');
+      expect(fs.readFileSync(path.join(taskTmpDir('t1'), 'builtins.txt'), 'utf8')).toBe(
+        'Nightly docs|' + projectDir + '|' + projectDir
+      );
+      expect(queryClaudeSDK).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('lists the built-ins in the agent prompt and carries the no-hardcode instruction', async () => {
+    queryClaudeSDK.mockResolvedValue(undefined);
+
+    await startTaskRun(makeTask()).done;
+
+    const [prompt] = queryClaudeSDK.mock.calls[0];
+    expect(prompt).toContain('## Predefined scheduled-task variables');
+    // §13.5: every predefined variable is named, grouped, with the id note.
+    for (const envName of PREDEFINED_ENV_NAMES) {
+      expect(prompt).toContain('$' + envName);
+    }
+    expect(prompt).toContain('Built-in parameters');
+    expect(prompt).toContain('Workspace variables');
+    expect(prompt).toMatch(/never hardcode/i);
+    expect(prompt).toContain('NOT a chat session id');
+    expect(prompt).toContain('run history');
+    expect(prompt).toContain('## Scheduled task workspace');
+  });
+
+  it('never lets a declared parameter replace a built-in (gate and agent)', async () => {
+    queryClaudeSDK.mockResolvedValue(undefined);
+    const shadowDefs = JSON.stringify([{ name: 'title', type: 'string', default: 'shadow' }]);
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scheduled-runner-shadow-'));
+
+    try {
+      const gateCommand =
+        'printf "%s" "$SCHEDULED_TASK_TITLE|$SCHEDULED_TASK_PARAM_TITLE" > "$SCHEDULED_TASK_TMP_DIR/shadow.txt"; ' +
+        'printf \'{"skip":true,"reason":"gated"}\'';
+      const gated = await startTaskRun(
+        makeTask({ project_path: projectDir, params_json: shadowDefs, command: gateCommand })
+      ).done;
+      expect(gated.status).toBe('skipped');
+      expect(fs.readFileSync(path.join(taskTmpDir('t1'), 'shadow.txt'), 'utf8')).toBe(
+        'Nightly docs|shadow'
+      );
+
+      await startTaskRun(makeTask({ project_path: projectDir, params_json: shadowDefs })).done;
+      const [, options] = queryClaudeSDK.mock.calls[0];
+      expect(options.env.SCHEDULED_TASK_TITLE).toBe('Nightly docs');
+      expect(options.env.SCHEDULED_TASK_PARAM_TITLE).toBe('shadow');
+    } finally {
+      fs.rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a per-run override that targets a built-in', async () => {
+    queryClaudeSDK.mockResolvedValue(undefined);
+
+    const result = await startTaskRun(makeTask(), { params: { TITLE: 'hijack' } }).done;
+
+    expect(result.status).toBe('error');
+    expect(result.error).toBe('invalid_input');
+    expect(queryClaudeSDK).not.toHaveBeenCalled();
   });
 });
 

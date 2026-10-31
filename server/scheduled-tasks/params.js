@@ -2,8 +2,8 @@
  * Parametrized scheduled tasks — the pure parameter layer.
  *
  * Contract: docs/scheduled-tasks.md §12.1 (model), §12.2 (env contract),
- * §12.3 (resolution / precedence), §12.5 (module contracts) and §12.6
- * (agent-facing text).
+ * §12.3 (resolution / precedence), §12.5 (module contracts), §12.6
+ * (agent-facing text) and §13 (built-in parameters).
  *
  * This module is deliberately side-effect free: no I/O, no database, no process
  * state. Everything else (management, presets, the runner, the REST routes and
@@ -12,6 +12,12 @@
  *   normalizeParamDefs(input)      -> { ok: true, params } | { ok: false, code, message }
  *   resolveParams(params, overrides)-> { ok: true, values, json, env, params } | { ok: false, code, message }
  *   paramEnv(params, overrides)    -> Record<string, string> | null
+ *   builtinParamsEnv(task, { cwd })-> Record<string, string>   (§13: never null)
+ *   predefinedVarsPromptBlock()    -> string                   (§13: never null)
+ *
+ * PREDEFINED_TASK_VARS is the single source of truth for the §13 predefined
+ * variables: the prompt block (predefinedVarsPromptBlock) and the MCP tool
+ * descriptions (tools.js) both render from it, so they cannot drift.
  */
 
 /** §12.2: every parameter is exported as this prefix + the upper-cased name. */
@@ -37,10 +43,11 @@ export const PARAM_TYPES = ['string', 'number', 'boolean'];
 const DEFAULT_PARAM_TYPE = 'string';
 const PARAM_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
-/** Reserved variables the app itself sets for every run (§12.2/§10.4). */
+/** Reserved variables the app itself sets for every run (§12.2/§10.4/§13.1). */
 export const RESERVED_SCHEDULED_TASK_ENV = [
   'SCHEDULED_TASK_ID',
   'SCHEDULED_TASK_TITLE',
+  'SCHEDULED_TASK_CWD',
   'SCHEDULED_TASK_PROJECT',
   'SCHEDULED_TASK_DIR',
   'SCHEDULED_TASK_STATE_DIR',
@@ -49,6 +56,108 @@ export const RESERVED_SCHEDULED_TASK_ENV = [
   'SCHEDULED_TASK_RUN_DIR',
   PARAMS_ENV_NAME,
 ];
+
+/**
+ * §13.1: every predefined variable a run exports, with the one-line meaning used
+ * by the agent prompt block and by the MCP tool descriptions (single source of
+ * truth, so those texts cannot drift).
+ *
+ * group      'builtin'   the built-in parameters (task/run identity)
+ *            'workspace' the §10.4 workspace variables
+ * agentEnv   true  => the agent session also receives it as an environment variable
+ *            false => script-gate-only; the agent reads the same value as text in
+ *                     the Scheduled task workspace block
+ *
+ * The reserved SCHEDULED_TASK_* namespace is deliberately NOT the §12.2
+ * SCHEDULED_TASK_PARAM_* namespace, so a declared parameter can never replace a
+ * predefined variable (§13.2, §13.3).
+ */
+export const PREDEFINED_TASK_VARS = [
+  {
+    group: 'builtin',
+    name: 'TITLE',
+    envName: 'SCHEDULED_TASK_TITLE',
+    description: "the task's name",
+    agentEnv: true,
+  },
+  {
+    group: 'builtin',
+    name: 'CWD',
+    envName: 'SCHEDULED_TASK_CWD',
+    description: 'the working directory of this run',
+    agentEnv: true,
+  },
+  {
+    group: 'builtin',
+    name: 'PROJECT',
+    envName: 'SCHEDULED_TASK_PROJECT',
+    description: 'the absolute path of the project root that owns the task',
+    agentEnv: true,
+  },
+  {
+    group: 'workspace',
+    name: 'ID',
+    envName: 'SCHEDULED_TASK_ID',
+    description: 'the id of the scheduled-task row, stable across its runs — this is NOT a chat session id',
+    agentEnv: false,
+  },
+  {
+    group: 'workspace',
+    name: 'DIR',
+    envName: 'SCHEDULED_TASK_DIR',
+    description: 'the root of the workspace tree of this task',
+    agentEnv: false,
+  },
+  {
+    group: 'workspace',
+    name: 'STATE_DIR',
+    envName: 'SCHEDULED_TASK_STATE_DIR',
+    description: 'durable per-task state directory (survives across runs)',
+    agentEnv: false,
+  },
+  {
+    group: 'workspace',
+    name: 'TMP_DIR',
+    envName: 'SCHEDULED_TASK_TMP_DIR',
+    description: 'task scratch directory, wiped at the start of every run',
+    agentEnv: false,
+  },
+  {
+    group: 'workspace',
+    name: 'RUN_ID',
+    envName: 'SCHEDULED_TASK_RUN_ID',
+    description: 'the id of this run (not the task id)',
+    agentEnv: false,
+  },
+  {
+    group: 'workspace',
+    name: 'RUN_DIR',
+    envName: 'SCHEDULED_TASK_RUN_DIR',
+    description: 'this run directory (run.json, prompt.md, output.md, logs/)',
+    agentEnv: false,
+  },
+];
+
+/** §13.1: the built-in-parameter subset (the three parameters of every run). */
+export const BUILTIN_PARAMS = PREDEFINED_TASK_VARS.filter((entry) => entry.group === 'builtin');
+
+/** §13.1: every predefined env name (built-ins + workspace variables). */
+export const PREDEFINED_ENV_NAMES = PREDEFINED_TASK_VARS.map((entry) => entry.envName);
+
+/**
+ * §13.3: the exact built-in names server/claude-sdk.js may merge into the
+ * provider environment (the workspace variables stay script-gate-only; the agent
+ * reads them as text in the workspace block). Kept here so the runner, the docs
+ * and the allowlist cannot drift.
+ */
+export const BUILTIN_PARAM_ENV_NAMES = BUILTIN_PARAMS.map((entry) => entry.envName);
+
+/**
+ * §13.6: the one id that is NOT an environment variable, worded once so the agent
+ * prompt, the MCP descriptions and the docs stay identical.
+ */
+export const SESSION_ID_NOTE =
+  'The chat session id a run creates is NOT an environment variable and does not exist when the run starts: the provider creates it after the run begins, so it is null for a dry run or a failed start. It is recorded on the run instead — the run history in this app and runs/<runId>/run.json "sessionId" — not in the gate env.';
 
 function fail(message, code = 'invalid_input') {
   return { ok: false, code, message };
@@ -326,10 +435,77 @@ export function paramEnvFromValues(params, values) {
 }
 
 /**
+ * §13.1/§13.3: the built-in variables for one run. Values
+ * come from the task and the run, never from a caller, so neither a declared
+ * parameter nor a per-run override can change them.
+ * @param {{title?: string, project_path?: string, projectPath?: string}} task
+ * @param {{cwd?: string}} [options] the directory this run executes in
+ * @returns {Record<string, string>} always the three §13.1 variables
+ */
+export function builtinParamsEnv(task, { cwd } = {}) {
+  const source = isPlainObject(task) ? task : {};
+  const title = typeof source.title === 'string' ? source.title : '';
+  const projectPath =
+    typeof source.project_path === 'string'
+      ? source.project_path
+      : typeof source.projectPath === 'string'
+        ? source.projectPath
+        : '';
+  const runCwd = typeof cwd === 'string' && cwd ? cwd : projectPath;
+  return {
+    SCHEDULED_TASK_TITLE: title,
+    SCHEDULED_TASK_CWD: runCwd,
+    SCHEDULED_TASK_PROJECT: projectPath,
+  };
+}
+
+/**
+ * §13.5: the always-on predefined-variables block of the agent prompt. Static —
+ * it names every variable, says where the agent can read it and why, so the same
+ * text describes every run and the agent reads the actual values from the
+ * environment (built-ins, parameters) or from the workspace block above
+ * (workspace variables).
+ * @returns {string} never null (unlike the §12.6 Parameters block)
+ */
+export function predefinedVarsPromptBlock() {
+  const lines = [
+    '## Predefined scheduled-task variables',
+    '',
+    'The app injects these variables into the script gate of every run. Read them from the environment or from this block; never hardcode the task name, the project path or any workspace directory, so the task keeps working from any directory.',
+    '',
+    'Built-in parameters (script gate env + this session env):',
+  ];
+  for (const entry of PREDEFINED_TASK_VARS) {
+    if (entry.group !== 'builtin') continue;
+    lines.push('- ' + entry.name + ' ($' + entry.envName + ') — ' + entry.description + '.');
+  }
+  lines.push('');
+  lines.push(
+    'Workspace variables (script gate env; the same values are spelled out in the Scheduled task workspace block above):'
+  );
+  for (const entry of PREDEFINED_TASK_VARS) {
+    if (entry.group !== 'workspace') continue;
+    lines.push('- ' + entry.name + ' ($' + entry.envName + ') — ' + entry.description + '.');
+  }
+  lines.push('');
+  lines.push(
+    'User-declared parameters are exported as $' +
+      PARAM_ENV_PREFIX +
+      '<NAME> plus the compact JSON $' +
+      PARAMS_ENV_NAME +
+      ' to the script gate and to this session (§12.2). They can never replace a predefined variable above.'
+  );
+  lines.push('');
+  lines.push(SESSION_ID_NOTE);
+  return lines.join('\n');
+}
+
+/**
  * §12.5: Record<string,string> of the §12.2 variables, or null when the task
- * declares no parameters (the pre-§12 environment stays byte-identical).
- * Resolution failures also yield null; callers that need the reason use
- * resolveParams() first.
+ * declares no parameters. Resolution failures also yield null; callers that need
+ * the reason use resolveParams() first. The §13.1 predefined variables are a
+ * separate namespace (builtinParamsEnv / predefinedVarsPromptBlock) and are
+ * therefore not part of this null contract.
  */
 export function paramEnv(params, overrides) {
   const resolved = resolveParams(params, overrides);
@@ -378,7 +554,8 @@ function displayValue(value) {
 
 /**
  * §12.6: the Parameters block appended to the workspace block. Returns null when
- * the task declares no parameters (the prompt stays byte-identical to pre-§12).
+ * the task declares no parameters; the §13.5 predefined-variables block is always
+ * present, so a zero-parameter prompt is no longer byte-identical to pre-§12.
  * @returns {string|null}
  */
 export function paramsPromptBlock(params, values) {

@@ -764,7 +764,10 @@ For a task with parameters `{region: 'eu', threshold: 3, dryRun: false}`:
   parameters can never collide because names are unique case-insensitively.
 * Booleans are `'true'`/`'false'`; numbers use `String(value)`; strings pass through verbatim.
 * With no parameters declared **no** `SCHEDULED_TASK_PARAM_*` variable is exported and
-  `SCHEDULED_TASK_PARAMS` is not set at all — byte-for-byte the pre-§12 environment.
+  `SCHEDULED_TASK_PARAMS` is not set at all — the §12 parameter namespace is byte-for-byte the
+  pre-§12 environment. The §13 built-in parameters live in the **reserved** `SCHEDULED_TASK_*`
+  namespace, are always exported (also for zero-parameter tasks) and can never be shadowed by a
+  declared parameter.
 * `SCHEDULED_TASK_PARAMS` is the framework-neutral escape hatch: a consumer can parse one JSON
   variable instead of knowing each name. Nothing in this section may reference a vendor-specific
   directory, tool or API.
@@ -801,8 +804,8 @@ Migration uses `addColumnIfMissing` only — no data rewrite. Unreadable/legacy 
 * `runner.execute()`:
   1. resolve params **before** the script gate; on failure `finishOnce(..., 'error', { error })`;
   2. merge `paramEnv` into the script-gate env (after `workspaceEnv`);
-  3. pass `env: paramEnv` in the agent options — `server/claude-sdk.js` merges `options.env` into
-     `sdkOptions.env` so the spawned provider CLI inherits them;
+  3. pass `env: { ...builtins, ...paramEnv }` in the agent options (§13.3) — `server/claude-sdk.js`
+     merges `options.env` into `sdkOptions.env` so the spawned provider CLI inherits them;
   4. prefix the agent prompt with the §12.6 parameters block;
   5. `createRun` stores `params_json` = resolved values.
 * REST: `POST /:id/run` accepts `{ params?: Record<string, unknown> }`;
@@ -817,7 +820,7 @@ A **Parameters** block is appended to the workspace block. It lists each paramet
 variable, value and description, and states: read them from the environment
 (`$SCHEDULED_TASK_PARAM_<NAME>`, or parse `$SCHEDULED_TASK_PARAMS`); the values are fixed for this run;
 never hardcode them. It also names the reserved variables. `runs/<runId>/run.json` records `params`.
-Tasks without parameters get no block (prompt byte-identical to pre-§12).
+Tasks without parameters get no block of their own; the prompt is no longer byte-identical to pre-§12, because the always-on §13.5 predefined-variables block is present.
 
 ### 12.7 Frontend
 
@@ -849,4 +852,134 @@ without parameters exports no `SCHEDULED_TASK_PARAM_*`; and reinstalling a prese
 parameter contract. Plus the full `npx vitest run`, `tsc --noEmit` for both configs and
 `eslint src/ server/`.
 
+
+## 13. Predefined task variables（第十一轮，issue #14 comment 976）
+
+Every run injects a fixed set of **predefined variables**. They are the contract a task should use instead
+of hardcoding paths, so the same task works from any directory. Two details are stated identically in three
+places — the agent prompt block, the MCP tool descriptions and this section:
+
+1. **Where each variable is readable.** All nine `SCHEDULED_TASK_*` predefined variables are injected into the
+   **script gate** environment. The **agent** environment (§13.3) additionally carries `TITLE`, `CWD`,
+   `PROJECT` and the declared parameters; the workspace paths and ids reach the agent as text in the
+   *Scheduled task workspace* prompt block (§10.4), not as environment variables.
+2. **The three ids are different.** `SCHEDULED_TASK_ID` is the scheduled-task row id (stable across the runs
+   of that task); `SCHEDULED_TASK_RUN_ID` is this run id; the **chat session id** is created by the provider
+   after the run starts, so it is not an environment variable at all — it is `null` for a dry run or a failed
+   start and is recorded on the run (run history / `runs/<runId>/run.json` `sessionId`).
+
+### 13.1 The variables
+
+| Group | Name | Variable | Meaning | Script gate env | Agent env |
+|---|---|---|---|---|---|
+| builtin | `TITLE` | `SCHEDULED_TASK_TITLE` | name of the task | yes | yes |
+| builtin | `CWD` | `SCHEDULED_TASK_CWD` | working directory of this run | yes | yes |
+| builtin | `PROJECT` | `SCHEDULED_TASK_PROJECT` | absolute path of the project root that owns the task | yes | yes |
+| workspace | `ID` | `SCHEDULED_TASK_ID` | scheduled-task row id, stable across its runs — **not** a chat session id | yes | workspace block text |
+| workspace | `DIR` | `SCHEDULED_TASK_DIR` | root of the workspace tree of this task | yes | workspace block text |
+| workspace | `STATE_DIR` | `SCHEDULED_TASK_STATE_DIR` | durable per-task state (survives across runs) | yes | workspace block text |
+| workspace | `TMP_DIR` | `SCHEDULED_TASK_TMP_DIR` | task scratch, wiped at the start of every run | yes | workspace block text |
+| workspace | `RUN_ID` | `SCHEDULED_TASK_RUN_ID` | id of this run (not the task id) | yes | workspace block text |
+| workspace | `RUN_DIR` | `SCHEDULED_TASK_RUN_DIR` | this run directory (run.json, prompt.md, output.md, logs/) | yes | workspace block text |
+
+Plus the **declared parameters**, exported to both environments as `SCHEDULED_TASK_PARAM_<NAME>` and the
+compact JSON `SCHEDULED_TASK_PARAMS` (§12.2).
+
+`PREDEFINED_TASK_VARS` in `server/scheduled-tasks/params.js` is the single source of truth (`group`,
+`envName`, `description`, `agentEnv`): the agent prompt block (`predefinedVarsPromptBlock()`) and the MCP
+tool descriptions (`tools.js`) are both rendered from it, so they cannot drift. `builtinParamsEnv(task, { cwd })`
+produces the three built-in values; `workspaceEnv(task, { runId })` produces the workspace ones (`null` when
+`SCHEDULED_TASKS_WORKSPACE=0`).
+
+When a task has no project path (legacy rows), `SCHEDULED_TASK_CWD` falls back to the cwd of the server
+process — the same value the script gate is spawned in.
+
+### 13.2 Namespace and collision rules
+
+* Predefined variables live in the **reserved** `SCHEDULED_TASK_*` namespace and are never re-exported as
+  `SCHEDULED_TASK_PARAM_*`.
+* A declared parameter is always `SCHEDULED_TASK_PARAM_` + `name.toUpperCase()`. The `_PARAM_` infix makes
+  the reserved namespace syntactically unreachable, whatever a task declares, so a parameter named `TITLE`,
+  `CWD` or `PROJECT` is exported as `SCHEDULED_TASK_PARAM_TITLE` / `..._CWD` / `..._PROJECT` *alongside* —
+  never instead of — the predefined variable.
+* A per-run override is matched against **declared** names only (§12.3), so `{ "CWD": "/tmp" }` on a task
+  that does not declare `cwd` is `invalid_input`; on a task that does declare it, it moves
+  `SCHEDULED_TASK_PARAM_CWD` only. Predefined variables cannot be overridden.
+* Merge order inside one environment is: `SCHEDULED_TASK_ID`, then the built-in parameters, then
+  `workspaceEnv` (§10.4), then the §12 parameters. Those groups write disjoint key sets.
+
+### 13.3 Both execution paths
+
+* **Script gate** (`runner.js: runScriptGate`): the spawned `sh -c` environment is `process.env` +
+  `SCHEDULED_TASK_ID` + the built-in parameters + `workspaceEnv` + the parameter variables — all nine
+  predefined names plus the parameters.
+* **Agent** (`runner.js: execute` -> `options.env`): the built-in parameters (`TITLE`, `CWD`, `PROJECT`) plus
+  the parameter variables. `server/claude-sdk.js` merges `options.env` into `sdkOptions.env` but only accepts
+  `SCHEDULED_TASK_PARAM_*`, `SCHEDULED_TASK_PARAMS` and the exact `BUILTIN_PARAM_ENV_NAMES` (the three
+  built-ins). Everything else in `options.env` is dropped, because that option is reachable from client
+  input (the §12.5 security note).
+* **Agent, as prompt text**: the *Scheduled task workspace* block spells out the task id, run id, project
+  directory, task root, state dir, tmp dir and run dir of this run (§10.4) — that is where the agent reads
+  the workspace group.
+
+### 13.4 Relation to the §12.2 zero-parameter contract
+
+§12.2 promised that a task without parameters exports no `SCHEDULED_TASK_PARAM_*`, no `SCHEDULED_TASK_PARAMS`,
+and that its environment is byte-for-byte the pre-§12 one. **The first half still holds; the second is
+superseded here**: the *parameter namespace* is still untouched for zero-parameter tasks, but every run now
+also exports the predefined variables (the gate already had `SCHEDULED_TASK_ID` / `TITLE` / `PROJECT` and the
+five workspace variables; `SCHEDULED_TASK_CWD` is new, and the agent-side `options.env` gained `TITLE` /
+`CWD` / `PROJECT` where it previously had nothing). The change is additive — no existing variable changes
+name or value and no run loses a variable, so a task that ignores the new names is unaffected. The prompt also
+gains the always-on block of §13.5, so the prompt of a zero-parameter task is no longer byte-identical to
+pre-§12 either; `promptUsed` stays the raw effective prompt.
+
+### 13.5 Agent prompt
+
+`params.js: predefinedVarsPromptBlock()` returns a static block — identical text for every run — headed
+`## Predefined scheduled-task variables`. It lists the built-in parameters (script gate env + this session
+env) and the workspace variables (script gate env; the same values are spelled out in the workspace block
+above), then the user-declared parameters, then the three-id note of §13 (including that the chat session id
+is not an environment variable). The runner always prepends it after the §10.4 workspace block and before the
+§12.6 Parameters block, and `runs/<runId>/prompt.md` records it. Because the block is static, the actual
+values are never copied into prompt text.
+
+### 13.6 MCP tool descriptions
+
+Every `schedule_*` tool description ends with the shared `PREDEFINED_VARS_NOTE` (rendered from
+`PREDEFINED_TASK_VARS` and `SESSION_ID_NOTE`): all nine predefined variables with a one-line meaning, the
+user-declared `SCHEDULED_TASK_PARAM_<NAME>` / `SCHEDULED_TASK_PARAMS`, which of them the agent also gets as
+environment variables versus as workspace-block text, the instruction to read them instead of hardcoding
+paths, and the sentence that `SCHEDULED_TASK_ID` is the scheduled-task row id (not the chat session id) while
+the session id is recorded on the run.
+
+### 13.7 Frontend
+
+* The Parameters section of the task editor shows a *Built-in parameters (always available)* list with the
+  three built-in variables and their meaning, plus the no-hardcode hint.
+* Run history shows a one-line reminder of the built-in variables.
+* i18n keys `editor.params.builtins.*` and `runs.builtinsHint` in `en` and `zh-CN`.
+* `src/components/scheduled-tasks/utils/params.ts` exports `BUILTIN_PARAMS` to the UI.
+
+### 13.8 Write scopes（第十一轮）
+
+| Owner | Files |
+|---|---|
+| backend-builtins | `server/scheduled-tasks/**`, `server/claude-sdk.js` |
+| frontend-builtins | `src/components/scheduled-tasks/**`, `src/i18n/locales/{en,zh-CN}/scheduledTasks.json` |
+| verify | `scripts/verify-scheduled-task-params.mjs` |
+| lead | `docs/scheduled-tasks.md` |
+
+### 13.9 Acceptance
+
+`node scripts/verify-scheduled-task-params.mjs` additionally asserts **C1–C5**: the script gate of a
+zero-parameter task sees all nine predefined variables; a declared parameter named like a predefined one
+cannot shadow it and an override targeting a predefined name is rejected; the agent prompt lists every
+predefined variable and the session-id note and forbids hardcoding; prompt order is workspace block <
+predefined block < §12.6 parameters; and the agent environment carries exactly the three built-in parameters
+plus the parameters (never the workspace group). Unit tests: `server/scheduled-tasks/params.test.js`
+(metadata + prompt block), `runner.test.js` (both env surfaces), `tools.test.js` (all twelve descriptions
+carry every predefined name, the no-hardcode wording and the id clarification), `server/claude-sdk.test.js`
+(allowlist) and the frontend tests. Plus the full `npx vitest run`, `tsc --noEmit` for both configs and
+`eslint src/ server/`.
 

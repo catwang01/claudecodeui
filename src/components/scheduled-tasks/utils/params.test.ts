@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ParamDef } from '../types';
 import {
+  BUILTIN_PARAMS,
   MAX_PARAMS,
   coerceParamValue,
   createParamDraft,
@@ -316,5 +317,25 @@ describe('__proto__-named parameters (review N2)', () => {
     expect(readRunInput({}, '__proto__')).toBe('');
     const own = Object.fromEntries([['__proto__', 'x']]) as Record<string, string>;
     expect(readRunInput(own, '__proto__')).toBe('x');
+  });
+});
+
+describe('built-in params (section 13.1)', () => {
+  it('lists TITLE, CWD and PROJECT in the reserved namespace', () => {
+    expect(BUILTIN_PARAMS.map((param) => param.envName)).toEqual([
+      'SCHEDULED_TASK_TITLE',
+      'SCHEDULED_TASK_CWD',
+      'SCHEDULED_TASK_PROJECT',
+    ]);
+  });
+
+  it('keeps the declared-parameter namespace disjoint from every built-in (13.2)', () => {
+    for (const param of BUILTIN_PARAMS) {
+      expect(paramEnvName(param.name)).toBe('SCHEDULED_TASK_PARAM_' + param.name);
+      expect(paramEnvName(param.name)).not.toBe(param.envName);
+      expect(param.envName).not.toContain('SCHEDULED_TASK_PARAM_');
+    }
+    expect(paramEnvName('title')).toBe('SCHEDULED_TASK_PARAM_TITLE');
+    expect(BUILTIN_PARAMS.map((param) => param.envName)).not.toContain(paramEnvName('title'));
   });
 });

@@ -228,6 +228,13 @@
       "descriptionPlaceholder": "What this value controls",
       "required": "Required",
       "requiredNoDefault": "Required parameters must be supplied at run time.",
+      "builtins": {
+        "title": "Built-in parameters (always available)",
+        "hint": "Every run exports these variables too, so never hardcode paths in the prompt or in the script gate — read them from the environment instead.",
+        "TITLE": "Task name",
+        "CWD": "Working directory of this run",
+        "PROJECT": "Project root that owns the task"
+      },
       "errors": {
         "nameRequired": "Every parameter needs a name.",
         "nameInvalid": "Names must start with a letter or underscore and contain only letters, digits and underscores (max 64).",
@@ -320,7 +327,8 @@
     "effectivePrompt": "Effective prompt",
     "scriptOutput": "Script output",
     "exitCode": "Exit code",
-    "params": "Parameters"
+    "params": "Parameters",
+    "builtinsHint": "Every run also exports SCHEDULED_TASK_TITLE, SCHEDULED_TASK_CWD and SCHEDULED_TASK_PROJECT; read them instead of hardcoding paths."
   },
   "time": {
     "unknown": "Unknown"
