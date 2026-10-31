@@ -6,33 +6,33 @@
     {
       "chunk_bytes": 1024,
       "naive_prefix_bytes": 65536,
-      "naive_ms_extrapolated": 11505.9,
-      "incr_ms": 752.35,
-      "incr_ms_per_mb": 2089.77
+      "naive_ms_extrapolated": 2488.6,
+      "incr_ms": 296.12,
+      "incr_ms_per_mb": 822.51
     },
     {
       "chunk_bytes": 4096,
       "naive_prefix_bytes": 262144,
-      "naive_ms_extrapolated": 6342.9,
-      "incr_ms": 218.39,
-      "incr_ms_per_mb": 606.6
+      "naive_ms_extrapolated": 2812.3,
+      "incr_ms": 118.05,
+      "incr_ms_per_mb": 327.9
     },
     {
       "chunk_bytes": 16384,
       "naive_prefix_bytes": 377506,
-      "naive_ms_extrapolated": 1610.5,
-      "incr_ms": 98.47,
-      "incr_ms_per_mb": 273.52
+      "naive_ms_extrapolated": 1144.2,
+      "incr_ms": 80.14,
+      "incr_ms_per_mb": 222.6
     }
   ],
   "sse": [
     {
       "chunk_bytes": 4096,
       "payload_bytes": 283044,
-      "total_ms": 27.94,
-      "mb_per_s": 9.7,
-      "chunk_ms_p50": 0.439,
-      "chunk_ms_p95": 1.229
+      "total_ms": 15.73,
+      "mb_per_s": 17.2,
+      "chunk_ms_p50": 0.256,
+      "chunk_ms_p95": 0.278
     }
   ],
   "split_fuzz": {

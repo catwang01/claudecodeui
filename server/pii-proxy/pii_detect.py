@@ -25,7 +25,12 @@ from typing import Iterable
 
 MAX_PATTERN_LEN = 256
 MAX_PATTERNS = 100
-MAX_PATTERN_SPAN = 512
+# Upper bound for the incremental scan-overlap window. Long-form patterns (PEM
+# keys, JWTs) legitimately need a big bound; the streaming hold-back is bounded
+# by alias length instead (pii_proxy.RESTORE_MAX_LEN), so this only costs scan
+# time, and only when such a pattern's anchor is actually present.
+MAX_PATTERN_SPAN = 8192
+MAX_DEFAULT_SPAN = 512
 
 
 @dataclass(frozen=True)
@@ -40,7 +45,7 @@ class Match:
 class PatternSpec:
     kind: str
     regex: str
-    max_len: int = 256
+    max_len: int = MAX_DEFAULT_SPAN
     case_sensitive: bool = True
 
 
@@ -75,7 +80,7 @@ class DetectorConfig:
             patterns.append(PatternSpec(
                 kind=str(item.get("kind") or "PATTERN"),
                 regex=str(item["regex"]),
-                max_len=int(item.get("max_len") or MAX_PATTERN_SPAN),
+                max_len=int(item.get("max_len") or MAX_DEFAULT_SPAN),
                 case_sensitive=bool(item.get("case_sensitive", True)),
             ))
         return DetectorConfig(
@@ -124,8 +129,19 @@ def _lint_pattern(spec: PatternSpec) -> list[str]:
 
 
 def _literal_run(regex: str) -> str | None:
-    """Longest literal run in a regex, used as a cheap anchor prefilter."""
-    runs = re.findall(r"[A-Za-z0-9_]{3,}", regex)
+    """Longest required literal in a regex, used as a cheap anchor prefilter.
+
+    Deliberately conservative. A wrong anchor silently skips a pattern, i.e.
+    leaks the data we are protecting, so character classes and escapes are
+    removed before the runs are taken, and any pattern containing an
+    alternation gets no anchor at all (its "literal" may be optional).
+    """
+    if "|" in regex:
+        return None
+    stripped = re.sub(r"\\.", " ", regex)
+    stripped = re.sub(r"\[[^\]]*\]", " ", stripped)
+    stripped = re.sub(r"\{\d+,?\d*\}", " ", stripped)
+    runs = re.findall(r"[A-Za-z0-9_]{3,}", stripped)
     runs = [r for r in runs if r.upper() not in {"BEGIN", "END"}]
     if not runs:
         return None
@@ -164,6 +180,10 @@ class Detector:
         return list(self._issues)
 
     @property
+    def _literal_max(self) -> int:
+        return max((len(v) for _, v in self._literals), default=1)
+
+    @property
     def max_len(self) -> int:
         longest = max((len(v) for _, v in self._literals), default=0)
         spans = [spec.max_len for spec, _, _ in self._patterns]
@@ -195,11 +215,24 @@ class Detector:
                     found.append(Match(offset + m.start(), offset + m.end(), spec.kind, value))
         return _dedupe(found)
 
+    def _overlap(self, buf: str) -> int:
+        """Overlap needed so a match straddling the previous cut is still seen.
+
+        Long-form patterns only matter when their anchor is present, so the
+        window stays small in the common case; otherwise one 4 KB pattern would
+        make every 1 KB chunk rescan 4 KB.
+        """
+        overlap = self._literal_max
+        for spec, _rx, anchor in self._patterns:
+            if anchor is None or anchor in buf:
+                overlap = max(overlap, spec.max_len)
+        return max(1, overlap)
+
     def scan_window(self, buf: str, consumed: int) -> tuple[list[Match], int]:
         """Incremental scan: only the new region plus a bounded overlap window."""
         if consumed > len(buf):
             consumed = 0
-        start = max(0, consumed - (self.max_len - 1))
+        start = max(0, consumed - (self._overlap(buf) - 1))
         matches = self.scan(buf[start:], offset=start)
         fresh = [m for m in matches if m.end > consumed]
         return fresh, len(buf)

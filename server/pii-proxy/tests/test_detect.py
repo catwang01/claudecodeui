@@ -139,3 +139,52 @@ def test_config_load_roundtrip(tmp_path):
 def test_config_load_missing_file_is_empty():
     cfg = DetectorConfig.load("/nonexistent/pii-secrets.json")
     assert cfg.literals == [] and cfg.patterns == []
+
+# --------------------------------------------------------------------------- #
+# Regressions found while reviewing the first merge of issue #24: the built-in
+# rules must actually load, and anchors must never suppress a real match.
+# --------------------------------------------------------------------------- #
+
+def test_builtin_patterns_all_load_without_lint_issues():
+    import pii_proxy
+
+    det = Detector(DetectorConfig(patterns=list(pii_proxy.BUILTIN_PATTERNS)))
+    health = det.health()
+    assert health["issues"] == []
+    assert health["patterns"] == len(pii_proxy.BUILTIN_PATTERNS)
+
+
+def test_builtin_patterns_match_representative_samples():
+    import pii_proxy
+
+    det = Detector(DetectorConfig(patterns=list(pii_proxy.BUILTIN_PATTERNS)))
+    samples = {
+        "EMAIL_ADDRESS": "contact a.b+tag@example.co.uk now",
+        "AWS_KEY": "key AKIAIOSFODNN7EXAMPLE here",
+        "JWT_TOKEN": "token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+        "PRIVATE_KEY": "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n-----END RSA PRIVATE KEY-----",
+        "IPV4": "host 10.1.2.3 up",
+        "CN_MOBILE": "call 13812345678",
+        "CN_ID": "id 11010519491231002X end",
+        "SECRET_KEYWORD": "password=hunter2XYZ",
+        "GITHUB_TOKEN": "ghp_" + "a" * 20,
+        "BASIC_AUTH_URL": "postgres://user:pass1234@db.internal:5432/app",
+    }
+    for kind, sample in samples.items():
+        kinds = {m.kind for m in det.scan(sample)}
+        assert kind in kinds, "pattern %s did not match its own sample: %r" % (kind, sample)
+
+
+def test_anchors_are_conservative():
+    from pii_detect import _literal_run
+
+    assert _literal_run(r"[A-Za-z0-9._%+\-]+@x") is None      # runs inside a class are not literals
+    assert _literal_run(r"\beyJ[A-Za-z0-9_\-]{8,}") == "eyJ"
+    assert _literal_run(r"(?:AKIA|ASIA)[0-9A-Z]{16}") is None   # alternation: literal may be optional
+    assert _literal_run(r"-----BEGIN [A-Z ]{0,40}PRIVATE KEY-----") == "PRIVATE"
+
+
+def test_overlap_stays_small_when_long_pattern_anchor_is_absent():
+    det = Detector(DetectorConfig(patterns=[PatternSpec("JWT", r"\beyJ[A-Za-z0-9_]{8,}", 4096)]))
+    assert det._overlap("nothing interesting in this sentence") < 64
+    assert det._overlap("eyJhbGciOiJIUzI1NiJ9") == 4096
