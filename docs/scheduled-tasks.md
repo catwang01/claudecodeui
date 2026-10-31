@@ -260,3 +260,26 @@ Two mechanisms, both required:
    - `SCHEDULED_TASKS_KEEP_BUILTIN_CRON=1` restores the built-in tools (escape hatch);
    - when `SCHEDULED_TASKS_TOOLS=0` (our tools are absent) the built-ins are left alone, so
      the agent is never left without any scheduler.
+
+### §6.2 Precedence wording against every runtime, and the storage map (fifth iteration)
+
+The precedence rule now names **every** scheduler built into the agent runtime, not just Claude
+Code's, carries the user's exception, and the descriptions also state where the data lives so the
+model never has to guess (or invent) a store.
+
+- **First sentence of all eight descriptions**: these tools are the preferred scheduler for this
+  app and outrank any scheduler built into the agent runtime (Claude Code's `CronCreate`,
+  `CronList`, `CronDelete`, Codex, Cursor, Gemini or any similar built-in); a built-in scheduler
+  is used **only when the user explicitly asks for that specific built-in one**.
+- **Storage note, appended to `schedule_create` and `schedule_list`**: task definitions and run
+  history live in this app's SQLite database — `scheduled_tasks` and `scheduled_task_runs` in the
+  `DATABASE_PATH` database (default `~/.cloudcli/auth.db`); each run stores the agent session it
+  started, whose transcript is the project's normal session log
+  `~/.claude/projects/<project>/<sessionId>.jsonl`. A built-in scheduler keeps its jobs in a
+  separate store (Claude Code: `<project>/.claude/scheduled_tasks.json`), which is why they never
+  appear in `schedule_list` or in the app's panel, and why they expire after 7 days.
+- **Enforcement vs. the exception.** `disallowedTools` removes the Claude Code Cron tools from the
+  model's context by default, so an in-conversation request for them cannot be honoured while that
+  default stands; the documented escape hatch (`SCHEDULED_TASKS_KEEP_BUILTIN_CRON=1`) restores
+  them. Codex, Cursor, Gemini and Copilot are separate CLIs with no equivalent deny hook in this
+  app, so for those providers the description is guidance only.

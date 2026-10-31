@@ -32,11 +32,25 @@ export const SCHEDULE_TOOL_NAMES = [
 const DISABLED_VALUES = new Set(['0', 'false', 'off', 'no']);
 
 /**
- * §6.1: every schedule_* description leads with this sentence so the model prefers
- * the app's scheduler over Claude Code's built-in Cron tools.
+ * §6.2: every schedule_* description leads with this sentence. The app's scheduler
+ * outranks the schedulers built into the agent runtime, except when the user
+ * explicitly asks for a specific built-in one.
  */
 const SCHEDULER_PRECEDENCE_NOTE =
-  "These schedule_* tools are the preferred scheduler for this app: use them, and do NOT use Claude Code's built-in CronCreate, CronList or CronDelete.";
+  "These schedule_* tools are the preferred scheduler for this app and outrank any scheduler built into the agent runtime (Claude Code's CronCreate, CronList and CronDelete, Codex, Cursor, Gemini or any similar built-in): use them, and do NOT use a built-in scheduler unless the user explicitly asks for that specific built-in one.";
+
+/**
+ * §6.2: appended to schedule_create / schedule_list so the model knows where the data
+ * actually lives and does not look for, or invent, another store.
+ */
+const SCHEDULER_STORAGE_NOTE =
+  ' Storage (do not look for or create another store): task definitions and run history live in ' +
+  "this app's SQLite database — tables scheduled_tasks and scheduled_task_runs in the app's " +
+  'DATABASE_PATH database (default ~/.cloudcli/auth.db); each run stores the agent session it ' +
+  "started, whose transcript is the project's normal session log at " +
+  '~/.claude/projects/<project>/<sessionId>.jsonl. A built-in scheduler keeps its jobs in its own ' +
+  'separate store (Claude Code: <project>/.claude/scheduled_tasks.json), so those jobs are not ' +
+  "visible in schedule_list or in this app's Scheduled tasks panel, and they auto-expire after 7 days.";
 
 /** SCHEDULED_TASKS_TOOLS=0 (default on) removes the tools entirely. */
 export function isScheduleToolsEnabled() {
@@ -227,7 +241,7 @@ export function createScheduleTools(options = {}) {
     tool(
       'schedule_create',
       SCHEDULER_PRECEDENCE_NOTE +
-        ' The built-ins write to a separate store outside this app, are not visible in the Scheduled tasks panel, and auto-expire after 7 days.' +
+        SCHEDULER_STORAGE_NOTE +
         ' Create a scheduled task that starts a new agent run in this project. Provide exactly one schedule selector (after_seconds, at, every_seconds, daily, weekly or cron).' +
         ' Optionally add a script gate via command/command_timeout_seconds: the command runs first and its stdout JSON envelope ({"skip":true,"reason":"..."} | {"prompt":"..."} | {"skip":false}) decides whether the agent runs and with which prompt.',
       {
@@ -246,7 +260,8 @@ export function createScheduleTools(options = {}) {
     tool(
       'schedule_list',
       SCHEDULER_PRECEDENCE_NOTE +
-        ' List scheduled tasks for this project (active only unless include_paused is true).',
+        ' List scheduled tasks for this project (active only unless include_paused is true).' +
+        SCHEDULER_STORAGE_NOTE,
       { include_paused: z.boolean().describe('Include paused tasks. Defaults to false.').optional() },
       list,
       { annotations: { readOnlyHint: true } }

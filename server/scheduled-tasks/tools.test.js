@@ -590,6 +590,20 @@ describe('§6.1 built-in Cron precedence', () => {
       expect(sentence, definition.name).toContain('CronList');
       expect(sentence, definition.name).toContain('CronDelete');
       expect(sentence, definition.name).toMatch(/do NOT use/);
+      expect(sentence, definition.name).toContain('Codex');
+      expect(sentence, definition.name).toMatch(/unless the user explicitly asks/i);
+    }
+  });
+
+  it('documents where the data lives on schedule_create and schedule_list', () => {
+    const { byName } = setup();
+
+    for (const name of ['schedule_create', 'schedule_list']) {
+      const description = byName[name].description;
+      expect(description, name).toContain('scheduled_tasks');
+      expect(description, name).toContain('scheduled_task_runs');
+      expect(description, name).toMatch(/DATABASE_PATH|\.cloudcli\/auth\.db/);
+      expect(description, name).toContain('.claude/scheduled_tasks.json');
     }
   });
 
