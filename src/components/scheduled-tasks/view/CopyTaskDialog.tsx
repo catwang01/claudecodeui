@@ -11,6 +11,8 @@ import { FormField, controlClassName } from './FormControls';
 export type CopyTaskValues = {
   title: string;
   projectPath: string;
+  /** docs §22: set when the copy should keep the source's whole binding. */
+  projectPaths?: string[];
   enabled: boolean;
 };
 
@@ -45,6 +47,10 @@ export default function CopyTaskDialog({ task, isBusy, error, onClose, onConfirm
   const { t } = useTranslation('scheduledTasks');
   const [title, setTitle] = useState(t('copyDialog.defaultTitle', { title: task.title }));
   const [projectPath, setProjectPath] = useState(task.projectPath || '');
+  // §22: a multi-project task is copied with its whole binding unless the user
+  // unchecks this and picks the one target project the copy should live in.
+  const hasMultipleProjects = Boolean(task.projectPaths && task.projectPaths.length > 1);
+  const [keepAllProjects, setKeepAllProjects] = useState(hasMultipleProjects);
   const [enabled, setEnabled] = useState(false);
   const [projectOptions, setProjectOptions] = useState<ProjectOption[]>([]);
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -70,12 +76,17 @@ export default function CopyTaskDialog({ task, isBusy, error, onClose, onConfirm
       setValidationError(t('copyDialog.errors.title'));
       return;
     }
-    if (!projectPath.trim()) {
+    if (!keepAllProjects && !projectPath.trim()) {
       setValidationError(t('copyDialog.errors.project'));
       return;
     }
     setValidationError(null);
-    onConfirm({ title: title.trim(), projectPath: projectPath.trim(), enabled });
+    onConfirm({
+      title: title.trim(),
+      projectPath: projectPath.trim(),
+      projectPaths: keepAllProjects ? task.projectPaths : undefined,
+      enabled,
+    });
   };
 
   const options = dedupeOptions(projectOptions, task.projectPath);
@@ -127,7 +138,7 @@ export default function CopyTaskDialog({ task, isBusy, error, onClose, onConfirm
               className={controlClassName}
               value={projectPath}
               onChange={(event) => setProjectPath(event.target.value)}
-              disabled={isBusy}
+              disabled={isBusy || keepAllProjects}
             >
               {options.map((option) => (
                 <option key={option.value} value={option.value}>
@@ -136,6 +147,26 @@ export default function CopyTaskDialog({ task, isBusy, error, onClose, onConfirm
               ))}
             </select>
           </FormField>
+
+          {hasMultipleProjects && (
+            <label className="flex cursor-pointer items-start gap-2 rounded px-1 py-1 transition-colors hover:bg-accent/40">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 accent-primary"
+                checked={keepAllProjects}
+                onChange={() => setKeepAllProjects((current) => !current)}
+                disabled={isBusy}
+              />
+              <span className="min-w-0">
+                <span className="block text-sm text-foreground">
+                  {t('copyDialog.keepProjects', { count: task.projectPaths?.length ?? 0 })}
+                </span>
+                <span className="block text-xs text-muted-foreground">
+                  {t('copyDialog.keepProjectsHint')}
+                </span>
+              </span>
+            </label>
+          )}
 
           <div className="flex items-center justify-between gap-4">
             <div className="min-w-0">

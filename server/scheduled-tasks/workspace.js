@@ -128,6 +128,29 @@ function projectPathOf(task) {
   return task.project_path ?? task.projectPath ?? null;
 }
 
+/** §22: every project a task is bound to; a legacy single-project row reads as [projectPath]. */
+function projectPathsOf(task) {
+  if (!task || typeof task !== 'object') return [];
+  const raw = task.project_paths_json ?? task.projectPaths;
+  let list = null;
+  if (Array.isArray(raw)) list = raw;
+  else if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) list = parsed;
+    } catch {
+      // unreadable JSON reads as the single project path
+    }
+  }
+  const paths = [];
+  for (const value of list ?? []) {
+    if (typeof value === 'string' && value.trim() && !paths.includes(value.trim())) paths.push(value.trim());
+  }
+  if (paths.length) return paths;
+  const single = projectPathOf(task);
+  return single ? [single] : [];
+}
+
 function providerOf(task) {
   const provider = task && typeof task === 'object' ? task.provider : null;
   return provider ?? 'claude';
@@ -222,6 +245,10 @@ function taskSnapshot(task, now) {
   // §12.4: the parameter definitions belong to the task definition snapshot.
   const params = paramDefsOf(task);
   if (params.length) snapshot.params = params;
+  // §22: a multi-project task records its whole binding; a single-project task
+  // keeps the pre-§22 snapshot shape.
+  const projectPaths = projectPathsOf(task);
+  if (projectPaths.length > 1) snapshot.projectPaths = projectPaths;
   return snapshot;
 }
 
@@ -250,23 +277,35 @@ function readJsonObject(filePath) {
  * get the generic text (placeholders instead of live paths), which is what the
  * schedule_* tool descriptions embed.
  */
-function layoutText(task, { runId } = {}) {
+function layoutText(task, { runId, projectPath: runProjectPath } = {}) {
   const known = !!task && typeof task === 'object';
   const taskId = known ? resolveSegment(taskIdOf(task)) : null;
   const id = taskId ?? '<task id>';
   const title = (known ? titleOf(task) : null) ?? '<task title>';
-  const projectPath = (known ? projectPathOf(task) : null) ?? '<project directory>';
+  const boundProjects = known ? projectPathsOf(task) : [];
+  // §22: the run's own project wins, so a multi-project task always names the
+  // directory this particular run works in.
+  const projectPath =
+    runProjectPath ?? boundProjects[0] ?? (known ? projectPathOf(task) : null) ?? '<project directory>';
   const taskDir = taskId ? taskDirRaw(taskId) : null;
   const root = taskDir ?? '<task root>';
   const runSegment = resolveSegment(runId) ?? '<runId>';
   const runDir = taskDir ? path.join(taskDir, 'runs', runSegment) : `${root}/runs/${runSegment}`;
+  const projectLines = [
+    `- Project directory this run works in (the only place you may edit project files): ${projectPath}`,
+  ];
+  if (boundProjects.length > 1) {
+    projectLines.push(
+      `- This task is bound to ${boundProjects.length} projects and starts one run per project. Every project of this task: ${boundProjects.join(', ')}.`
+    );
+  }
 
   return [
     '## Scheduled task workspace',
     '',
     `You are running scheduled task "${title}" (task id: ${id}), run id: ${runSegment}.`,
     '',
-    `- Project directory (the only place you may edit project files): ${projectPath}`,
+    ...projectLines,
     `- Task root: ${root} — this directory belongs to the task. Organize it however the task wants; keeping long-lived state, caches or notes there makes them survive across runs, but how (or whether) to do that is the task's own choice.`,
     '- Framework files already written by the app in the task root (do not overwrite them): task.json, prompt.md and README.md.',
     `- This run's directory (${runDir}/): the app writes run.json, prompt.md, output.md and logs/ there for this run.`,
@@ -279,9 +318,9 @@ function layoutText(task, { runId } = {}) {
  * Full agent-facing prompt: workspace block, then the §12.6 Parameters block,
  * then the effective prompt.
  */
-function agentPromptText(task, prompt, runId, paramsBlock) {
+function agentPromptText(task, prompt, runId, paramsBlock, projectPath) {
   const blocks = [];
-  const block = layoutText(task, { runId });
+  const block = layoutText(task, { runId, projectPath });
   if (block) blocks.push(block);
   if (typeof paramsBlock === 'string' && paramsBlock.trim()) blocks.push(paramsBlock);
   const effective = typeof prompt === 'string' ? prompt : '';
@@ -299,7 +338,8 @@ function writeRunJson(dir, task, run, patch = {}) {
     runId,
     taskId,
     title: titleOf(task) ?? run?.title ?? existing.title ?? null,
-    projectPath: projectPathOf(task) ?? run?.project_path ?? existing.projectPath ?? null,
+    // §22: the run's own project wins over the task's primary project.
+    projectPath: run?.project_path ?? run?.projectPath ?? projectPathOf(task) ?? existing.projectPath ?? null,
     trigger: run?.trigger ?? existing.trigger ?? null,
     scheduledFor: run?.scheduled_for ?? run?.scheduledFor ?? existing.scheduledFor ?? null,
     startedAt: run?.started_at ?? run?.startedAt ?? existing.startedAt ?? null,
@@ -387,7 +427,9 @@ export function ensureRunWorkspace(task, run, { effectivePrompt, paramsBlock } =
     if (!dir) return null;
     fs.mkdirSync(path.join(dir, 'logs'), { recursive: true });
     const prompt = effectivePrompt === undefined || effectivePrompt === null ? promptOf(task) : effectivePrompt;
-    writeFile(path.join(dir, 'prompt.md'), agentPromptText(task, prompt, runId, paramsBlock));
+    // §22: the workspace block names the project this run targets.
+    const runProjectPath = run?.project_path ?? run?.projectPath ?? null;
+    writeFile(path.join(dir, 'prompt.md'), agentPromptText(task, prompt, runId, paramsBlock, runProjectPath));
     writeRunJson(dir, task, run);
     return workspacePaths(taskId, runId);
   });
@@ -456,7 +498,7 @@ export function workspaceEnv(task, { runId } = {}) {
  * schedule_* tool descriptions embed.
  * @returns {string|null}
  */
-export function workspacePromptBlock(task, { runId } = {}) {
+export function workspacePromptBlock(task, { runId, projectPath } = {}) {
   if (!isWorkspaceEnabled()) return null;
-  return safe('workspacePromptBlock', () => layoutText(task, { runId: resolveSegment(runId) }));
+  return safe('workspacePromptBlock', () => layoutText(task, { runId: resolveSegment(runId), projectPath }));
 }

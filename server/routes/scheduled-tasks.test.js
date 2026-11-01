@@ -37,6 +37,7 @@ function makeRepo() {
         run_count: 0,
         conflict_policy: input.conflictPolicy ?? 'skip',
         tags_json: input.tagsJson ?? null,
+        project_paths_json: input.projectPathsJson ?? null,
         created_at: stamp(),
         updated_at: stamp(),
       };
@@ -77,6 +78,7 @@ function makeRepo() {
         paramsJson: 'params_json',
         conflictPolicy: 'conflict_policy',
         tagsJson: 'tags_json',
+        projectPathsJson: 'project_paths_json',
       };
       for (const [key, value] of Object.entries(patch)) {
         const column = columns[key] || key;
@@ -767,14 +769,14 @@ describe('GET /running (§14.3)', () => {
     const result = await api('GET', '/running');
 
     expect(result.status).toBe(200);
-    expect(result.body).toEqual({ count: 4 });
+    expect(result.body).toEqual({ count: 4, runs: [] });
     expect(repo.countRunningAgentRuns).toHaveBeenCalledTimes(1);
   });
 
   it('reads as 0 and never shadows GET /:id', async () => {
     const before = await api('GET', '/running');
     expect(before.status).toBe(200);
-    expect(before.body).toEqual({ count: 0 });
+    expect(before.body).toEqual({ count: 0, runs: [] });
 
     const created = await api('POST', '/', validBody);
     const fetched = await api('GET', '/' + created.body.task.id);
@@ -892,3 +894,54 @@ describe('tags / preview / upcoming (§19–§21)', () => {
   });
 });
 
+
+
+describe('multi-project binding (§22)', () => {
+  it('round-trips projectPaths on create and patch', async () => {
+    const created = await api('POST', '/', { ...validBody, projectPaths: ['/tmp/a', '/tmp/b'] });
+    expect(created.status).toBe(201);
+    expect(created.body.task.projectPaths).toEqual(['/tmp/a', '/tmp/b']);
+    expect(created.body.task.projectPath).toBe('/tmp/a');
+
+    const patched = await api('PATCH', '/' + created.body.task.id, { projectPaths: ['/tmp/c'] });
+    expect(patched.status).toBe(200);
+    expect(patched.body.task.projectPaths).toEqual(['/tmp/c']);
+    expect(patched.body.task.projectPath).toBe('/tmp/c');
+  });
+});
+
+describe('GET /running list (§22)', () => {
+  it('returns the count plus the running runs', async () => {
+    repo.countRunningAgentRuns = vi.fn(() => 1);
+    repo.listRunningAgentRuns = vi.fn(() => [
+      {
+        id: 'run-1',
+        task_id: 'task-x',
+        status: 'running',
+        trigger: 'schedule',
+        scheduled_for: null,
+        started_at: '2026-01-01T00:00:00.000Z',
+        agent_started_at: '2026-01-01T00:00:00.000Z',
+        session_id: 'sess-1',
+        project_path: '/tmp/a',
+        task_title: 'Task A',
+        task_project_path: '/tmp/a',
+        task_project_paths_json: JSON.stringify(['/tmp/a', '/tmp/b']),
+      },
+    ]);
+
+    const result = await api('GET', '/running');
+
+    expect(result.status).toBe(200);
+    expect(result.body.count).toBe(1);
+    expect(result.body.runs).toEqual([
+      expect.objectContaining({
+        id: 'run-1',
+        taskId: 'task-x',
+        taskTitle: 'Task A',
+        projectPath: '/tmp/a',
+        sessionId: 'sess-1',
+      }),
+    ]);
+  });
+});

@@ -211,3 +211,20 @@ describe('ScheduledTaskCard parameters', () => {
     expect(screen.queryByLabelText('card.params')).toBeNull();
   });
 });
+
+
+describe('ScheduledTaskCard multi-project badge (section 22)', () => {
+  beforeEach(() => {
+    listRuns.mockReset();
+    listRuns.mockResolvedValue({ runs: [], total: 0 });
+  });
+
+  it('renders the first project and a +N badge for the rest', () => {
+    renderCard(makeTask({ projectPath: '/tmp/a', projectPaths: ['/tmp/a', '/tmp/b', '/tmp/c'] }));
+
+    // getByTitle normalizes whitespace, so the newline-joined title reads as spaces.
+    expect(screen.getByTitle('/tmp/a /tmp/b /tmp/c')).toBeTruthy();
+    expect(screen.getAllByText(textWith('card.moreProjects')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(textWith('"count":2')).length).toBeGreaterThan(0);
+  });
+});

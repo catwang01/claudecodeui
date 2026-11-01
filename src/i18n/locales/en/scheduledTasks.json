@@ -9,7 +9,8 @@
     "label": "Panel sections",
     "tasks": "Tasks",
     "calendar": "Calendar",
-    "presets": "Presets"
+    "presets": "Presets",
+    "running": "Running"
   },
   "presets": {
     "catalogTitle": "Built-in presets",
@@ -114,7 +115,6 @@
       "tasks": "Could not load tasks."
     }
   },
-
   "search": {
     "placeholder": "Search scheduled tasks…",
     "clear": "Clear search"
@@ -170,7 +170,8 @@
     "runCount_other": "{{count}} runs",
     "model": "Model",
     "scriptGate": "Runs a script gate before the agent",
-    "params": "Parameters"
+    "params": "Parameters",
+    "moreProjects": "+{{count}} more"
   },
   "empty": {
     "title": "No scheduled tasks yet",
@@ -225,7 +226,11 @@
       "command": "Shell command",
       "commandPlaceholder": "./scripts/should-run.sh",
       "commandTimeout": "Script timeout (seconds)",
-      "commandHint": "The command runs with sh -c in the project directory before the agent. Its stdout must be JSON: {\"prompt\": \"...\"} runs the agent with that prompt, {\"skip\": true, \"reason\": \"...\"} skips the run, {\"skip\": false} keeps the task prompt. A non-zero exit or invalid JSON fails the run without calling the agent. Leave empty to run the agent directly."
+      "commandHint": "The command runs with sh -c in the project directory before the agent. Its stdout must be JSON: {\"prompt\": \"...\"} runs the agent with that prompt, {\"skip\": true, \"reason\": \"...\"} skips the run, {\"skip\": false} keeps the task prompt. A non-zero exit or invalid JSON fails the run without calling the agent. Leave empty to run the agent directly.",
+      "projects": "Projects",
+      "projectsHint": "Select every project this task should run against; it starts one run per project.",
+      "projectsSelected_one": "{{count}} project selected",
+      "projectsSelected_other": "{{count}} projects selected"
     },
     "conflictPolicy": {
       "skip": "Skip the new run",
@@ -295,7 +300,8 @@
       "weekdaysRequired": "Select at least one day.",
       "cronRequired": "Enter a cron expression.",
       "cronInvalid": "Use exactly 5 fields: minute hour day-of-month month day-of-week.",
-      "commandTimeout": "The script timeout must be between 1 and 3600 seconds."
+      "commandTimeout": "The script timeout must be between 1 and 3600 seconds.",
+      "projects": "Choose at least one project."
     }
   },
   "runParams": {
@@ -365,7 +371,8 @@
     "scriptOutput": "Script output",
     "exitCode": "Exit code",
     "params": "Parameters",
-    "builtinsHint": "Every run also exports the predefined variables (SCHEDULED_TASK_ID, TITLE, PROJECT, CWD, DIR, RUN_ID, RUN_DIR); read them instead of hardcoding paths."
+    "builtinsHint": "Every run also exports the predefined variables (SCHEDULED_TASK_ID, TITLE, PROJECT, CWD, DIR, RUN_ID, RUN_DIR); read them instead of hardcoding paths.",
+    "project": "Project"
   },
   "copyDialog": {
     "title": "Duplicate {{title}}",
@@ -382,7 +389,10 @@
     "errors": {
       "title": "Enter a title.",
       "project": "Choose a project."
-    }
+    },
+    "keepProjects_one": "Keep all {{count}} project",
+    "keepProjects_other": "Keep all {{count}} projects",
+    "keepProjectsHint": "Uncheck to copy into one project only."
   },
   "tagFilter": {
     "placeholder": "Filter by tag"
@@ -405,5 +415,14 @@
   },
   "time": {
     "unknown": "Unknown"
+  },
+  "runningRuns": {
+    "title": "Running now",
+    "emptyTitle": "Nothing running",
+    "empty": "No scheduled-task run is executing right now.",
+    "count_one": "{{count}} run",
+    "count_other": "{{count}} runs",
+    "hint": "A run appears here once its agent has started; the script-gate phase is not counted.",
+    "project": "Project"
   }
 }

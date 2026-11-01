@@ -186,6 +186,8 @@ export function taskRowToJson(row) {
     title: row.title,
     prompt: row.prompt,
     projectPath: row.project_path ?? row.projectPath ?? null,
+    // §22: the full binding; a legacy single-project row reads as [projectPath].
+    projectPaths: projectPathsOf(row),
     presetId: row.preset_id ?? row.presetId ?? null,
     presetTaskId: row.preset_task_id ?? row.presetTaskId ?? null,
     provider: row.provider ?? 'claude',
@@ -217,6 +219,8 @@ export function runRowToJson(row) {
   return {
     id: row.id,
     taskId: row.task_id ?? row.taskId ?? null,
+    // §22: the project this run targets; legacy rows read as the task's project.
+    projectPath: row.project_path ?? row.projectPath ?? null,
     status: row.status,
     trigger: row.trigger,
     scheduledFor: row.scheduled_for ?? null,
@@ -236,6 +240,30 @@ export function runRowToJson(row) {
   };
 }
 
+/** §22: a running run joined with its task, for GET /running's list. */
+export function runningRunToJson(row) {
+  if (!row) return null;
+  const taskPaths = projectPathsOf({
+    project_paths_json: row.task_project_paths_json,
+    project_path: row.task_project_path,
+  });
+  return {
+    id: row.id,
+    taskId: row.task_id ?? row.taskId ?? null,
+    taskTitle: row.task_title ?? null,
+    // §22: the project this run targets; legacy rows read as the task project.
+    projectPath: row.project_path ?? row.projectPath ?? taskPaths[0] ?? null,
+    projectPaths: taskPaths,
+    status: row.status,
+    trigger: row.trigger,
+    scheduledFor: row.scheduled_for ?? row.scheduledFor ?? null,
+    startedAt: row.started_at ?? row.startedAt ?? null,
+    agentStartedAt: row.agent_started_at ?? row.agentStartedAt ?? null,
+    sessionId: row.session_id ?? row.sessionId ?? null,
+    error: row.error ?? null,
+  };
+}
+
 function normalizePath(value) {
   if (!value) return value;
   try {
@@ -251,6 +279,61 @@ export function sameProjectPath(a, b) {
   const right = normalizePath(b);
   if (process.platform === 'win32') return left.toLowerCase() === right.toLowerCase();
   return left === right;
+}
+
+/** §22: at most this many projects may be bound to one task. */
+const MAX_PROJECT_PATHS = 20;
+
+/**
+ * §22: the project list of a task row/view. Prefers project_paths_json; NULL/''
+ * or unreadable JSON means the single project_path. Always returns at least one
+ * entry when the row has a project path, deduped case-insensitively.
+ */
+export function projectPathsOf(row) {
+  if (!row || typeof row !== 'object') return [];
+  const raw = row.project_paths_json ?? row.projectPaths;
+  let list = null;
+  if (Array.isArray(raw)) list = raw;
+  else if (typeof raw === 'string' && raw.trim()) {
+    const parsed = parseJson(raw, null);
+    if (Array.isArray(parsed)) list = parsed;
+  }
+  const paths = [];
+  for (const value of list ?? []) {
+    if (typeof value !== 'string' || !value.trim()) continue;
+    const candidate = value.trim();
+    if (paths.some((existing) => sameProjectPath(existing, candidate))) continue;
+    paths.push(candidate);
+  }
+  if (paths.length) return paths;
+  const single = row.project_path ?? row.projectPath;
+  return typeof single === 'string' && single.trim() ? [single] : [];
+}
+
+/**
+ * §22: validate a projectPaths input.
+ *   undefined => not supplied (leave the binding alone)
+ *   array|string => normalized list (>= 1, <= MAX_PROJECT_PATHS, deduped)
+ *   null / [] => invalid: a task must always target at least one project
+ */
+function checkProjectPaths(value) {
+  if (value === undefined) return { ok: true, value: undefined };
+  const list = typeof value === 'string' ? [value] : value;
+  if (!Array.isArray(list) || list.length === 0) {
+    return fail('invalid_input', 'projectPaths must be a non-empty array of project paths');
+  }
+  const paths = [];
+  for (const raw of list) {
+    if (typeof raw !== 'string' || !raw.trim()) {
+      return fail('invalid_input', 'projectPaths must be non-empty strings');
+    }
+    const candidate = raw.trim();
+    if (!paths.some((existing) => sameProjectPath(existing, candidate))) paths.push(candidate);
+  }
+  if (paths.length > MAX_PROJECT_PATHS) {
+    return fail('invalid_input', `At most ${MAX_PROJECT_PATHS} projects per task`);
+  }
+  return { ok: true, value: paths };
 }
 
 /**
@@ -513,7 +596,8 @@ export function createManagement(deps = {}) {
 
   function inScope(row, scope) {
     if (!scope || !scope.projectPath) return true;
-    return sameProjectPath(row.project_path, scope.projectPath);
+    // §22: a multi-project task is in scope from any of its projects.
+    return projectPathsOf(row).some((path) => sameProjectPath(path, scope.projectPath));
   }
 
   async function findTask(id, scope) {
@@ -573,6 +657,33 @@ export function createManagement(deps = {}) {
     return { ok: true, count: Number.isFinite(count) ? count : 0 };
   }
 
+  /**
+   * §22: the running runs themselves. count is the total number of in-flight
+   * agent runs (a multi-project task contributes one per project); runs is the
+   * bounded page the UI lists. A repository without the method (older fakes)
+   * reads as an empty list.
+   */
+  async function listRunningTasks(limit = DEFAULT_RUNS_LIMIT) {
+    const repo = await getRepo();
+    const capped = clampInt(limit, 50, 1, MAX_RUNS_LIMIT);
+    let rows = [];
+    if (typeof repo.listRunningAgentRuns === 'function') {
+      try {
+        rows = repo.listRunningAgentRuns(capped) || [];
+      } catch (err) {
+        logger.warn?.('[scheduled-tasks] listRunningAgentRuns failed: ' + errorMessage(err));
+        rows = [];
+      }
+    }
+    const count =
+      typeof repo.countRunningAgentRuns === 'function' ? repo.countRunningAgentRuns() : rows.length;
+    return {
+      ok: true,
+      count: Number.isFinite(count) ? count : rows.length,
+      runs: rows.map(runningRunToJson),
+    };
+  }
+
   async function getTaskWithRuns(id, scope = {}, limit = 5) {
     const row = await findTask(id, scope);
     if (!row) return notFound();
@@ -589,7 +700,16 @@ export function createManagement(deps = {}) {
     const rules = await getRules();
 
     const title = nonEmptyString(input.title);
-    const projectPath = nonEmptyString(input.projectPath) || nonEmptyString(scope.projectPath);
+    // §22: projectPaths (array) is the full binding; the legacy single
+    // projectPath falls back to the caller scope when absent.
+    const pathsCheck = checkProjectPaths(
+      input.projectPaths !== undefined
+        ? input.projectPaths
+        : nonEmptyString(input.projectPath) || nonEmptyString(scope.projectPath) || undefined
+    );
+    if (!pathsCheck.ok) return pathsCheck;
+    const projectPaths = pathsCheck.value;
+    const projectPath = projectPaths ? projectPaths[0] : null;
     const missing = [];
     if (!title) missing.push('title');
     if (typeof input.prompt !== 'string' || !input.prompt.trim()) missing.push('prompt');
@@ -630,6 +750,7 @@ export function createManagement(deps = {}) {
       title,
       prompt: input.prompt,
       projectPath,
+      projectPathsJson: projectPaths.length > 1 ? JSON.stringify(projectPaths) : null,
       provider: nonEmptyString(input.provider) || 'claude',
       model: nonEmptyString(input.model),
       kind: checked.rule.kind,
@@ -668,10 +789,19 @@ export function createManagement(deps = {}) {
       }
       changes.prompt = patch.prompt;
     }
-    if (patch.projectPath !== undefined) {
+    if (patch.projectPaths !== undefined) {
+      const checked = checkProjectPaths(patch.projectPaths);
+      if (!checked.ok) return checked;
+      // §22: project_path stays the primary (first) path.
+      changes.projectPath = checked.value[0];
+      changes.projectPathsJson = checked.value.length > 1 ? JSON.stringify(checked.value) : null;
+    } else if (patch.projectPath !== undefined) {
       const projectPath = nonEmptyString(patch.projectPath);
       if (!projectPath) return fail('invalid_input', 'projectPath must be a non-empty string');
+      // §22: the legacy single field replaces the whole binding; the UI always
+      // sends projectPaths when a task is bound to several projects.
       changes.projectPath = projectPath;
+      changes.projectPathsJson = null;
     }
     if (patch.model !== undefined) {
       changes.model = nonEmptyString(patch.model);
@@ -814,12 +944,15 @@ export function createManagement(deps = {}) {
     }
     // §17: the queue policy accepted the run but has not started it yet.
     if (result.queued) {
-      return { ok: true, queued: true, run: null };
+      return { ok: true, queued: true, run: null, runs: [] };
     }
-    if (result.error || !result.run) {
+    const runs = Array.isArray(result.runs) ? result.runs : result.run ? [result.run] : [];
+    if (result.error || runs.length === 0) {
       return fail('internal_error', result.error || 'No run was created', 500);
     }
-    return { ok: true, run: runRowToJson(result.run) };
+    // §22: a multi-project task starts one run per project; the first is the
+    // legacy single-run view and runs carries the whole fan-out.
+    return { ok: true, run: runRowToJson(runs[0]), runs: runs.map(runRowToJson) };
   }
 
   // ─── Copy / import / export (§15, §16) ──────────────────────────────────────
@@ -838,8 +971,18 @@ export function createManagement(deps = {}) {
     if (!row) return notFound();
 
     const title = nonEmptyString(options.title) || `${row.title} (copy)`;
-    const projectPath =
-      nonEmptyString(options.projectPath) || nonEmptyString(row.project_path ?? row.projectPath);
+    // §22: the copy inherits the full project binding unless the caller picks a
+    // target; a single projectPath collapses it to one project.
+    const pathsCheck = checkProjectPaths(
+      options.projectPaths !== undefined
+        ? options.projectPaths
+        : options.projectPath !== undefined
+          ? [options.projectPath]
+          : projectPathsOf(row)
+    );
+    if (!pathsCheck.ok) return pathsCheck;
+    const projectPaths = pathsCheck.value;
+    const projectPath = projectPaths[0];
     if (!projectPath) return fail('invalid_input', 'projectPath is required');
 
     // §15: the rule is carried over unchanged (an interval keeps its original
@@ -860,6 +1003,7 @@ export function createManagement(deps = {}) {
       title,
       prompt: row.prompt,
       projectPath,
+      projectPathsJson: projectPaths.length > 1 ? JSON.stringify(projectPaths) : null,
       provider: row.provider ?? 'claude',
       model: row.model ?? null,
       kind: checked.rule.kind,
@@ -893,6 +1037,7 @@ export function createManagement(deps = {}) {
         title: task.title,
         prompt: task.prompt,
         projectPath: task.projectPath,
+        projectPaths: task.projectPaths ?? [],
         provider: task.provider,
         model: task.model,
         command: task.command,
@@ -925,18 +1070,30 @@ export function createManagement(deps = {}) {
     if (!nonEmptyString(candidate.title) && !nonEmptyString(input.title)) {
       return fail('invalid_input', 'title is required');
     }
-    const projectPath =
-      nonEmptyString(input.projectPath) ||
-      nonEmptyString(candidate.projectPath) ||
-      nonEmptyString(scope.projectPath);
-    if (!projectPath) return fail('invalid_input', 'projectPath is required');
+    const explicitSingle = nonEmptyString(input.projectPath);
+    const fallbackSingle = nonEmptyString(candidate.projectPath) || nonEmptyString(scope.projectPath);
+    // §16.2/§22: the binding resolves as input.projectPaths > input.projectPath >
+    // the envelope projectPaths > the envelope projectPath > the caller scope.
+    const projectPaths =
+      input.projectPaths !== undefined
+        ? input.projectPaths
+        : explicitSingle
+          ? [explicitSingle]
+          : Array.isArray(candidate.projectPaths)
+            ? candidate.projectPaths
+            : fallbackSingle
+              ? [fallbackSingle]
+              : undefined;
+    if (!projectPaths || projectPaths.length === 0) {
+      return fail('invalid_input', 'projectPath is required');
+    }
     const enabled = input.enabled !== undefined ? input.enabled === true : candidate.enabled === true;
     return createTask(
       {
         userId: input.userId ?? scope.userId ?? null,
         title: nonEmptyString(input.title) || candidate.title,
         prompt: candidate.prompt,
-        projectPath,
+        projectPaths,
         provider: candidate.provider,
         model: candidate.model,
         command: candidate.command,
@@ -1008,13 +1165,20 @@ export function createManagement(deps = {}) {
           cursor = nowMs;
           continue;
         }
-        upcoming.push({
-          taskId: row.id,
-          title: row.title,
-          projectPath: row.project_path ?? row.projectPath ?? null,
-          tags: tagsOf(row),
-          at: new Date(ms).toISOString(),
-        });
+        // §22: a multi-project task is upcoming once per bound project.
+        const projectPaths = projectPathsOf(row);
+        const at = new Date(ms).toISOString();
+        for (const projectPath of projectPaths.length ? projectPaths : [null]) {
+          if (upcoming.length >= limit) break;
+          upcoming.push({
+            taskId: row.id,
+            title: row.title,
+            projectPath,
+            projectPaths,
+            tags: tagsOf(row),
+            at,
+          });
+        }
         if (kind === 'once') break;
         cursor = ms + 1;
       }
@@ -1027,6 +1191,7 @@ export function createManagement(deps = {}) {
     // views
     taskView: taskRowToJson,
     runView: runRowToJson,
+    runningRunView: runningRunToJson,
     // selectors
     ruleFromArgs: (args, options) => ruleFromArgs(args, now(), options),
     // queries
@@ -1035,6 +1200,7 @@ export function createManagement(deps = {}) {
     listRuns,
     getTaskWithRuns,
     countRunningTasks,
+    listRunningTasks,
     // mutations
     createTask,
     updateTask,

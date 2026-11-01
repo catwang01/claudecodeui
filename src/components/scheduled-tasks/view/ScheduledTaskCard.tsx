@@ -69,7 +69,8 @@ export default function ScheduledTaskCard({
         .join(' · ')
     : t('lastRun.never');
 
-  const projectLabel = basename(task.projectPath) || task.projectPath;
+  const projectPaths = task.projectPaths?.length ? task.projectPaths : [task.projectPath];
+  const projectLabel = basename(projectPaths[0]) || projectPaths[0];
   const historyToken = [task.runCount ?? 0, task.lastRunAt ?? '', task.updatedAt ?? ''].join('|');
 
   return (
@@ -97,9 +98,14 @@ export default function ScheduledTaskCard({
             </span>
             <span className="inline-flex min-w-0 max-w-[16rem] items-center gap-1">
               <FolderOpen className="h-3 w-3 flex-shrink-0" />
-              <span className="truncate" title={task.projectPath}>
+              <span className="truncate" title={projectPaths.join('\n')}>
                 {projectLabel}
               </span>
+              {projectPaths.length > 1 && (
+                <span className="flex-shrink-0 rounded bg-accent px-1 text-[10px] text-accent-foreground">
+                  {t('card.moreProjects', { count: projectPaths.length - 1 })}
+                </span>
+              )}
             </span>
             {task.model && (
               <span className="inline-flex items-center gap-1">

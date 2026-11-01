@@ -11,6 +11,7 @@ import type {
   PresetPatch,
   PresetUpgradeResult,
   ProjectOption,
+  RunningScheduledTaskRun,
   ScheduledTask,
   ScheduledTaskInput,
   ScheduledTaskPatch,
@@ -109,10 +110,18 @@ export const scheduledTasksApi = {
   },
 
   /**
-   * GET /running (section 14.3): how many scheduled tasks currently have a run
-   * whose agent was actually started. The count is global (one scheduler), not
-   * scoped to a user. A malformed payload reads as 0.
+   * GET /running (sections 14.3/22): the running runs, count + list. The count
+   * is global (one scheduler), not scoped to a user. A malformed payload reads
+   * as `{ count: 0, runs: [] }`.
    */
+  async running(): Promise<{ count: number; runs: RunningScheduledTaskRun[] }> {
+    const response = await authenticatedFetch(`${BASE_URL}/running`);
+    const data = await parseResponse<{ count?: unknown; runs?: unknown }>(response);
+    const count = typeof data?.count === 'number' && Number.isFinite(data.count) ? data.count : 0;
+    const runs = Array.isArray(data?.runs) ? (data.runs as RunningScheduledTaskRun[]) : [];
+    return { count, runs };
+  },
+
   async runningCount(): Promise<number> {
     const response = await authenticatedFetch(`${BASE_URL}/running`);
     const data = await parseResponse<{ count?: unknown }>(response);

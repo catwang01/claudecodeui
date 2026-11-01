@@ -1,24 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useWebSocket } from '../../../contexts/WebSocketContext';
 import { scheduledTasksApi } from '../api';
+import type { RunningScheduledTaskRun } from '../types';
 
-/**
- * Safety-net interval. The server pushes the exact count over /ws the moment an
- * agent starts or a run finishes (section 15), so this only heals a missed push
- * (a dropped socket, a reload race) instead of being the primary source.
- */
 const DEFAULT_INTERVAL_MS = 15000;
 
 /**
- * Returns the number of scheduled tasks whose agent has actually been started
- * (section 14) — the script-gate phase and a run that will be skipped never count.
+ * docs §22: the live running runs (count + list).
  *
- * Freshness:
- * - `scheduled_task_running_count` WS pushes update the count immediately (section 15).
- * - Polls the REST endpoint as a fallback, skips requests while the document is
- *   hidden, and refreshes right away on visibilitychange / window focus.
- * - Drops stale responses (request id guard) and keeps the last known value when a
- *   request fails, so a transient error never flashes "0".
+ * The server pushes `scheduled_task_running_count` with `{ count, runs }` the
+ * moment an agent starts or a run finishes, so the panel updates without a poll
+ * (section 15). A 15s poll is the safety net for a dropped push, a reconnect or
+ * a page that was hidden. A transient failure keeps the previous value.
  */
 export function useRunningScheduledTasks({
   intervalMs = DEFAULT_INTERVAL_MS,
@@ -26,35 +19,42 @@ export function useRunningScheduledTasks({
   intervalMs?: number;
 } = {}) {
   const [count, setCount] = useState(0);
+  const [runs, setRuns] = useState<RunningScheduledTaskRun[]>([]);
   const requestIdRef = useRef(0);
   const { subscribeMessages } = useWebSocket();
 
   const refresh = useCallback(async (): Promise<void> => {
-    // A hidden tab is not watching the badge; polling it anyway would only add
-    // load. Coming back to visible triggers an immediate refresh below.
     if (document.hidden) return;
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
     try {
-      const next = await scheduledTasksApi.runningCount();
+      const next = await scheduledTasksApi.running();
       if (requestId !== requestIdRef.current) return;
-      setCount(next);
+      setCount(next.count);
+      setRuns(next.runs);
     } catch {
       // Keep the previous value: a transient failure must not flash "0".
     }
   }, []);
 
-  // Section 15: apply server pushes synchronously and invalidate any in-flight
-  // poll so it cannot overwrite the newer pushed value.
   useEffect(() => {
     return subscribeMessages((message: Record<string, unknown> | null) => {
       if (!message || message.type !== 'scheduled_task_running_count') return;
       const next = message.count;
-      if (typeof next !== 'number' || !Number.isFinite(next)) return;
-      requestIdRef.current += 1;
-      setCount(next);
+      if (typeof next === 'number' && Number.isFinite(next)) {
+        requestIdRef.current += 1;
+        setCount(next);
+      }
+      // §22: the push also carries the list; an older server that only sends the
+      // count makes the hook refetch so the list stays fresh.
+      if (Array.isArray(message.runs)) {
+        requestIdRef.current += 1;
+        setRuns(message.runs as RunningScheduledTaskRun[]);
+      } else {
+        void refresh();
+      }
     });
-  }, [subscribeMessages]);
+  }, [subscribeMessages, refresh]);
 
   useEffect(() => {
     void refresh();
@@ -76,5 +76,5 @@ export function useRunningScheduledTasks({
     };
   }, [refresh]);
 
-  return { count, refresh };
+  return { count, runs, refresh };
 }

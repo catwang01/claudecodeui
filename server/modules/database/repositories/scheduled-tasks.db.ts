@@ -32,6 +32,9 @@ export type ScheduledTaskRow = {
   conflict_policy: string | null;
   // Tags (docs section 19) as JSON string[]; NULL/'' means "no tags".
   tags_json: string | null;
+  // Multi-project binding (docs section 22) as JSON string[]; NULL/'' means the
+  // single project_path is the whole binding.
+  project_paths_json: string | null;
 };
 
 export type ScheduledTaskRunRow = {
@@ -54,6 +57,16 @@ export type ScheduledTaskRunRow = {
   // NULL while the run is in the script gate, and for every run that ends as
   // skipped / gate-error / params-error / unsupported-provider.
   agent_started_at: string | null;
+  // docs section 22: the project directory this run targets; NULL on legacy rows,
+  // which read as the task's project_path.
+  project_path: string | null;
+};
+
+// docs section 22: a running run joined with the task it belongs to, for GET /running.
+export type ScheduledTaskRunningRunRow = ScheduledTaskRunRow & {
+  task_title: string;
+  task_project_path: string | null;
+  task_project_paths_json: string | null;
 };
 
 // docs section 9.1: which scheduled task started a session (the newest run wins).
@@ -174,6 +187,10 @@ export type CreateScheduledTaskInput = {
   // docs section 19: JSON string[]; NULL/'' means "no tags".
   tagsJson?: string | null;
   tags_json?: string | null;
+  // docs section 22: JSON string[] of project paths; NULL/'' means the single
+  // projectPath is the whole binding.
+  projectPathsJson?: string | null;
+  project_paths_json?: string | null;
 };
 
 export type ScheduledTaskUpdatePatch = Partial<{
@@ -196,6 +213,8 @@ export type ScheduledTaskUpdatePatch = Partial<{
   conflictPolicy: string | null;
   tagsJson: string | null;
   tags_json: string | null;
+  projectPathsJson: string | null;
+  project_paths_json: string | null;
 }>;
 
 export type ScheduledTaskAdvancePatch = Partial<{
@@ -221,6 +240,9 @@ export type CreateScheduledTaskRunInput = {
   // docs section 12.4: resolved value map as JSON.
   paramsJson?: string | null;
   params_json?: string | null;
+  // docs section 22: the project directory this run targets.
+  projectPath?: string | null;
+  project_path?: string | null;
 };
 
 export type FinishScheduledTaskRunPatch = {
@@ -316,8 +338,9 @@ function serializeRule(task: PresetTaskInput): string {
 const INSERT_TASK_SQL =
   'INSERT INTO scheduled_tasks (id, user_id, title, prompt, project_path, provider, model, kind, rule_json, ' +
   'next_run_at, last_run_at, last_status, last_error, enabled, run_count, created_at, updated_at, ' +
-  'command, command_timeout_seconds, params_json, preset_id, preset_task_id, conflict_policy, tags_json) ' +
-  'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+  'command, command_timeout_seconds, params_json, preset_id, preset_task_id, conflict_policy, tags_json, ' +
+  'project_paths_json) ' +
+  'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
 
 const INSERT_PRESET_SQL =
   'INSERT INTO scheduled_task_presets (id, user_id, source, name, description, icon, version, enabled, ' +
@@ -329,8 +352,8 @@ const INSERT_PRESET_TASK_SQL =
   'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
 
 const INSERT_RUN_SQL =
-  'INSERT INTO scheduled_task_runs (id, task_id, status, "trigger", scheduled_for, started_at, finished_at, session_id, output, error, script_exit_code, script_output, prompt_used, params_json) ' +
-  'VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?, ?)';
+  'INSERT INTO scheduled_task_runs (id, task_id, status, "trigger", scheduled_for, started_at, finished_at, session_id, output, error, script_exit_code, script_output, prompt_used, params_json, project_path) ' +
+  'VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?)';
 
 // docs section 9.1: one row per run, LEFT JOIN so a run whose task row is gone still resolves
 // (title falls back to the task id). The correlated rowid pick keeps exactly the newest run
@@ -372,7 +395,8 @@ export const scheduledTasksDb = {
         input.presetId ?? null,
         input.presetTaskId ?? null,
         input.conflictPolicy ?? 'skip',
-        pick(input.tagsJson, input.tags_json) ?? null
+        pick(input.tagsJson, input.tags_json) ?? null,
+        pick(input.projectPathsJson, input.project_paths_json) ?? null
       );
     return selectTask(id) as ScheduledTaskRow;
   },
@@ -427,6 +451,7 @@ export const scheduledTasksDb = {
     pushAssignment(assignments, values, 'preset_task_id', patch.presetTaskId);
     pushAssignment(assignments, values, 'conflict_policy', patch.conflictPolicy);
     pushAssignment(assignments, values, 'tags_json', pick(patch.tagsJson, patch.tags_json));
+    pushAssignment(assignments, values, 'project_paths_json', pick(patch.projectPathsJson, patch.project_paths_json));
     if (patch.enabled !== undefined) pushAssignment(assignments, values, 'enabled', toEnabled(patch.enabled));
 
     assignments.push('updated_at = ?');
@@ -488,7 +513,8 @@ export const scheduledTasksDb = {
         pick(input.scriptExitCode, input.script_exit_code) ?? null,
         pick(input.scriptOutput, input.script_output) ?? null,
         pick(input.promptUsed, input.prompt_used) ?? null,
-        pick(input.paramsJson, input.params_json) ?? null
+        pick(input.paramsJson, input.params_json) ?? null,
+        pick(input.projectPath, input.project_path) ?? null
       );
     return selectRun(id) as ScheduledTaskRunRow;
   },
@@ -540,18 +566,32 @@ export const scheduledTasksDb = {
   },
 
   /**
-   * docs section 14.1: how many distinct tasks have an agent-started run in
-   * flight. A task can only own one run at a time, so this is also the number of
-   * "running" tasks the UI shows; gate-phase / skipped runs are excluded.
+   * docs section 22: how many runs are actually executing right now. A
+   * multi-project task contributes one per project, so this matches the running
+   * list; gate-phase / skipped runs are excluded.
    */
   countRunningAgentRuns(): number {
     const row = getConnection()
       .prepare(
-        'SELECT COUNT(DISTINCT task_id) AS count FROM scheduled_task_runs ' +
+        'SELECT COUNT(*) AS count FROM scheduled_task_runs ' +
           "WHERE status = 'running' AND agent_started_at IS NOT NULL"
       )
       .get() as { count: number } | undefined;
     return row ? row.count : 0;
+  },
+
+  /**
+   * docs section 22: the running runs themselves, newest first, joined with the
+   * owning task for its title and project binding.
+   */
+  listRunningAgentRuns(limit = 50): ScheduledTaskRunningRunRow[] {
+    const sql =
+      'SELECT r.*, COALESCE(t.title, r.task_id) AS task_title, ' +
+      't.project_path AS task_project_path, t.project_paths_json AS task_project_paths_json ' +
+      'FROM scheduled_task_runs r LEFT JOIN scheduled_tasks t ON t.id = r.task_id ' +
+      "WHERE r.status = 'running' AND r.agent_started_at IS NOT NULL " +
+      'ORDER BY r.agent_started_at DESC, r.rowid DESC LIMIT ?';
+    return getConnection().prepare(sql).all(limit) as ScheduledTaskRunningRunRow[];
   },
 
   /**

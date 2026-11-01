@@ -9,7 +9,8 @@
     "label": "面板分栏",
     "tasks": "任务",
     "calendar": "日历",
-    "presets": "预设包"
+    "presets": "预设包",
+    "running": "运行中"
   },
   "presets": {
     "catalogTitle": "内置预设包",
@@ -109,7 +110,6 @@
       "tasks": "无法加载任务。"
     }
   },
-
   "search": {
     "placeholder": "搜索定时任务…",
     "clear": "清除搜索"
@@ -164,7 +164,8 @@
     "runCount_other": "{{count}} 次运行",
     "model": "模型",
     "scriptGate": "运行智能体前会先执行脚本门控",
-    "params": "参数"
+    "params": "参数",
+    "moreProjects": "另有 {{count}} 个"
   },
   "empty": {
     "title": "还没有定时任务",
@@ -219,7 +220,11 @@
       "command": "Shell 命令",
       "commandPlaceholder": "./scripts/should-run.sh",
       "commandTimeout": "脚本超时（秒）",
-      "commandHint": "脚本会在智能体运行前，以 sh -c 在项目目录中执行。其标准输出必须是 JSON：{\"prompt\": \"...\"} 表示用该提示词运行智能体，{\"skip\": true, \"reason\": \"...\"} 表示跳过本次运行，{\"skip\": false} 表示使用任务自身的提示词。退出码非零或 JSON 无效时任务会失败且不会调用智能体。留空则直接运行智能体。"
+      "commandHint": "脚本会在智能体运行前，以 sh -c 在项目目录中执行。其标准输出必须是 JSON：{\"prompt\": \"...\"} 表示用该提示词运行智能体，{\"skip\": true, \"reason\": \"...\"} 表示跳过本次运行，{\"skip\": false} 表示使用任务自身的提示词。退出码非零或 JSON 无效时任务会失败且不会调用智能体。留空则直接运行智能体。",
+      "projects": "项目",
+      "projectsHint": "勾选该任务要运行的所有项目；每个项目各启动一次运行。",
+      "projectsSelected_one": "已选 {{count}} 个项目",
+      "projectsSelected_other": "已选 {{count}} 个项目"
     },
     "conflictPolicy": {
       "skip": "跳过本次",
@@ -289,7 +294,8 @@
       "weekdaysRequired": "请至少选择一天。",
       "cronRequired": "请输入 cron 表达式。",
       "cronInvalid": "必须为 5 个字段：分 时 日 月 周。",
-      "commandTimeout": "脚本超时必须在 1 到 3600 秒之间。"
+      "commandTimeout": "脚本超时必须在 1 到 3600 秒之间。",
+      "projects": "请至少选择一个项目。"
     }
   },
   "runParams": {
@@ -359,7 +365,8 @@
     "scriptOutput": "脚本输出",
     "exitCode": "退出码",
     "params": "参数",
-    "builtinsHint": "每次运行还会导出预定义变量（SCHEDULED_TASK_ID、TITLE、PROJECT、CWD、DIR、RUN_ID、RUN_DIR）；请从中读取，不要硬编码路径。"
+    "builtinsHint": "每次运行还会导出预定义变量（SCHEDULED_TASK_ID、TITLE、PROJECT、CWD、DIR、RUN_ID、RUN_DIR）；请从中读取，不要硬编码路径。",
+    "project": "项目"
   },
   "copyDialog": {
     "title": "复制 {{title}}",
@@ -376,7 +383,10 @@
     "errors": {
       "title": "请输入标题。",
       "project": "请选择项目。"
-    }
+    },
+    "keepProjects_one": "保留全部 {{count}} 个项目",
+    "keepProjects_other": "保留全部 {{count}} 个项目",
+    "keepProjectsHint": "取消勾选可只复制到单个项目。"
   },
   "tagFilter": {
     "placeholder": "按标签筛选"
@@ -399,5 +409,14 @@
   },
   "time": {
     "unknown": "未知"
+  },
+  "runningRuns": {
+    "title": "正在运行",
+    "emptyTitle": "当前没有运行中的任务",
+    "empty": "此刻没有正在执行的定时任务运行。",
+    "count_one": "{{count}} 个运行",
+    "count_other": "{{count}} 个运行",
+    "hint": "智能体启动后才会出现在这里；脚本门控阶段不计入。",
+    "project": "项目"
   }
 }

@@ -37,6 +37,7 @@ function makeTaskRow(input, id) {
     run_count: 0,
     conflict_policy: input.conflictPolicy ?? 'skip',
     tags_json: input.tagsJson ?? null,
+    project_paths_json: input.projectPathsJson ?? null,
     created_at: stamp,
     updated_at: stamp,
   };
@@ -95,6 +96,7 @@ function makeRepo() {
         paramsJson: 'params_json',
         conflictPolicy: 'conflict_policy',
         tagsJson: 'tags_json',
+        projectPathsJson: 'project_paths_json',
       };
       for (const [key, value] of Object.entries(patch)) {
         row[columns[key] || key] = key === 'enabled' ? (value ? 1 : 0) : value;
@@ -145,10 +147,10 @@ beforeEach(() => {
 });
 
 describe('tool registration', () => {
-  it('registers the seventeen schedule_* tools in contract order', () => {
+  it('registers the eighteen schedule_* tools in contract order', () => {
     const { tools } = setup();
     expect(tools.map((definition) => definition.name)).toEqual(SCHEDULE_TOOL_NAMES);
-    expect(SCHEDULE_TOOL_NAMES).toHaveLength(17);
+    expect(SCHEDULE_TOOL_NAMES).toHaveLength(18);
     for (const definition of tools) {
       expect(typeof definition.handler).toBe('function');
       expect(definition.description).toBeTruthy();
@@ -592,10 +594,10 @@ describe('§6.1 built-in Cron precedence', () => {
     return end === -1 ? description : description.slice(0, end + 1);
   }
 
-  it('states the precedence note in the first sentence of all seventeen descriptions', () => {
+  it('states the precedence note in the first sentence of all eighteen descriptions', () => {
     const { tools } = setup();
 
-    expect(tools).toHaveLength(17);
+    expect(tools).toHaveLength(18);
     for (const definition of tools) {
       const sentence = firstSentence(definition.description);
       expect(sentence, definition.name).toContain(PREFERENCE_MARKER);
@@ -852,11 +854,11 @@ describe('params (§12)', () => {
     expect(byName.schedule_update.description).toMatch(/parameter/i);
   });
 
-  it('lists every §13 predefined variable and the id clarification on all seventeen tools', () => {
+  it('lists every §13 predefined variable and the id clarification on all eighteen tools', () => {
     const { byName } = setup();
 
     expect(PREDEFINED_ENV_NAMES).toHaveLength(7);
-    expect(Object.keys(byName)).toHaveLength(17);
+    expect(Object.keys(byName)).toHaveLength(18);
 
     for (const name of Object.keys(byName)) {
       const description = byName[name].description;
@@ -991,5 +993,48 @@ describe('tags / preview (§19, §20)', () => {
 
     expect(result).toMatchObject({ decision: 'run', effectivePrompt: 'p' });
     expect(previewTask).toHaveBeenCalled();
+  });
+});
+
+
+describe('multi-project + running list (§22)', () => {
+  it('schedule_create accepts project_paths and returns the full binding', async () => {
+    const { call } = setup();
+    const created = await call('schedule_create', {
+      title: 'Multi',
+      prompt: 'p',
+      project_paths: [PROJECT, OTHER],
+      every_seconds: 3600,
+    });
+
+    expect(created.projectPaths).toEqual([PROJECT, OTHER]);
+    expect(created.projectPath).toBe(PROJECT);
+  });
+
+  it('schedule_running_list returns the count and the runs', async () => {
+    const { repo, call } = setup();
+    repo.countRunningAgentRuns = vi.fn(() => 1);
+    repo.listRunningAgentRuns = vi.fn(() => [
+      {
+        ...makeRunRow('task-1'),
+        project_path: PROJECT,
+        agent_started_at: iso(NOW),
+        session_id: 'sess-1',
+        task_title: 'Multi',
+        task_project_path: PROJECT,
+        task_project_paths_json: JSON.stringify([PROJECT, OTHER]),
+      },
+    ]);
+
+    const running = await call('schedule_running_list', {});
+
+    expect(running.count).toBe(1);
+    expect(running.runs[0]).toMatchObject({
+      id: 'run-1',
+      taskId: 'task-1',
+      taskTitle: 'Multi',
+      projectPath: PROJECT,
+      sessionId: 'sess-1',
+    });
   });
 });

@@ -336,17 +336,40 @@ async function main() {
     return 'running -> error/server_restart, count 1 -> 0, second sweep 0';
   });
 
-  // ── Adversarial: the SQL really counts tasks, not runs ────────────────────
-  await check('count is per task (COUNT(DISTINCT task_id)): two running runs of one task count once', async () => {
+  // ── Adversarial: the SQL counts runs, so a multi-project fan-out counts ────
+  await check('count is per run (§22): two running runs of one task count twice', async () => {
     const task = await makeTask();
-    const first = repo.createRun({ taskId: task.id, status: 'running', trigger: 'manual', startedAt: new Date().toISOString() });
-    const second = repo.createRun({ taskId: task.id, status: 'running', trigger: 'manual', startedAt: new Date().toISOString() });
+    const first = repo.createRun({
+      taskId: task.id,
+      status: 'running',
+      trigger: 'manual',
+      startedAt: new Date().toISOString(),
+      projectPath: PROJECT,
+    });
+    const second = repo.createRun({
+      taskId: task.id,
+      status: 'running',
+      trigger: 'manual',
+      startedAt: new Date().toISOString(),
+      projectPath: path.join(TMP, 'project-2'),
+    });
     repo.markRunAgentStarted(first.id);
     repo.markRunAgentStarted(second.id);
-    assert((await runningCount()) === 1, 'two running runs of one task must count as 1');
+    assert((await runningCount()) === 2, 'two running runs must count as 2');
+
+    // §22: the same view layer also lists them, joined with the task title.
+    const view = await mgmt.listRunningTasks(10);
+    assert(
+      view && view.ok === true && view.count === 2 && view.runs.length === 2,
+      'listRunningTasks must return both runs: ' + JSON.stringify(view)
+    );
+    assert(
+      view.runs.every((run) => run.taskTitle === task.title),
+      'each running run must carry its task title: ' + JSON.stringify(view.runs)
+    );
     repo.failInterruptedRuns(new Date().toISOString(), 'test_cleanup');
     assert((await runningCount()) === 0, 'cleanup failed to clear the count');
-    return 'two runs -> 1';
+    return 'two runs -> 2';
   });
 
   // ── Adversarial: the timestamp is write-once ──────────────────────────────

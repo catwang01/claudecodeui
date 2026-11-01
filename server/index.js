@@ -142,7 +142,7 @@ import { createNormalizedMessage } from './providers/types.js';
 import { getProvider } from './providers/registry.js';
 import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
 import { initializeDatabase, sessionNamesDb, sessionDb, sessionFileCache, sessionsDb, applyCustomSessionNames, applyHiddenFromRecents, applyReadState } from './database/db.js';
-import { startScheduledTaskService, stopScheduledTaskService, getRunningTaskCount } from './scheduled-tasks/service.js';
+import { startScheduledTaskService, stopScheduledTaskService, getRunningTaskCount, getRunningScheduledTasks } from './scheduled-tasks/service.js';
 import { onScheduledTaskRunState } from './scheduled-tasks/events.js';
 import { stopAllTapSessions, tapViewerProxyForSession } from './tap.js';
 import { sessionSynchronizerService, initializeSessionsWatcher } from './modules/providers/index.js';
@@ -194,8 +194,9 @@ function broadcastProgress(progress) {
  */
 async function broadcastScheduledTaskRunningCount() {
     try {
-        const count = await getRunningTaskCount();
-        const message = JSON.stringify({ type: 'scheduled_task_running_count', count });
+        // §22: ship the list alongside the count so an open panel updates live.
+        const { count, runs } = await getRunningScheduledTasks();
+        const message = JSON.stringify({ type: 'scheduled_task_running_count', count, runs });
         connectedClients.forEach(client => {
             if (client.readyState === WebSocket.OPEN) {
                 client.send(message);

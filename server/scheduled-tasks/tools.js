@@ -45,6 +45,8 @@ export const SCHEDULE_TOOL_NAMES = [
   'schedule_import',
   // §20 dry-run preview
   'schedule_preview',
+  // §22 running-runs list
+  'schedule_running_list',
   // §10.6 presets
   'schedule_preset_list',
   'schedule_preset_install',
@@ -241,6 +243,14 @@ const conflictPolicyField = z
     "What happens when the task is due while its previous run is still running. 'skip' (default) leaves that occurrence unrun; 'queue' runs it once the current run finishes (newest queued trigger wins); 'replace' aborts the current run's agent and starts this one."
   );
 
+/** §22 multi-project binding: the full project list a task runs against. */
+const projectPathsField = z
+  .array(z.string())
+  .describe(
+    'Projects this task is bound to (at most 20, deduped, order preserved). At each trigger the task starts one run per project, each with that project as its working directory (SCHEDULED_TASK_CWD / SCHEDULED_TASK_PROJECT). Defaults to the session project.'
+  )
+  .optional();
+
 /** §19 tags: short labels used for grouping/filtering; deduped case-insensitively. */
 const tagsField = z
   .array(z.string())
@@ -268,6 +278,7 @@ export function createScheduleTools(options = {}) {
     const result = await management.createTask({
       title: args.title,
       prompt: args.prompt,
+      projectPaths: args.project_paths,
       projectPath: args.project_path || projectPath,
       provider: 'claude',
       command: args.command,
@@ -312,6 +323,7 @@ export function createScheduleTools(options = {}) {
     if (args.params !== undefined) patch.params = args.params;
     if (args.conflict_policy !== undefined) patch.conflictPolicy = args.conflict_policy;
     if (args.tags !== undefined) patch.tags = args.tags;
+    if (args.project_paths !== undefined) patch.projectPaths = args.project_paths;
 
     if (
       patch.title === undefined &&
@@ -321,13 +333,14 @@ export function createScheduleTools(options = {}) {
       patch.params === undefined &&
       patch.conflictPolicy === undefined &&
       patch.tags === undefined &&
+      patch.projectPaths === undefined &&
       !patch.rule
     ) {
       return {
         ok: false,
         code: 'invalid_input',
         message:
-          'Nothing to update: provide title, prompt, params, conflict policy, tags, command, command timeout or one selector',
+          'Nothing to update: provide title, prompt, project_paths, params, conflict policy, tags, command, command timeout or one selector',
       };
     }
     const result = await management.updateTask(args.id, patch, scope);
@@ -344,7 +357,15 @@ export function createScheduleTools(options = {}) {
     const result = await management.runTaskNow(args.id, scope, { params: args.params });
     if (!result.ok) return result;
     if (result.queued) return { queued: true };
+    // §22: a multi-project task starts one run per project.
+    if (Array.isArray(result.runs) && result.runs.length > 1) return { runs: result.runs };
     return { run: result.run };
+  });
+
+  const runningList = guarded('schedule_running_list', async (args) => {
+    const result = await management.listRunningTasks(args.limit);
+    if (!result.ok) return result;
+    return { count: result.count, runs: result.runs };
   });
 
   const preview = guarded('schedule_preview', async (args) => {
@@ -370,6 +391,7 @@ export function createScheduleTools(options = {}) {
       args.id,
       {
         title: args.title,
+        projectPaths: args.project_paths,
         projectPath: args.project_path,
         enabled: args.enabled,
         userId,
@@ -476,6 +498,7 @@ export function createScheduleTools(options = {}) {
         ' Optionally add a script gate via command/command_timeout_seconds: the command runs first and its stdout JSON envelope ({"skip":true,"reason":"..."} | {"prompt":"..."} | {"skip":false}) decides whether the agent runs and with which prompt.' +
         ' Optionally declare params: each run resolves them and exports them to the script gate and the agent as SCHEDULED_TASK_PARAM_<NAME> plus the compact JSON SCHEDULED_TASK_PARAMS.' +
         ' Optionally set conflict_policy (skip | queue | replace) for what happens when the task is due while its previous run is still running; the default skip leaves that occurrence unrun.' +
+        ' Optionally bind the task to several projects with project_paths: at each trigger it starts one run per project, each in that project directory (SCHEDULED_TASK_CWD / SCHEDULED_TASK_PROJECT), and each project follows the conflict policy on its own.' +
         PREDEFINED_VARS_NOTE +
         WORKSPACE_LAYOUT_NOTE,
       {
@@ -485,6 +508,7 @@ export function createScheduleTools(options = {}) {
           .string()
           .describe('Target project path; defaults to the current session project.')
           .optional(),
+        project_paths: projectPathsField,
         params: paramsField,
         conflict_policy: conflictPolicyField.optional(),
         tags: tagsField,
@@ -497,7 +521,7 @@ export function createScheduleTools(options = {}) {
     tool(
       'schedule_list',
       SCHEDULER_PRECEDENCE_NOTE +
-        ' List scheduled tasks for this project (active only unless include_paused is true).' +
+        ' List scheduled tasks for this project (active only unless include_paused is true; a multi-project task is listed once when the session project is one of its projects).' +
         SCHEDULER_STORAGE_NOTE +
         PREDEFINED_VARS_NOTE,
       {
@@ -517,7 +541,7 @@ export function createScheduleTools(options = {}) {
     tool(
       'schedule_update',
       SCHEDULER_PRECEDENCE_NOTE +
-        ' Update a scheduled task title, prompt, params, conflict_policy (skip | queue | replace), script gate (command/command_timeout_seconds) and/or its schedule (at most one selector).' +
+        ' Update a scheduled task title, prompt, project_paths (the full multi-project binding), params, conflict_policy (skip | queue | replace), script gate (command/command_timeout_seconds) and/or its schedule (at most one selector).' +
         ' A command gate runs before the agent and prints a JSON envelope ({"skip":true,"reason":"..."} | {"prompt":"..."} | {"skip":false}); null clears the gate.' +
         ' params replaces the parameter definitions; null removes every parameter.' +
         PREDEFINED_VARS_NOTE,
@@ -528,6 +552,7 @@ export function createScheduleTools(options = {}) {
         params: paramsNullableField,
         conflict_policy: conflictPolicyField.optional(),
         tags: tagsField,
+        project_paths: projectPathsField,
         ...selectorFields,
         ...gateFields,
       },
@@ -579,6 +604,7 @@ export function createScheduleTools(options = {}) {
           .string()
           .describe('Target project path; defaults to the source task project.')
           .optional(),
+        project_paths: projectPathsField,
         enabled: z.boolean().describe('Create the copy enabled. Defaults to false (paused).').optional(),
       },
       copy,
@@ -618,6 +644,17 @@ export function createScheduleTools(options = {}) {
         params: paramOverridesField,
       },
       preview,
+      { annotations: { readOnlyHint: true } }
+    ),
+    tool(
+      'schedule_running_list',
+      SCHEDULER_PRECEDENCE_NOTE +
+        ' List the scheduled-task runs that are executing right now (agent started, still running), newest first, with the owning task title and the project each run targets. The script-gate phase is not "running". Use it to see what the scheduler is doing without opening the UI.' +
+        PREDEFINED_VARS_NOTE,
+      {
+        limit: z.number().describe('Maximum runs to return (1..100, default 50).').optional(),
+      },
+      runningList,
       { annotations: { readOnlyHint: true } }
     ),
     tool(

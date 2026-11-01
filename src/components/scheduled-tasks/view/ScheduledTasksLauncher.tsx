@@ -13,7 +13,7 @@ import ScheduledTasksPanel from './ScheduledTasksPanel';
 export default function ScheduledTasksLauncher() {
   const { t } = useTranslation('scheduledTasks');
   const [isOpen, setIsOpen] = useState(false);
-  const { count: runningCount } = useRunningScheduledTasks();
+  const { count: runningCount, runs: runningRuns } = useRunningScheduledTasks();
   const runningLabel = t('launcher.running', { count: runningCount });
 
   const open = () => setIsOpen(true);
@@ -46,7 +46,11 @@ export default function ScheduledTasksLauncher() {
         </button>
       </div>
 
-      {isOpen && <ScheduledTasksPanel onClose={() => setIsOpen(false)} runningCount={runningCount} />}
+      {isOpen && <ScheduledTasksPanel
+          onClose={() => setIsOpen(false)}
+          runningCount={runningCount}
+          runningRuns={runningRuns}
+        />}
     </>
   );
 }

@@ -241,7 +241,11 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
   -- previous run is still in flight. 'skip' (default) | 'queue' | 'replace'.
   conflict_policy TEXT NOT NULL DEFAULT 'skip',
   -- Tags (docs section 19): JSON string[]; NULL/'' => no tags.
-  tags_json TEXT
+  tags_json TEXT,
+  -- Multi-project binding (docs section 22): JSON string[] of absolute project
+  -- paths. NULL/'' means a single project; project_path stays the primary (first)
+  -- path and every run records the one project it actually targets.
+  project_paths_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due ON scheduled_tasks(enabled, next_run_at);`;
 
@@ -267,7 +271,11 @@ CREATE TABLE IF NOT EXISTS scheduled_task_runs (
   -- Running count (docs section 14.1): ISO-8601 UTC of the moment the runner
   -- decided to call the agent. NULL until then, so gate-phase / skipped /
   -- errored-before-agent runs never count as running.
-  agent_started_at TEXT
+  agent_started_at TEXT,
+  -- Multi-project tasks (docs section 22): the project directory this particular
+  -- run targets. NULL on rows created before the feature; reads as the task's
+  -- project_path.
+  project_path TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_scheduled_task_runs_task ON scheduled_task_runs(task_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_scheduled_task_runs_session ON scheduled_task_runs(session_id);`;
@@ -312,4 +320,3 @@ CREATE TABLE IF NOT EXISTS scheduled_task_preset_tasks (
 );
 CREATE INDEX IF NOT EXISTS idx_scheduled_task_preset_tasks_preset
   ON scheduled_task_preset_tasks(preset_id, position);`;
-

@@ -52,6 +52,7 @@ import { scheduledTasksDb } from '../modules/database/index.js';
 // §15: the run state events the server forwards over /ws (never throws).
 import { emitScheduledTaskRunState } from './events.js';
 import { addProjectManually } from '../projects.js';
+import { normalizeProjectPath } from '../shared/utils.js';
 import { queryClaudeSDK, abortClaudeSDKSession } from '../claude-sdk.js';
 import {
   ensureRunWorkspace,
@@ -86,6 +87,18 @@ class ScheduledTaskTimeoutError extends Error {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+/** §22: compare two project paths the same way the management layer does. */
+function sameProjectPath(a, b) {
+  if (!a || !b) return false;
+  try {
+    const left = normalizeProjectPath(a);
+    const right = normalizeProjectPath(b);
+    return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
+  } catch {
+    return a === b;
+  }
 }
 
 function resolveTimeoutMs(override) {
@@ -350,8 +363,10 @@ export function createTaskRunner(deps = {}) {
   }
 
   async function execute(task, run, resolution) {
-    // Rows are snake_case (docs §3); accept camelCase too for callers that map first.
-    const projectPath = task.project_path ?? task.projectPath ?? null;
+    // §22: the run's own project wins; a legacy row without one falls back to the
+    // task's primary project.
+    const projectPath =
+      run?.project_path ?? run?.projectPath ?? task.project_path ?? task.projectPath ?? null;
     let sessionId = null;
     let errorText = null;
     const chunks = [];
@@ -388,6 +403,8 @@ export function createTaskRunner(deps = {}) {
     // paths can never disagree on a value.
     const predefinedVars = predefinedVarsEnv(task, {
       cwd: projectPath || process.cwd(),
+      // §22: $SCHEDULED_TASK_PROJECT names the project this run targets.
+      projectPath: projectPath || null,
       workspaceVars,
     });
 
@@ -437,7 +454,7 @@ export function createTaskRunner(deps = {}) {
     ensureRunWorkspace(task, run, { effectivePrompt, paramsBlock: extraBlocks });
     // §13.5/§12.6: workspace block, then predefined variables, then Parameters.
     const promptBlocks = [];
-    const workspaceBlock = workspacePromptBlock(task, { runId: run.id });
+    const workspaceBlock = workspacePromptBlock(task, { runId: run.id, projectPath });
     if (workspaceBlock) promptBlocks.push(workspaceBlock);
     promptBlocks.push(predefinedBlock);
     if (paramBlock) promptBlocks.push(paramBlock);
@@ -595,16 +612,22 @@ export function createTaskRunner(deps = {}) {
     return agentResult('success', { sessionId, output: collectedOutput() });
   }
 
-  function startTaskRun(task, { trigger = 'schedule', scheduledFor = null, params: overrides } = {}) {
+  function startTaskRun(
+    task,
+    { trigger = 'schedule', scheduledFor = null, params: overrides, projectPath = null } = {}
+  ) {
     // §12.5 step 5: resolve up front so createRun can store the resolved value
     // map (params_json) for audit/provenance. Resolution is pure and never throws.
     const resolution = resolveParams(taskParamDefs(task), overrides);
+    // §22: a multi-project task fans out one run per project; every run records
+    // the project it targets so CWD/PROJECT and the workspace follow it.
     const run = db.createRun({
       taskId: task.id,
       status: 'running',
       trigger,
       scheduledFor,
       startedAt: nowIso(),
+      projectPath: projectPath ?? task.project_path ?? task.projectPath ?? null,
       paramsJson:
         resolution.ok && resolution.params.length ? JSON.stringify(resolution.values) : null,
     });
@@ -622,10 +645,17 @@ export function createTaskRunner(deps = {}) {
    * run. Best-effort — resolves to the aborted session id, or null when the run
    * is still in the script gate (no session yet) or the abort call failed.
    */
-  async function abortTaskRun(taskId) {
+  async function abortTaskRun(taskId, projectPath = null) {
     try {
-      const runs = db.listRuns(taskId, 5, 0) || [];
-      const running = runs.find((row) => row.status === 'running' && row.session_id);
+      // §22: with a projectPath only that project's run is aborted; the other
+      // runs of a multi-project task are left alone.
+      const runs = db.listRuns(taskId, 20, 0) || [];
+      const running = runs.find(
+        (row) =>
+          row.status === 'running' &&
+          row.session_id &&
+          (!projectPath || !row.project_path || sameProjectPath(row.project_path, projectPath))
+      );
       if (!running) return null;
       await abortSession(running.session_id);
       return running.session_id;
@@ -639,12 +669,13 @@ export function createTaskRunner(deps = {}) {
    * §20: run the script gate only — no run row, no agent call. Returns the
    * decision the next real run would take, so an author can test a gate cheaply.
    */
-  async function previewTask(task, { params: overrides } = {}) {
+  async function previewTask(task, { params: overrides, projectPath: previewProjectPath } = {}) {
     const resolution = resolveParams(taskParamDefs(task), overrides);
     if (!resolution.ok) {
       return { decision: 'error', error: resolution.code, scriptExitCode: null, scriptOutput: null };
     }
-    const projectPath = task.project_path ?? task.projectPath ?? null;
+    // §22: previewing a multi-project task can target one of its projects.
+    const projectPath = previewProjectPath ?? task.project_path ?? task.projectPath ?? null;
     if (typeof task.command !== 'string' || !task.command.trim()) {
       return {
         decision: 'run',
@@ -663,6 +694,7 @@ export function createTaskRunner(deps = {}) {
     const workspaceVars = workspaceEnv(task, { runId: previewRunId });
     const predefinedVars = predefinedVarsEnv(task, {
       cwd: projectPath || process.cwd(),
+      projectPath: projectPath || null,
       workspaceVars,
     });
     const gate = await runScriptGate(task, projectPath, predefinedVars, resolution.env);
@@ -714,8 +746,8 @@ export function startTaskRun(task, options = {}) {
  * @param {string} taskId
  * @returns {Promise<string|null>} the aborted session id, or null.
  */
-export function abortTaskRun(taskId) {
-  return defaultRunner.abortTaskRun(taskId);
+export function abortTaskRun(taskId, projectPath) {
+  return defaultRunner.abortTaskRun(taskId, projectPath);
 }
 
 /**

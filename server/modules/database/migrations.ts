@@ -182,6 +182,12 @@ export function runMigrations(): void {
   // Tags (docs section 19). Additive: existing rows keep NULL, which reads as [].
   addColumnIfMissing(db, 'scheduled_tasks', 'tags_json', 'TEXT');
 
+  // Multi-project tasks (docs section 22). Additive: existing tasks keep NULL and
+  // read as a single-project task (projectPaths = [project_path]); existing runs
+  // keep project_path NULL and read as the task's project_path.
+  addColumnIfMissing(db, 'scheduled_tasks', 'project_paths_json', 'TEXT');
+  addColumnIfMissing(db, 'scheduled_task_runs', 'project_path', 'TEXT');
+
   // Data migrations
   migrateLegacySessionNames(db);
 

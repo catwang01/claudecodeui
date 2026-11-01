@@ -120,6 +120,8 @@ export interface ScheduledTaskRun {
   scriptOutput: string | null;
   /** Effective prompt handed to the agent (static prompt or the script's). */
   promptUsed: string | null;
+  /** docs §22: the project this run targets; null on legacy rows (task project). */
+  projectPath?: string | null;
   /** Resolved parameter values recorded for this run (section 12.4). */
   params?: Record<string, string | number | boolean> | null;
 }
@@ -129,6 +131,8 @@ export interface ScheduledTask {
   title: string;
   prompt: string;
   projectPath: string;
+  /** docs §22: every bound project; legacy rows read as [projectPath]. */
+  projectPaths?: string[];
   provider: string;
   model: string | null;
   /** Optional shell command run before the agent (script gate, section 7). */
@@ -160,6 +164,8 @@ export interface ScheduledTaskInput {
   title: string;
   prompt: string;
   projectPath: string;
+  /** docs §22: the full binding; defaults to [projectPath]. */
+  projectPaths?: string[];
   provider: string;
   model: string | null;
   command: string | null;
@@ -177,6 +183,8 @@ export interface ScheduledTaskPatch {
   title?: string;
   prompt?: string;
   projectPath?: string;
+  /** docs §22: replaces the whole binding (projectPath collapses it to one). */
+  projectPaths?: string[];
   model?: string | null;
   enabled?: boolean;
   rule?: TaskRule;
@@ -280,6 +288,8 @@ export interface CopyTaskInput {
   title?: string;
   /** Target project; defaults to the source task's project. */
   projectPath?: string;
+  /** docs §22: target binding; defaults to the source task's binding. */
+  projectPaths?: string[];
   /** Created paused unless true. */
   enabled?: boolean;
 }
@@ -289,6 +299,8 @@ export interface TaskExportPayload {
   title: string;
   prompt: string;
   projectPath?: string;
+  /** docs §22: the whole binding, when there is more than one project. */
+  projectPaths?: string[];
   provider?: string;
   model?: string | null;
   command?: string | null;
@@ -310,6 +322,8 @@ export interface ImportTaskInput {
   task: TaskExportPayload;
   /** Target project; defaults to the envelope's projectPath. */
   projectPath?: string;
+  /** docs §22: target binding; defaults to the envelope's projectPaths. */
+  projectPaths?: string[];
   enabled?: boolean;
 }
 
@@ -348,7 +362,28 @@ export interface UpcomingOccurrence {
   taskId: string;
   title: string;
   projectPath: string | null;
+  /** docs §22: every bound project of the task. */
+  projectPaths?: string[];
   tags?: string[];
   at: string;
 }
 
+/**
+ * One live running run from GET /running (section 22): the run joined with the
+ * task that owns it, so the panel can list title + project without an extra
+ * lookup.
+ */
+export interface RunningScheduledTaskRun {
+  id: string;
+  taskId: string;
+  taskTitle: string | null;
+  projectPath: string | null;
+  projectPaths?: string[];
+  status: RunStatus;
+  trigger: RunTrigger;
+  scheduledFor: string | null;
+  startedAt: string | null;
+  agentStartedAt: string | null;
+  sessionId: string | null;
+  error: string | null;
+}

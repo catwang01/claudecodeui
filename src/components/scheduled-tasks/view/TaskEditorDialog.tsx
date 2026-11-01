@@ -17,6 +17,8 @@ export type TaskEditorValues = {
   title: string;
   prompt: string;
   projectPath: string;
+  /** docs §22: the full project binding; projectPath is the first entry. */
+  projectPaths: string[];
   model: string | null;
   /** Script gate command; null clears it. */
   command: string | null;
@@ -54,7 +56,11 @@ export default function TaskEditorDialog({ task, onClose, onSubmit }: TaskEditor
 
   const [title, setTitle] = useState(task?.title ?? '');
   const [prompt, setPrompt] = useState(task?.prompt ?? '');
-  const [projectPath, setProjectPath] = useState(task?.projectPath ?? '');
+  // §22: a task can be bound to several projects; the editor collects a list.
+  const [projectPaths, setProjectPaths] = useState<string[]>(() => {
+    if (task?.projectPaths?.length) return task.projectPaths;
+    return task?.projectPath ? [task.projectPath] : [];
+  });
   const [model, setModel] = useState(task?.model ?? '');
   const [command, setCommand] = useState(task?.command ?? '');
   const [commandTimeout, setCommandTimeout] = useState(
@@ -89,11 +95,19 @@ export default function TaskEditorDialog({ task, onClose, onSubmit }: TaskEditor
 
   const options = useMemo(() => {
     const list = [...projectOptions];
-    if (projectPath && !list.some((option) => option.value === projectPath)) {
-      list.unshift({ value: projectPath, label: projectPath });
+    for (const path of projectPaths) {
+      if (path && !list.some((option) => option.value === path)) {
+        list.unshift({ value: path, label: path });
+      }
     }
     return list;
-  }, [projectOptions, projectPath]);
+  }, [projectOptions, projectPaths]);
+
+  const toggleProject = (value: string) => {
+    setProjectPaths((current) =>
+      current.includes(value) ? current.filter((path) => path !== value) : [...current, value],
+    );
+  };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -108,8 +122,8 @@ export default function TaskEditorDialog({ task, onClose, onSubmit }: TaskEditor
       setValidationKey('editor.errors.prompt');
       return;
     }
-    if (!projectPath.trim()) {
-      setValidationKey('editor.errors.project');
+    if (projectPaths.length === 0) {
+      setValidationKey('editor.errors.projects');
       return;
     }
 
@@ -145,7 +159,8 @@ export default function TaskEditorDialog({ task, onClose, onSubmit }: TaskEditor
       await onSubmit({
         title: title.trim(),
         prompt: prompt.trim(),
-        projectPath: projectPath.trim(),
+        projectPath: projectPaths[0] ?? '',
+        projectPaths,
         model: model.trim() ? model.trim() : null,
         command: trimmedCommand ? trimmedCommand : null,
         commandTimeoutSeconds,
@@ -214,20 +229,44 @@ export default function TaskEditorDialog({ task, onClose, onSubmit }: TaskEditor
             />
           </FormField>
 
-          <FormField label={t('editor.fields.project')} htmlFor="scheduled-task-project" hint={projectsError ? t('errors.projects') : undefined}>
-            <select
-              id="scheduled-task-project"
-              className={controlClassName}
-              value={projectPath}
-              onChange={(event) => setProjectPath(event.target.value)}
+          <FormField
+            label={t('editor.fields.projects')}
+            htmlFor="scheduled-task-projects"
+            hint={projectsError ? t('errors.projects') : t('editor.fields.projectsHint')}
+          >
+            <div
+              id="scheduled-task-projects"
+              role="group"
+              aria-label={t('editor.fields.projects')}
+              className="max-h-44 space-y-1 overflow-y-auto rounded-md border border-border p-1"
             >
-              <option value="">{t('editor.fields.projectPlaceholder')}</option>
+              {options.length === 0 && (
+                <p className="px-2 py-1 text-xs text-muted-foreground">
+                  {t('editor.fields.projectPlaceholder')}
+                </p>
+              )}
               {options.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
+                <label
+                  key={option.value}
+                  className="flex cursor-pointer items-start gap-2 rounded px-2 py-1 transition-colors hover:bg-accent/40"
+                >
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-4 w-4 accent-primary"
+                    checked={projectPaths.includes(option.value)}
+                    onChange={() => toggleProject(option.value)}
+                  />
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm text-foreground" title={option.value}>
+                      {option.label}
+                    </span>
+                  </span>
+                </label>
               ))}
-            </select>
+            </div>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              {t('editor.fields.projectsSelected', { count: projectPaths.length })}
+            </p>
           </FormField>
 
           <FormField label={t('editor.fields.model')} htmlFor="scheduled-task-model">

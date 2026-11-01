@@ -41,6 +41,7 @@ function makeRepo() {
         preset_task_id: input.presetTaskId ?? null,
         conflict_policy: input.conflictPolicy ?? 'skip',
         tags_json: input.tagsJson ?? null,
+        project_paths_json: input.projectPathsJson ?? null,
         created_at: stamp(),
         updated_at: stamp(),
       };
@@ -69,6 +70,7 @@ function makeRepo() {
         presetTaskId: 'preset_task_id',
         conflictPolicy: 'conflict_policy',
         tagsJson: 'tags_json',
+        projectPathsJson: 'project_paths_json',
       };
       for (const [key, value] of Object.entries(patch)) {
         row[columns[key] || key] = key === 'enabled' ? (value ? 1 : 0) : value;
@@ -470,7 +472,7 @@ describe('conflict policy (§17)', () => {
 
     const result = await management.runTaskNow(created.task.id);
 
-    expect(result).toEqual({ ok: true, queued: true, run: null });
+    expect(result).toEqual({ ok: true, queued: true, run: null, runs: [] });
     expect(runNow).toHaveBeenCalledWith(created.task.id);
   });
 });
@@ -533,3 +535,112 @@ describe('preview and upcoming (§20, §21)', () => {
 });
 
 
+
+
+describe('multi-project binding (§22)', () => {
+  it('stores the full binding and keeps the first as projectPath', async () => {
+    const { repo, management } = setup();
+    const result = await management.createTask({
+      ...baseTask,
+      projectPaths: ['/tmp/a', '/tmp/b', ' /tmp/a '],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.task.projectPaths).toEqual(['/tmp/a', '/tmp/b']);
+    expect(result.task.projectPath).toBe('/tmp/a');
+    expect(repo._tasks.get(result.task.id).project_paths_json).toBe(
+      JSON.stringify(['/tmp/a', '/tmp/b'])
+    );
+  });
+
+  it('reads legacy rows as a one-element binding and rejects an empty list', async () => {
+    const { management } = setup();
+    const created = await management.createTask(baseTask);
+    expect(created.task.projectPaths).toEqual([PROJECT]);
+
+    const bad = await management.createTask({ ...baseTask, projectPaths: [] });
+    expect(bad).toMatchObject({ ok: false, code: 'invalid_input' });
+  });
+
+  it('is in scope from any bound project', async () => {
+    const { management } = setup();
+    const created = await management.createTask({ ...baseTask, projectPaths: ['/tmp/a', '/tmp/b'] });
+
+    await expect(management.getTask(created.task.id, { projectPath: '/tmp/b' })).resolves.toMatchObject({
+      ok: true,
+    });
+    await expect(management.getTask(created.task.id, { projectPath: '/tmp/c' })).resolves.toMatchObject({
+      ok: false,
+      code: 'not_found',
+    });
+  });
+
+  it('replaces the whole binding on update and collapses a single projectPath', async () => {
+    const { management } = setup();
+    const created = await management.createTask({ ...baseTask, projectPaths: ['/tmp/a', '/tmp/b'] });
+
+    const updated = await management.updateTask(created.task.id, {
+      projectPaths: ['/tmp/c', '/tmp/d'],
+    });
+    expect(updated.task.projectPaths).toEqual(['/tmp/c', '/tmp/d']);
+    expect(updated.task.projectPath).toBe('/tmp/c');
+
+    const collapsed = await management.updateTask(created.task.id, { projectPath: '/tmp/e' });
+    expect(collapsed.task.projectPaths).toEqual(['/tmp/e']);
+    expect(collapsed.task.projectPath).toBe('/tmp/e');
+  });
+
+  it('carries the binding through copy, export and import', async () => {
+    const { management } = setup();
+    const created = await management.createTask({ ...baseTask, projectPaths: ['/tmp/a', '/tmp/b'] });
+
+    const copied = await management.copyTask(created.task.id, {});
+    expect(copied.task.projectPaths).toEqual(['/tmp/a', '/tmp/b']);
+
+    const exported = await management.exportTask(created.task.id);
+    expect(exported.task.projectPaths).toEqual(['/tmp/a', '/tmp/b']);
+
+    const imported = await management.importTask(exported.task);
+    expect(imported.task.projectPaths).toEqual(['/tmp/a', '/tmp/b']);
+  });
+});
+
+describe('running runs list (§22)', () => {
+  it('maps the repository rows into running run views', async () => {
+    const { repo, management } = setup();
+    repo.countRunningAgentRuns = vi.fn(() => 1);
+    repo.listRunningAgentRuns = vi.fn(() => [
+      {
+        id: 'run-1',
+        task_id: 't1',
+        status: 'running',
+        trigger: 'schedule',
+        scheduled_for: iso(NOW),
+        started_at: iso(NOW),
+        agent_started_at: iso(NOW),
+        session_id: 'sess-1',
+        project_path: '/tmp/a',
+        task_title: 'Task A',
+        task_project_path: '/tmp/a',
+        task_project_paths_json: JSON.stringify(['/tmp/a', '/tmp/b']),
+      },
+    ]);
+
+    const result = await management.listRunningTasks(10);
+
+    expect(result).toMatchObject({ ok: true, count: 1 });
+    expect(result.runs[0]).toMatchObject({
+      id: 'run-1',
+      taskId: 't1',
+      taskTitle: 'Task A',
+      projectPath: '/tmp/a',
+      sessionId: 'sess-1',
+    });
+    expect(repo.listRunningAgentRuns).toHaveBeenCalledWith(10);
+  });
+
+  it('reads as an empty list when the repository cannot list', async () => {
+    const { management } = setup();
+    await expect(management.listRunningTasks()).resolves.toEqual({ ok: true, count: 0, runs: [] });
+  });
+});

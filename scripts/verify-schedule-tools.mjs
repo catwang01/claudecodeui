@@ -49,22 +49,16 @@ async function check(name, fn) {
   }
 }
 
-const EXPECTED_TOOLS = [
-  'schedule_create',
-  'schedule_list',
-  'schedule_get',
-  'schedule_update',
-  'schedule_delete',
-  'schedule_run',
-  'schedule_pause',
-  'schedule_resume',
-];
+// Populated from the module's own contract list inside main(): tools.js owns
+// the authoritative name list, so this check cannot go stale as tools are added.
+let EXPECTED_TOOLS = [];
 
 async function main() {
   console.log('[tools-e2e] temp dir: ' + TMP);
 
   await import(url('server/database/db.js')); // runs migrations on the temp DB
-  const { createScheduleTools } = await import(url('server/scheduled-tasks/tools.js'));
+  const { createScheduleTools, SCHEDULE_TOOL_NAMES } = await import(url('server/scheduled-tasks/tools.js'));
+  EXPECTED_TOOLS = [...SCHEDULE_TOOL_NAMES];
   const { scheduledTasksDb } = await import(url('server/modules/database/index.js'));
   const sdk = await import(url('server/claude-sdk.js'));
 
@@ -79,7 +73,7 @@ async function main() {
   };
 
   // ── registration + wiring ─────────────────────────────────────────────────
-  await check('all eight tools are exported with descriptions and schemas', () => {
+  await check('every schedule_* tool is exported with descriptions and schemas', () => {
     const names = tools.map((t) => t.name).sort();
     assert(JSON.stringify(names) === JSON.stringify([...EXPECTED_TOOLS].sort()), 'unexpected tool set: ' + names.join(','));
     for (const t of tools) {

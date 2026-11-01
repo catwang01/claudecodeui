@@ -9,7 +9,14 @@ import { cn } from '../../../lib/utils';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useScheduledTasks } from '../hooks/useScheduledTasks';
 import { scheduledTasksApi } from '../api';
-import type { ImportTaskInput, ScheduledTask, ScheduledTaskInput, TaskPreview, TaskStatusFilter } from '../types';
+import type {
+  ImportTaskInput,
+  RunningScheduledTaskRun,
+  ScheduledTask,
+  ScheduledTaskInput,
+  TaskPreview,
+  TaskStatusFilter,
+} from '../types';
 import { taskParams } from '../utils/params';
 import ConfirmDialog from './ConfirmDialog';
 import CopyTaskDialog from './CopyTaskDialog';
@@ -19,6 +26,7 @@ import UpcomingSection from './UpcomingSection';
 import { controlClassName } from './FormControls';
 import PresetsSection from './PresetsSection';
 import RunningCountBadge from './RunningCountBadge';
+import RunningRunsSection from './RunningRunsSection';
 import RunWithParamsDialog from './RunWithParamsDialog';
 import ScheduledTaskCard from './ScheduledTaskCard';
 import TaskEditorDialog from './TaskEditorDialog';
@@ -31,9 +39,11 @@ type ScheduledTasksPanelProps = {
    * callers/tests render the panel unchanged; 0 hides the badge.
    */
   runningCount?: number;
+  /** docs §22: the live running runs rendered by the Running tab. */
+  runningRuns?: RunningScheduledTaskRun[];
 };
 
-type PanelTab = 'tasks' | 'calendar' | 'presets';
+type PanelTab = 'tasks' | 'running' | 'calendar' | 'presets';
 
 /** A filesystem-safe name for a downloaded task envelope. */
 function exportFileName(title: string): string {
@@ -46,9 +56,13 @@ function exportFileName(title: string): string {
 }
 
 const STATUS_FILTERS: TaskStatusFilter[] = ['all', 'enabled', 'paused'];
-const PANEL_TABS: PanelTab[] = ['tasks', 'calendar', 'presets'];
+const PANEL_TABS: PanelTab[] = ['tasks', 'running', 'calendar', 'presets'];
 
-export default function ScheduledTasksPanel({ onClose, runningCount = 0 }: ScheduledTasksPanelProps) {
+export default function ScheduledTasksPanel({
+  onClose,
+  runningCount = 0,
+  runningRuns = [],
+}: ScheduledTasksPanelProps) {
   const { t } = useTranslation('scheduledTasks');
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<PanelTab>('tasks');
@@ -197,6 +211,7 @@ export default function ScheduledTasksPanel({ onClose, runningCount = 0 }: Sched
         title: values.title,
         prompt: values.prompt,
         projectPath: values.projectPath,
+        projectPaths: values.projectPaths,
         model: values.model,
         command: values.command,
         commandTimeoutSeconds: values.commandTimeoutSeconds,
@@ -210,6 +225,7 @@ export default function ScheduledTasksPanel({ onClose, runningCount = 0 }: Sched
         title: values.title,
         prompt: values.prompt,
         projectPath: values.projectPath,
+        projectPaths: values.projectPaths,
         provider: 'claude',
         model: values.model,
         command: values.command,
@@ -441,6 +457,14 @@ export default function ScheduledTasksPanel({ onClose, runningCount = 0 }: Sched
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
           {activeTab === 'presets' ? (
             <PresetsSection onTasksChanged={refresh} onOverlayChange={setIsPresetOverlayOpen} />
+          ) : activeTab === 'running' ? (
+            <RunningRunsSection
+              runs={runningRuns}
+              onOpenSession={(sessionId) => {
+                onClose();
+                navigate('/session/' + sessionId);
+              }}
+            />
           ) : activeTab === 'calendar' ? (
             <UpcomingSection />
           ) : (

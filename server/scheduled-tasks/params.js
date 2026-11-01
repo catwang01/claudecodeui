@@ -438,15 +438,19 @@ export function paramEnvFromValues(params, values) {
  * @param {{cwd?: string}} [options] the directory this run executes in
  * @returns {Record<string, string>} always the three §13.1 variables
  */
-export function builtinParamsEnv(task, { cwd } = {}) {
+export function builtinParamsEnv(task, { cwd, projectPath: projectPathOverride } = {}) {
   const source = isPlainObject(task) ? task : {};
   const title = typeof source.title === 'string' ? source.title : '';
+  // §22: a multi-project run overrides the task's primary project with the one
+  // this run targets, so $SCHEDULED_TASK_PROJECT always names the run's project.
   const projectPath =
-    typeof source.project_path === 'string'
-      ? source.project_path
-      : typeof source.projectPath === 'string'
-        ? source.projectPath
-        : '';
+    typeof projectPathOverride === 'string' && projectPathOverride
+      ? projectPathOverride
+      : typeof source.project_path === 'string'
+        ? source.project_path
+        : typeof source.projectPath === 'string'
+          ? source.projectPath
+          : '';
   const runCwd = typeof cwd === 'string' && cwd ? cwd : projectPath;
   return {
     SCHEDULED_TASK_TITLE: title,
@@ -468,9 +472,9 @@ export function builtinParamsEnv(task, { cwd } = {}) {
  * @param {{cwd?: string, workspaceVars?: Record<string, string>|null}} [options]
  * @returns {Record<string, string>}
  */
-export function predefinedVarsEnv(task, { cwd, workspaceVars } = {}) {
+export function predefinedVarsEnv(task, { cwd, projectPath, workspaceVars } = {}) {
   const source = isPlainObject(task) ? task : {};
-  const values = builtinParamsEnv(source, { cwd });
+  const values = builtinParamsEnv(source, { cwd, projectPath });
   const id = source.id;
   for (const entry of PREDEFINED_TASK_VARS) {
     if (entry.name === 'ID') {
@@ -615,4 +619,3 @@ export function paramsPromptBlock(params, values) {
   );
   return lines.join('\n');
 }
-

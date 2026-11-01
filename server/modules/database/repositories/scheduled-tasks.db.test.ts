@@ -1060,7 +1060,7 @@ describe('agent-started tracking (docs section 14.1)', () => {
     scheduledTasksDb.finishRun(run.id, { status: 'success' });
   });
 
-  it('counts distinct tasks whose agent-started run is in flight', () => {
+  it('counts and lists the agent-started runs in flight', () => {
     const task = makeTask({ title: 'Running agent ' + tag() });
     const other = makeTask({ title: 'Other agent ' + tag() });
     const before = scheduledTasksDb.countRunningAgentRuns();
@@ -1073,23 +1073,66 @@ describe('agent-started tracking (docs section 14.1)', () => {
     // A skipped run whose agent never started is not counted either.
     scheduledTasksDb.finishRun(gateRun.id, { status: 'skipped' });
 
-    const agentRun = scheduledTasksDb.createRun({ taskId: task.id, status: 'running', trigger: 'schedule' });
+    const agentRun = scheduledTasksDb.createRun({
+      taskId: task.id,
+      status: 'running',
+      trigger: 'schedule',
+      projectPath: '/tmp/one',
+    });
     scheduledTasksDb.markRunAgentStarted(agentRun.id);
     expect(scheduledTasksDb.countRunningAgentRuns()).toBe(before + 1);
+
+    // §22: the running list joins the task title and keeps the run's project.
+    const listed = must(scheduledTasksDb.listRunningAgentRuns(10).find((row) => row.id === agentRun.id));
+    expect(listed.project_path).toBe('/tmp/one');
+    expect(listed.task_title).toBe(task.title);
 
     scheduledTasksDb.finishRun(agentRun.id, { status: 'success' });
     expect(scheduledTasksDb.countRunningAgentRuns()).toBe(before);
 
-    // Two in-flight runs of one task collapse to a single task.
-    const first = scheduledTasksDb.createRun({ taskId: other.id, status: 'running', trigger: 'schedule' });
-    const second = scheduledTasksDb.createRun({ taskId: other.id, status: 'running', trigger: 'schedule' });
+    // §22: a multi-project task contributes one running run per project.
+    const first = scheduledTasksDb.createRun({
+      taskId: other.id,
+      status: 'running',
+      trigger: 'schedule',
+      projectPath: '/tmp/a',
+    });
+    const second = scheduledTasksDb.createRun({
+      taskId: other.id,
+      status: 'running',
+      trigger: 'schedule',
+      projectPath: '/tmp/b',
+    });
     scheduledTasksDb.markRunAgentStarted(first.id);
     scheduledTasksDb.markRunAgentStarted(second.id);
-    expect(scheduledTasksDb.countRunningAgentRuns()).toBe(before + 1);
+    expect(scheduledTasksDb.countRunningAgentRuns()).toBe(before + 2);
 
     scheduledTasksDb.finishRun(first.id, { status: 'error' });
     scheduledTasksDb.finishRun(second.id, { status: 'error' });
     expect(scheduledTasksDb.countRunningAgentRuns()).toBe(before);
+  });
+
+  it('round-trips project_paths_json on tasks and project_path on runs (docs section 22)', () => {
+    const task = makeTask({
+      title: 'Multi project ' + tag(),
+      projectPath: '/tmp/primary',
+      projectPathsJson: JSON.stringify(['/tmp/primary', '/tmp/secondary']),
+    });
+    expect(must(scheduledTasksDb.getTask(task.id)).project_paths_json).toBe(
+      JSON.stringify(['/tmp/primary', '/tmp/secondary'])
+    );
+    expect(
+      must(scheduledTasksDb.updateTask(task.id, { projectPathsJson: JSON.stringify(['/tmp/x']) })).project_paths_json
+    ).toBe(JSON.stringify(['/tmp/x']));
+    expect(must(scheduledTasksDb.updateTask(task.id, { projectPathsJson: null })).project_paths_json).toBeNull();
+
+    const run = scheduledTasksDb.createRun({
+      taskId: task.id,
+      status: 'running',
+      trigger: 'manual',
+      projectPath: '/tmp/secondary',
+    });
+    expect(run.project_path).toBe('/tmp/secondary');
   });
 
   it('fails every interrupted run and reports how many', () => {
@@ -1121,4 +1164,3 @@ describe('agent-started tracking (docs section 14.1)', () => {
     expect(scheduledTasksDb.countRunningAgentRuns()).toBe(0);
   });
 });
-

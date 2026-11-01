@@ -882,7 +882,7 @@ places — the agent prompt block, the MCP tool descriptions and this section:
 |---|---|---|---|---|---|
 | builtin | `TITLE` | `SCHEDULED_TASK_TITLE` | name of the task | yes | yes |
 | builtin | `CWD` | `SCHEDULED_TASK_CWD` | working directory of this run | yes | yes |
-| builtin | `PROJECT` | `SCHEDULED_TASK_PROJECT` | absolute path of the project root that owns the task | yes | yes |
+| builtin | `PROJECT` | `SCHEDULED_TASK_PROJECT` | the project this run targets (for a multi-project task, one of its bound projects — §22) | yes | yes |
 | workspace | `ID` | `SCHEDULED_TASK_ID` | scheduled-task row id, stable across its runs — **not** a chat session id | yes | workspace block text |
 | workspace | `DIR` | `SCHEDULED_TASK_DIR` | root of the workspace tree of this task | yes | workspace block text |
 | workspace | `STATE_DIR` | `SCHEDULED_TASK_STATE_DIR` | durable per-task state (survives across runs) | yes | workspace block text |
@@ -1042,12 +1042,14 @@ failInterruptedRuns(finishedAt: string, error: string): number    // status='run
 
 | Method | Path | Response |
 |---|---|---|
-| GET | `/running` | `{ count: number }` |
+| GET | `/running` | `{ count: number, runs: RunningRun[] }` (§22) |
 
 - 注册在 `GET /:id` **之前**（同 `/presets`，否则 `running` 会被当成 task id）。
-- `count = countRunningAgentRuns()`：agent 已启动且 run 仍在跑的**任务**数（DISTINCT `task_id`；
-  一个任务同时最多一条 run）。计数是全局的，不按 user 过滤（scheduler 只有一个，任何用户都能看到它）。
-- 走 `management.countRunningTasks()`（`{ ok: true, count }`）保证 REST 与其它调用方共用同一视图层。
+- `count = countRunningAgentRuns()`：agent 已启动且 run 仍在跑的 **run** 数（§22 起为 `COUNT(*)`；
+  一个多项目任务每个项目一条 run，因此 count 等于 running 列表长度）。计数是全局的，不按 user
+  过滤（scheduler 只有一个，任何用户都能看到它）。
+- `management.listRunningTasks(limit)`（`{ ok: true, count, runs }`）是 §22 加入的列表视图；
+  `countRunningTasks()` 保留为纯计数，两者共用同一视图层。
 - Run JSON 增加 `agentStartedAt`（camelCase，`runRowToJson`）。
 
 ### 14.4 Frontend
@@ -1355,3 +1357,104 @@ i18n：`editor.fields.tags*`、`tagFilter.placeholder`。
 - `tools.test.js` / routes：`tags` 往返与 `?tag=` 过滤、`schedule_preview`、`GET /upcoming`。
 - `scheduled-tasks.db.test.ts`：`tags_json` 建/清/旧行 NULL；`conflict_policy` 沿用。
 - 全量 `npx vitest run`（Node 22）、`npm run typecheck`、`npm run lint`。
+
+## 22. Multi-project tasks + running-runs list（第十六轮）
+
+两个需求：(a) 一个任务可以绑定**多个 project**（多选），到点时对每个 project 各起一次运行，把各自的
+目录传进去；(b) 前端要有**正在 running 的 scheduled task run 的列表**，不再只有一个计数。
+
+### 22.1 Model
+
+- `ScheduledTask.projectPaths: string[]`：任务的完整绑定，至少一个、去重、顺序保留（最多 20 个）。
+  `projectPath` 保留为**主项目**（`projectPaths[0]`），旧字段语义不变；旧行（无 `project_paths_json`）
+  读作 `[projectPath]`。
+- 每次触发（定时或手动）对**每个**绑定项目各起一条 run；每条 run 记录自己 target 的项目
+  （`ScheduledTaskRun.projectPath`，旧行 `null`，读取时回退到任务主项目）。因此
+  `SCHEDULED_TASK_CWD` / `SCHEDULED_TASK_PROJECT`、脚本门控的 cwd、agent 的 cwd、任务工作区的
+  run 目录、以及 run history 都指向**这一条 run 的项目**。
+- 冲突策略（§17）按 **(任务, 项目)** 独立判定：in-flight / queue / replace 的 key 是
+  `taskId::projectPath`。单项目任务因此与 §17 完全一致（只有一个 key）；多项目任务可以让不同项目
+  并发，各自独立 skip/queue/replace。
+- 定时触发时 **next_run_at 只推进一次**（每条 run 不再各自推进），一次 occurrence 的 fan-out 不会把
+  任务跳到未来的多次。手动运行不写 `next_run_at`。这也顺带修正了 skip 语义：任务在运行中再次到点时，
+  该 occurrence 被丢弃并推进到下一跳，而不是等运行结束后迟到地补跑。
+- 作用域（§6 / §10）：一个任务只要 session cwd 命中它的**任意**一个绑定项目就可见、可改。
+- 预设（§10）仍是单项目安装；`installPreset` 物化的任务绑定到安装目标这一个项目。
+
+### 22.2 Database（additive）
+
+```sql
+ALTER TABLE scheduled_tasks ADD COLUMN project_paths_json TEXT;   -- JSON string[]；NULL/'' => [project_path]
+ALTER TABLE scheduled_task_runs ADD COLUMN project_path TEXT;     -- 本次 run target 的项目；NULL => 任务主项目
+```
+
+`schema.ts` 的 `CREATE TABLE` 同步补列；旧库走 `addColumnIfMissing`，旧行行为不变。
+
+仓库新增 `listRunningAgentRuns(limit = 50): ScheduledTaskRunningRunRow[]`：`r.*` JOIN `scheduled_tasks t`，
+带出 `task_title` / `task_project_path` / `task_project_paths_json`，`WHERE r.status='running' AND
+r.agent_started_at IS NOT NULL`，按 `agent_started_at DESC`。`countRunningAgentRuns()` 由
+`COUNT(DISTINCT task_id)` 改为 `COUNT(*)`：现在统计 **run** 数，与 running 列表长度一致。
+`createTask` / `updateTask` / `createRun` 接受 `projectPathsJson` / `projectPath`。
+
+### 22.3 模块契约
+
+- `management.js`：`taskRowToJson` 增 `projectPaths`；`runRowToJson` 增 `projectPath`；
+  `runningRunToJson`（新）序列化 running run（含 `taskTitle`、`projectPath`、`projectPaths`）；
+  `projectPathsOf`（导出，纯）与 `checkProjectPaths`（非空数组、去重、上限 20）；
+  `createTask` / `updateTask` 接受 `projectPaths`（`projectPath` 仍等价于 `[projectPath]` 并覆盖整个绑定）；
+  `copyTask` / `exportTask` / `importTask` 携带绑定（导入优先级：`input.projectPaths` > `input.projectPath`
+  > envelope `projectPaths` > envelope `projectPath` > scope）；`inScope` 改为命中任一项目；
+  `listUpcoming` 对多项目任务按项目展开；新增 `listRunningTasks(limit)` -> `{ ok:true, count, runs }`。
+- `params.js`：`builtinParamsEnv` / `predefinedVarsEnv` 接受 per-run `projectPath` 覆盖，使
+  `$SCHEDULED_TASK_PROJECT` 命名**本次 run 的项目**。
+- `workspace.js`：`task.json` 在绑定 > 1 时记录 `projectPaths`；run 的 `run.json.projectPath`、
+  workspace prompt block 使用本次 run 的项目；多项目时 block 列出全部绑定并说明「每个项目一次 run」。
+- `runner.js`：`startTaskRun(task, { ..., projectPath })` 把项目写进 run 行；`execute` 以 run 的
+  `project_path` 为准（回退任务主项目）；`abortTaskRun(taskId, projectPath)` 只中止该项目的 run；
+  `previewTask(task, { params, projectPath })` 可预览指定项目。
+- `service.js`：in-flight / queue / generation / pendingLaunches 全部按 `keyOf(taskId, projectPath)`；
+  `tick()` 先对每条 due 任务 `computeNextFor` 并 `advanceTask` 一次，再对每个项目按各自 policy
+  `launch`；`runNow` 默认对全部绑定项目 fan-out（`options.projectPath` 可只跑一个），返回
+  `{ run, runs }` / `{ queued:true }` / `{ error:'in_flight' }`；新增 `runningTasks(limit)`（lazy 复用
+  management 视图）与模块级 `getRunningScheduledTasks()`。
+- REST：`POST /`、`PATCH /:id`、`POST /:id/copy` 接受 `projectPaths`；`GET /running?limit=` 返回
+  `{ count, runs }`；`POST /:id/run` 在 fan-out > 1 时返回 `{ run, runs }`。
+- WebSocket（§15）：`scheduled_task_running_count` 消息增加 `runs`；旧客户端仍只读 `count`，新 hook
+  在消息缺 `runs` 时自动回查。
+- Agent tools：`schedule_create` / `schedule_update` / `schedule_copy` 接受 `project_paths`；新增
+  `schedule_running_list`（`limit` 可选）返回 `{ count, runs }`；`schedule_run` 在多项目时返回 `{ runs }`。
+
+### 22.4 Frontend
+
+- 类型 / `api.ts`：`ScheduledTask.projectPaths`、`ScheduledTaskRun.projectPath`、
+  `RunningScheduledTaskRun`、`scheduledTasksApi.running()` -> `{ count, runs }`。
+- `useRunningScheduledTasks` 返回 `{ count, runs, refresh }`；WS 推送同时更新列表，缺 `runs` 时回查。
+- 任务编辑器把单项目下拉换成**复选框多选**（复用 CustomPresetDialog 的 pattern），至少选一个；提交
+  `projectPaths`（`projectPath` 取首项）。
+- 任务卡片显示首个项目 + `+N` 徽标（tooltip 列出全部）。
+- 复制对话框对多项目任务默认保留整个绑定（取消勾选 `copyDialog.keepProjects` 才只复制到所选单个项目）。
+- 面板新增 **Running** 标签页（`RunningRunsSection`）：列出当前真正在跑的 run（任务、项目、触发方式、
+  开始时间、门控/运行中、会话可打开），空态友好。
+- run history 每行显示本次 run 的项目。
+- i18n：`tabs.running`、`runningRuns.*`、`editor.fields.projects*`、`editor.errors.projects`、
+  `runs.project`、`card.moreProjects`（en + zh-CN）。
+
+### 22.5 Write scopes
+
+| Owner | Files |
+|---|---|
+| backend | `server/modules/database/**`、`server/scheduled-tasks/**`、`server/routes/scheduled-tasks.js` (+test)、`server/claude-sdk.js` |
+| frontend | `src/components/scheduled-tasks/**`、`src/i18n/locales/{en,zh-CN}/scheduledTasks.json` |
+| verify | `scripts/verify-scheduled-task-multi-project.mjs`、`scripts/verify-scheduled-tasks-running-count.mjs`、`scripts/verify-schedule-tools.mjs` |
+| lead | `docs/scheduled-tasks.md` |
+
+### 22.6 Acceptance
+
+`npx tsx --tsconfig server/tsconfig.json scripts/verify-scheduled-task-multi-project.mjs`：绑定往返
+（`projectPath` = 首项）、任一项目可见 / 第三项目 `not_found`、copy/export/import 携带绑定、running
+列表保留每 run 的项目与任务标题、due 多项目任务 fan-out 出两条各自项目的 run（dry-run 均 success 且
+`agent_started_at` 非空）、全部落定后列表归零。
+
+另：`verify-scheduled-tasks-running-count.mjs` 的对抗用例改为「一任务两条 run 计 2」；
+`verify-schedule-tools.mjs` 的期望工具集改为从 `SCHEDULE_TOOL_NAMES` 取（不再硬编码 8 个）。全量
+`npx vitest run`（Node 22；仅 base 上既有的 2 个 copilot 失败）、`npm run typecheck`、`npm run lint`。

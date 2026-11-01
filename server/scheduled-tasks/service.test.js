@@ -111,6 +111,7 @@ describe('createScheduler', () => {
     expect(runner.startTaskRun).toHaveBeenCalledWith(task, {
       trigger: 'schedule',
       scheduledFor: task.next_run_at,
+      projectPath: task.project_path,
     });
 
     expect(repo.advanceTask).toHaveBeenCalledTimes(2);
@@ -180,7 +181,7 @@ describe('createScheduler', () => {
     await scheduler.tick();
     await flush();
     expect(runner.startTaskRun).toHaveBeenCalledTimes(1);
-    expect(scheduler.state().inFlight).toEqual(['t1']);
+    expect(scheduler.state().inFlight).toEqual(['t1::/tmp/scheduled-project']);
 
     await scheduler.tick();
     await flush();
@@ -196,7 +197,11 @@ describe('createScheduler', () => {
     await scheduler.whenIdle();
 
     expect(scheduler.state().inFlight).toEqual([]);
-    expect(repo.advanceTask).toHaveBeenCalledTimes(2);
+    // §22: tick advances the schedule once per due occurrence (2 ticks) and the
+    // run's settle advances the outcome once, so 3 calls in total. Advancing on a
+    // skipped in-flight occurrence is what makes 'skip' drop it instead of
+    // running it late on the next tick.
+    expect(repo.advanceTask).toHaveBeenCalledTimes(3);
   });
 
   it('reports not_found when running an unknown task', async () => {
@@ -217,16 +222,21 @@ describe('createScheduler', () => {
     const result = await scheduler.runNow('t1');
 
     expect(result.run.status).toBe('running');
-    expect(runner.startTaskRun).toHaveBeenCalledWith(task, { trigger: 'manual', scheduledFor: null });
+    expect(runner.startTaskRun).toHaveBeenCalledWith(task, {
+      trigger: 'manual',
+      scheduledFor: null,
+      projectPath: task.project_path,
+    });
 
     await scheduler.whenIdle();
 
     expect(repo.advanceTask).toHaveBeenCalledTimes(1);
     expect(repo.advanceTask.mock.calls[0][1]).toMatchObject({
-      nextRunAt: task.next_run_at,
       lastStatus: 'success',
       runCount: 1,
     });
+    // A manual run never writes next_run_at back (undefined = leave unchanged).
+    expect(repo.advanceTask.mock.calls[0][1].nextRunAt).toBeUndefined();
   });
 
   it('rejects a manual run while the task is already in flight', async () => {
@@ -416,7 +426,7 @@ describe('conflict policy (§17)', () => {
     await scheduler.tick();
     await scheduler.whenIdle();
 
-    expect(runner.abortTaskRun).toHaveBeenCalledWith('t1');
+    expect(runner.abortTaskRun).toHaveBeenCalledWith('t1', '/tmp/scheduled-project');
     expect(runner.startTaskRun).toHaveBeenCalledTimes(2);
   });
 
@@ -458,5 +468,106 @@ describe('conflict policy (§17)', () => {
     await scheduler.tick();
     await scheduler.whenIdle();
     expect(repo.pruneRuns).toHaveBeenCalledWith('t1', 10);
+  });
+});
+
+
+describe('multi-project fan-out (§22)', () => {
+  it('starts one run per bound project and advances the schedule once', async () => {
+    const task = makeTask({
+      project_path: '/tmp/a',
+      project_paths_json: JSON.stringify(['/tmp/a', '/tmp/b']),
+    });
+    const repo = makeRepo([task]);
+    const runner = makeRunner();
+    const scheduler = createScheduler({ repo, runner, now, tickMs: 1000, computeNextRun: () => NOW + 60000 });
+
+    await scheduler.tick();
+    await scheduler.whenIdle();
+
+    const projects = runner.startTaskRun.mock.calls.map(([, options]) => options.projectPath).sort();
+    expect(projects).toEqual(['/tmp/a', '/tmp/b']);
+    // 1 pre-advance for the occurrence + 1 settle per project.
+    expect(repo.advanceTask).toHaveBeenCalledTimes(3);
+  });
+
+  it('tracks in-flight state per project', async () => {
+    const task = makeTask({
+      project_path: '/tmp/a',
+      project_paths_json: JSON.stringify(['/tmp/a', '/tmp/b']),
+    });
+    const repo = makeRepo([task]);
+    const pending = [];
+    const runner = {
+      startTaskRun: vi.fn((t, options) => {
+        const run = {
+          id: 'run-' + (pending.length + 1),
+          task_id: t.id,
+          status: 'running',
+          trigger: options.trigger,
+          finished_at: null,
+        };
+        const d = deferred();
+        pending.push(d);
+        return { run, done: d.promise };
+      }),
+    };
+    const scheduler = createScheduler({ repo, runner, now, tickMs: 1000, computeNextRun: () => NOW + 60000 });
+
+    await scheduler.tick();
+    await flush();
+
+    expect(runner.startTaskRun).toHaveBeenCalledTimes(2);
+    expect(scheduler.state().inFlight.sort()).toEqual(['t1::/tmp/a', 't1::/tmp/b']);
+
+    for (const d of pending) {
+      d.resolve({
+        run: { id: 'run', status: 'success', finished_at: new Date(NOW).toISOString() },
+        status: 'success',
+        sessionId: null,
+        output: null,
+        error: null,
+      });
+    }
+    await scheduler.whenIdle();
+    expect(scheduler.state().inFlight).toEqual([]);
+  });
+
+  it('applies the conflict policy per project', async () => {
+    const task = makeTask({
+      project_path: '/tmp/a',
+      project_paths_json: JSON.stringify(['/tmp/a', '/tmp/b']),
+    });
+    const repo = makeRepo([task]);
+    const pending = [];
+    const runner = {
+      startTaskRun: vi.fn((t, options) => {
+        const run = { id: 'run-' + options.projectPath, task_id: t.id, status: 'running', finished_at: null };
+        const d = deferred();
+        pending.push(d);
+        return { run, done: d.promise };
+      }),
+    };
+    const scheduler = createScheduler({ repo, runner, now, tickMs: 1000, computeNextRun: () => NOW + 60000 });
+
+    await scheduler.tick();
+    await flush();
+    expect(runner.startTaskRun).toHaveBeenCalledTimes(2);
+
+    // Second due tick while both projects are in flight (skip policy): nothing new.
+    await scheduler.tick();
+    await flush();
+    expect(runner.startTaskRun).toHaveBeenCalledTimes(2);
+
+    for (const d of pending) {
+      d.resolve({
+        run: { id: 'run', status: 'success', finished_at: new Date(NOW).toISOString() },
+        status: 'success',
+        sessionId: null,
+        output: null,
+        error: null,
+      });
+    }
+    await scheduler.whenIdle();
   });
 });

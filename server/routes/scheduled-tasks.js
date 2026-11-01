@@ -113,6 +113,7 @@ export function createScheduledTasksRouter(overrides = {}) {
         title: body.title,
         prompt: body.prompt,
         projectPath: body.projectPath,
+        projectPaths: body.projectPaths,
         provider: body.provider,
         model: body.model,
         command: body.command,
@@ -278,15 +279,15 @@ export function createScheduledTasksRouter(overrides = {}) {
     })
   );
 
-  // GET /running — how many tasks have an agent-started run in flight (docs §14.3).
-  // Registered before /:id, otherwise the literal "running" is read as a task id
-  // (same reason as the /presets routes above).
+  // GET /running — the agent-started runs in flight: the count plus the list
+  // (docs §14.3, §22). Registered before /:id, otherwise the literal "running" is
+  // read as a task id (same reason as the /presets routes above).
   router.get(
     '/running',
     handler(async (req, res) => {
-      const result = await (await getManagement()).countRunningTasks();
+      const result = await (await getManagement()).listRunningTasks(req.query.limit);
       if (!result.ok) return sendError(res, result);
-      res.json({ count: result.count });
+      res.json({ count: result.count, runs: result.runs });
     })
   );
 
@@ -328,6 +329,7 @@ export function createScheduledTasksRouter(overrides = {}) {
       const result = await (await getManagement()).copyTask(req.params.id, {
         title: body.title,
         projectPath: body.projectPath,
+        projectPaths: body.projectPaths,
         enabled: body.enabled,
         userId: req.user?.id ?? null,
       });
@@ -366,6 +368,7 @@ export function createScheduledTasksRouter(overrides = {}) {
         title: body.title,
         prompt: body.prompt,
         projectPath: body.projectPath,
+        projectPaths: body.projectPaths,
         model: body.model,
         command: body.command,
         commandTimeoutSeconds: body.commandTimeoutSeconds,
@@ -402,7 +405,10 @@ export function createScheduledTasksRouter(overrides = {}) {
       const result = await (await getManagement()).runTaskNow(req.params.id, {}, { params: body.params });
       if (!result.ok) return sendError(res, result);
       if (result.queued) return res.status(202).json({ queued: true });
-      res.status(202).json({ run: result.run });
+      // §22: a multi-project task starts one run per project.
+      const payload = { run: result.run };
+      if (Array.isArray(result.runs) && result.runs.length > 1) payload.runs = result.runs;
+      res.status(202).json(payload);
     })
   );
 

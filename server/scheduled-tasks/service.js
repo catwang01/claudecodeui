@@ -96,6 +96,37 @@ function parseRule(task) {
 }
 
 /**
+ * §22: every project a task is bound to; a legacy single-project row reads as
+ * [project_path]. Used to fan one due task out into one run per project.
+ */
+function projectPathsOf(task) {
+  if (!task || typeof task !== 'object') return [];
+  const raw = task.project_paths_json ?? task.projectPaths;
+  let list = null;
+  if (Array.isArray(raw)) list = raw;
+  else if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) list = parsed;
+    } catch {
+      // unreadable JSON reads as the single project path
+    }
+  }
+  const paths = [];
+  for (const value of list ?? []) {
+    if (typeof value === 'string' && value.trim() && !paths.includes(value.trim())) paths.push(value.trim());
+  }
+  if (paths.length) return paths;
+  const single = task.project_path ?? task.projectPath;
+  return typeof single === 'string' && single.trim() ? [single] : [];
+}
+
+/** §22: the in-flight / queue key of one (task, project) run. */
+function keyOf(taskId, projectPath) {
+  return String(taskId) + '::' + String(projectPath ?? '');
+}
+
+/**
  * @param {object} [deps]
  * @param {string} [deps.repo] injected repository (defaults to scheduledTasksDb)
  */
@@ -188,34 +219,23 @@ export function createScheduler(deps = {}) {
     }
   }
 
-  async function prepareAndStart(task, trigger, nowMs, options = {}) {
+  async function prepareAndStart(task, projectPath, trigger, nowMs, options = {}) {
     const repo = await getRepo();
     const runner = await getRunner();
 
-    let nextRunAt = task.next_run_at ?? null;
-    if (trigger === 'schedule') {
-      const computeNextRun = await getComputeNextRun();
-      nextRunAt = computeNextFor(task, nowMs, computeNextRun);
-
-      // Advance BEFORE executing (crash-safe): the same occurrence cannot fire twice.
-      try {
-        repo.advanceTask(task.id, {
-          nextRunAt,
-          lastRunAt: task.last_run_at ?? null,
-          lastStatus: task.last_status ?? null,
-          lastError: task.last_error ?? null,
-          runCount: task.run_count ?? 0,
-        });
-      } catch (err) {
-        logger.error?.(
-          `[scheduled-tasks] pre-run advanceTask(${task.id}) failed: ${errorMessage(err)}`
-        );
-      }
-    }
-
-    const scheduledFor = trigger === 'schedule' ? (task.next_run_at ?? null) : null;
+    // §22: tick() already advanced the schedule once for this occurrence, before
+    // any fan-out run started; each run only reports its own outcome back.
+    const nextRunAt = options.nextRunAt;
+    const scheduledFor =
+      trigger === 'schedule' ? (options.scheduledFor ?? task.next_run_at ?? null) : null;
     // §12.3: a manual run may carry a per-run parameter override map.
-    const { run, done } = runner.startTaskRun(task, { trigger, scheduledFor, params: options.params });
+    // §22: projectPath is the project this run targets.
+    const { run, done } = runner.startTaskRun(task, {
+      trigger,
+      scheduledFor,
+      params: options.params,
+      projectPath,
+    });
 
     const settled = Promise.resolve(done)
       .catch((err) => ({
@@ -229,12 +249,15 @@ export function createScheduler(deps = {}) {
         const lastRunAt =
           result?.run?.finished_at ?? new Date(now()).toISOString();
         try {
+          // §22: read the fresh row so a multi-project fan-out counts every run
+          // (the runs settle one after another, not from the stale tick snapshot).
+          const fresh = typeof repo.getTask === 'function' ? repo.getTask(task.id) : null;
           repo.advanceTask(task.id, {
             nextRunAt,
             lastRunAt,
             lastStatus: result?.status ?? 'error',
             lastError: result?.error ?? null,
-            runCount: (task.run_count ?? 0) + 1,
+            runCount: (fresh?.run_count ?? task.run_count ?? 0) + 1,
           });
         } catch (err) {
           logger.error?.(
@@ -255,11 +278,14 @@ export function createScheduler(deps = {}) {
    * 'settled' promise resolves when the run and its bookkeeping are done.
    * Never rejects.
    */
-  function launch(task, trigger, nowMs, options = {}) {
+  function launch(task, projectPath, trigger, nowMs, options = {}) {
+    // §22: the in-flight key is (task, project), so a multi-project task can run
+    // one project per key; a single-project task keeps exactly one key.
+    const key = keyOf(task.id, projectPath);
     const token = (launchSeq += 1);
-    generation.set(task.id, token);
+    generation.set(key, token);
     const started = (async () => {
-      const { run, settled } = await prepareAndStart(task, trigger, nowMs, options);
+      const { run, settled } = await prepareAndStart(task, projectPath, trigger, nowMs, options);
       return { run, settled };
     })();
 
@@ -273,43 +299,43 @@ export function createScheduler(deps = {}) {
       .catch(() => null)
       .finally(() => {
         // A run that was replaced must not clear the state of its successor.
-        if (generation.get(task.id) !== token) return;
-        generation.delete(task.id);
-        inFlight.delete(task.id);
-        inFlightRun.delete(task.id);
-        const next = pending.get(task.id);
+        if (generation.get(key) !== token) return;
+        generation.delete(key);
+        inFlight.delete(key);
+        inFlightRun.delete(key);
+        const next = pending.get(key);
         if (next) {
-          pending.delete(task.id);
+          pending.delete(key);
           pendingLaunches += 1;
-          void drainPending(task.id, next).finally(() => {
+          void drainPending(key, next).finally(() => {
             pendingLaunches -= 1;
           });
         }
       });
 
-    inFlightRun.set(task.id, tracked);
+    inFlightRun.set(key, tracked);
     return safe;
   }
 
-  /** §17 'queue': remember the trigger; the newest one wins (at most one per task). */
-  function enqueue(taskId, entry) {
-    pending.set(taskId, entry);
+  /** §17 'queue': remember the trigger; the newest one wins (one per run key). */
+  function enqueue(key, entry) {
+    pending.set(key, entry);
   }
 
-  async function drainPending(taskId, entry) {
+  async function drainPending(key, entry) {
     const repo = await getRepo();
-    const task = repo.getTask(taskId);
+    const task = repo.getTask(entry.taskId);
     // A queued run never resurrects a task that was deleted or, for a scheduled
     // trigger, paused while it waited.
-    if (!task || inFlight.has(taskId)) return;
+    if (!task || inFlight.has(key)) return;
     if (entry.trigger === 'schedule' && !task.enabled) return;
-    inFlight.add(taskId);
-    launch(task, entry.trigger, entry.nowMs, entry.options);
+    inFlight.add(key);
+    launch(task, entry.projectPath, entry.trigger, entry.nowMs, entry.options);
   }
 
   /** Wait for the active run to settle, bounded so 'replace' can never hang. */
-  async function waitForActive(taskId) {
-    const active = inFlightRun.get(taskId);
+  async function waitForActive(key) {
+    const active = inFlightRun.get(key);
     if (!active) return;
     await Promise.race([
       active.catch(() => null),
@@ -321,20 +347,22 @@ export function createScheduler(deps = {}) {
   }
 
   /** §17 'replace': abort the active run's agent, wait briefly, then start anew. */
-  async function replaceAndLaunch(task, trigger, nowMs, options = {}) {
+  async function replaceAndLaunch(task, projectPath, trigger, nowMs, options = {}) {
     const runner = await getRunner();
+    const key = keyOf(task.id, projectPath);
     if (typeof runner.abortTaskRun === 'function') {
       try {
-        await runner.abortTaskRun(task.id);
+        // §22: only this project's run is replaced.
+        await runner.abortTaskRun(task.id, projectPath ?? null);
       } catch (err) {
         logger.warn?.(`[scheduled-tasks] abortTaskRun(${task.id}) failed: ${errorMessage(err)}`);
       }
     }
-    await waitForActive(task.id);
-    inFlight.delete(task.id);
-    inFlightRun.delete(task.id);
-    inFlight.add(task.id);
-    return launch(task, trigger, nowMs, options);
+    await waitForActive(key);
+    inFlight.delete(key);
+    inFlightRun.delete(key);
+    inFlight.add(key);
+    return launch(task, projectPath, trigger, nowMs, options);
   }
 
   async function tick() {
@@ -348,21 +376,54 @@ export function createScheduler(deps = {}) {
       for (const task of due ?? []) {
         if (!task || !task.id) continue;
         const policy = conflictPolicyOf(task);
-        if (inFlight.has(task.id)) {
-          // §17: the previous run is still going — honour the task's policy.
-          if (policy === 'replace') {
-            pendingLaunches += 1;
-            void replaceAndLaunch(task, 'schedule', nowMs).finally(() => {
-              pendingLaunches -= 1;
-            });
-          } else if (policy === 'queue') {
-            enqueue(task.id, { task, trigger: 'schedule', nowMs, options: {} });
-          }
-          continue;
+        // §22: advance the schedule exactly once for this occurrence, before any
+        // of the task's runs starts (crash-safe: it cannot fire twice).
+        const computeNextRun = await getComputeNextRun();
+        const nextRunAt = computeNextFor(task, nowMs, computeNextRun);
+        try {
+          repo.advanceTask(task.id, {
+            nextRunAt,
+            lastRunAt: task.last_run_at ?? null,
+            lastStatus: task.last_status ?? null,
+            lastError: task.last_error ?? null,
+            runCount: task.run_count ?? 0,
+          });
+        } catch (err) {
+          logger.error?.(
+            `[scheduled-tasks] pre-run advanceTask(${task.id}) failed: ${errorMessage(err)}`
+          );
         }
-        // Mark in-flight synchronously so a concurrent tick cannot double-dispatch.
-        inFlight.add(task.id);
-        launch(task, 'schedule', nowMs);
+        const scheduledFor = task.next_run_at ?? null;
+        // §22: fan out one run per bound project; each project follows the
+        // task's conflict policy independently.
+        const projectPaths = projectPathsOf(task);
+        for (const projectPath of projectPaths.length ? projectPaths : [null]) {
+          const key = keyOf(task.id, projectPath);
+          if (inFlight.has(key)) {
+            // §17: this project's previous run is still going — honour the policy.
+            if (policy === 'replace') {
+              pendingLaunches += 1;
+              void replaceAndLaunch(task, projectPath, 'schedule', nowMs, {
+                nextRunAt,
+                scheduledFor,
+              }).finally(() => {
+                pendingLaunches -= 1;
+              });
+            } else if (policy === 'queue') {
+              enqueue(key, {
+                taskId: task.id,
+                projectPath,
+                trigger: 'schedule',
+                nowMs,
+                options: { nextRunAt, scheduledFor },
+              });
+            }
+            continue;
+          }
+          // Mark in-flight synchronously so a concurrent tick cannot double-dispatch.
+          inFlight.add(key);
+          launch(task, projectPath, 'schedule', nowMs, { nextRunAt, scheduledFor });
+        }
       }
     } catch (err) {
       logger.error?.(`[scheduled-tasks] tick failed: ${errorMessage(err)}`);
@@ -389,9 +450,9 @@ export function createScheduler(deps = {}) {
         await new Promise((resolve) => setTimeout(resolve, 0));
         continue;
       }
-      for (const [taskId, entry] of entries) {
-        pending.delete(taskId);
-        await drainPending(taskId, entry);
+      for (const [key, entry] of entries) {
+        pending.delete(key);
+        await drainPending(key, entry);
       }
     }
   }
@@ -429,31 +490,41 @@ export function createScheduler(deps = {}) {
     if (!task) return { error: 'not_found' };
     const policy = conflictPolicyOf(task);
 
-    if (inFlight.has(taskId)) {
-      // §17: the previous run is still going — honour the task's policy.
-      if (policy === 'replace') {
-        const entry = await replaceAndLaunch(task, 'manual', now(), options);
-        const run = entry?.run;
-        if (!run) {
-          inFlight.delete(taskId);
-          return { error: 'internal_error' };
+    // §22: a manual run fans out over every bound project unless the caller
+    // targets one; each project follows the task's conflict policy on its own.
+    const projectPaths = options.projectPath ? [options.projectPath] : projectPathsOf(task);
+    const targets = projectPaths.length ? projectPaths : [null];
+    const runs = [];
+    let queued = false;
+    let inFlightCount = 0;
+
+    for (const projectPath of targets) {
+      const key = keyOf(taskId, projectPath);
+      if (inFlight.has(key)) {
+        // §17: this project's previous run is still going — honour the policy.
+        if (policy === 'replace') {
+          const entry = await replaceAndLaunch(task, projectPath, 'manual', now(), options);
+          if (entry?.run) runs.push(entry.run);
+          else inFlight.delete(key);
+        } else if (policy === 'queue') {
+          enqueue(key, { taskId, projectPath, trigger: 'manual', nowMs: now(), options });
+          queued = true;
+        } else {
+          inFlightCount += 1;
         }
-        return { run, replaced: true };
+        continue;
       }
-      if (policy === 'queue') {
-        enqueue(taskId, { task, trigger: 'manual', nowMs: now(), options });
-        return { queued: true };
-      }
-      return { error: 'in_flight' };
+
+      inFlight.add(key);
+      const { run } = await launch(task, projectPath, 'manual', now(), options);
+      if (run) runs.push(run);
+      else inFlight.delete(key);
     }
 
-    inFlight.add(taskId);
-    const { run } = await launch(task, 'manual', now(), options);
-    if (!run) {
-      inFlight.delete(taskId);
-      return { error: 'internal_error' };
-    }
-    return { run };
+    if (runs.length) return { run: runs[0], runs };
+    if (queued) return { queued: true };
+    if (inFlightCount) return { error: 'in_flight' };
+    return { error: 'internal_error' };
   }
 
   function state() {
@@ -496,7 +567,24 @@ export function createScheduler(deps = {}) {
     }
   }
 
-  return { tick, start, stop, runNow, state, whenIdle, reconcileInterrupted, runningCount };
+  /**
+   * §22: the full running view (count + run list) behind GET /running and the
+   * /ws push. Delegates to the management view layer so both surfaces share one
+   * serializer; a failure degrades to the count with an empty list.
+   */
+  async function runningTasks(limit = 50) {
+    try {
+      const { createManagement } = await import('./management.js');
+      const management = createManagement({ repo: await getRepo() });
+      const result = await management.listRunningTasks(limit);
+      if (result.ok) return { count: result.count, runs: result.runs };
+    } catch (err) {
+      logger.warn?.('[scheduled-tasks] runningTasks failed: ' + errorMessage(err));
+    }
+    return { count: await runningCount(), runs: [] };
+  }
+
+  return { tick, start, stop, runNow, state, whenIdle, reconcileInterrupted, runningCount, runningTasks };
 }
 
 // ─── Module-level default scheduler ────────────────────────────────────────────
@@ -552,6 +640,14 @@ export async function runScheduledTaskNow(taskId, options = {}) {
  */
 export async function getRunningTaskCount() {
   return getDefaultScheduler().runningCount();
+}
+
+/**
+ * docs §22: count + run list for the /ws push. Never rejects.
+ * @returns {Promise<{count: number, runs: Array}>}
+ */
+export async function getRunningScheduledTasks(limit = 50) {
+  return getDefaultScheduler().runningTasks(limit);
 }
 
 export function getSchedulerState() {

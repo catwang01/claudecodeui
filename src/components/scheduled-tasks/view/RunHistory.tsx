@@ -12,6 +12,12 @@ import StatusPill from './StatusPill';
 
 const PAGE_SIZE = 20;
 
+function basename(value: string | null | undefined): string {
+  if (!value) return '';
+  const parts = value.split(/[\\/]/).filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : value;
+}
+
 function RunRow({
   run,
   locale,
@@ -42,6 +48,11 @@ function RunRow({
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <StatusPill status={run.status} label={t('status.' + run.status)} />
         <span className="text-xs text-muted-foreground">{t('trigger.' + run.trigger)}</span>
+        {run.projectPath && (
+          <span className="text-xs text-muted-foreground" title={run.projectPath}>
+            {t('runs.project')}: {basename(run.projectPath)}
+          </span>
+        )}
         <span className="text-xs text-muted-foreground">{formatDateTime(run.startedAt, locale)}</span>
         <span className="text-xs text-muted-foreground">{formatRelativeTime(run.startedAt, locale)}</span>
         <span className="text-xs text-muted-foreground">
