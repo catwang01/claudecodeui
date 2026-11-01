@@ -146,6 +146,16 @@ class Vault:
         self._restore_rx = re.compile("|".join(re.escape(key) for key in ordered))
         return self._restore_rx
 
+    def placeholders(self) -> list[str]:
+        """All known placeholders (used by the streaming hold-back prefix set)."""
+        with self._lock:
+            return list(self._reverse)
+
+    def placeholder_pattern(self) -> re.Pattern[str] | None:
+        """Compiled alternation over known placeholders, for streaming hold-back."""
+        with self._lock:
+            return self._placeholder_regex()
+
     def restore_text(self, text: str) -> str:
         """Replace every known placeholder with its original value (exact lookup)."""
         if not text:

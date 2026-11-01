@@ -337,7 +337,7 @@ async def proxy(request: Request, path: str):
     resp_headers = {k: v for k, v in upstream.headers.items() if k.lower() not in _HOP_BY_HOP}
 
     if "text/event-stream" in content_type:
-        restorer = SSERestorer(VAULT.restore_text, restore_window())
+        restorer = SSERestorer(VAULT.restore_text, restore_window(), VAULT.placeholders())
 
         async def _stream():
             try:

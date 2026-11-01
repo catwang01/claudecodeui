@@ -74,7 +74,7 @@ import copy
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 __all__ = ["TextHold", "SSERestorer"]
 
@@ -82,6 +82,8 @@ __all__ = ["TextHold", "SSERestorer"]
 # Matching is case-insensitive so a lower-cased alias still gets held back
 # (the injected restore may canonicalise it).
 _CANDIDATE_RX = re.compile(r"PII[A-Za-z0-9_]*", re.IGNORECASE)
+
+
 # Canonical alias shape, used only for the unresolved metric.
 _ALIAS_RX = re.compile(r"PII_[A-Z0-9]{1,12}_[0-9a-f]{6,16}")
 
@@ -92,12 +94,28 @@ _DONE = "[DONE]"
 class TextHold:
     """Fixed-length hold-back + restore for one streaming text channel."""
 
-    def __init__(self, max_len: int, restore: Callable[[str], str]) -> None:
+    def __init__(
+        self,
+        max_len: int,
+        restore: Callable[[str], str],
+        placeholders: "Iterable[str] | None" = None,
+        candidate_rx: "re.Pattern[str] | None" = None,
+    ) -> None:
         if not callable(restore):
             raise TypeError("restore must be callable")
         self.max_len = max(0, int(max_len))
         self._restore = restore
         self._buf = ""
+        # Forward and reverse use the *same* matcher: the alternation of the
+        # known placeholders. Forward it decides what to replace on a complete
+        # string; on a stream it additionally tells us whether a match would
+        # straddle the emit boundary, in which case we hold back from that
+        # match's start. No PII_ prefix conventions, no per-shape heuristics.
+        self._match_rx = candidate_rx
+        if placeholders:
+            ordered = sorted({p for p in placeholders if p}, key=len, reverse=True)
+            if ordered:
+                self._match_rx = re.compile("|".join(re.escape(p) for p in ordered))
 
     @property
     def pending(self) -> str:
@@ -142,11 +160,21 @@ class TextHold:
         # An alias has length <= max_len, so a candidate starting before
         # cut - max_len necessarily ends before the cut and does not need to
         # be considered.
-        lo = max(0, cut - self.max_len)
-        for match in _CANDIDATE_RX.finditer(self._buf, lo):
+        match_rx = self._match_rx
+        if match_rx is None:
+            # Legacy fallback: only recognise PII_-token shapes.
+            match_rx = _CANDIDATE_RX
+            for match in match_rx.finditer(self._buf, max(0, cut - self.max_len)):
+                start, end = match.span()
+                if start < cut < end:
+                    return start
+            return cut
+        for match in match_rx.finditer(self._buf):
             start, end = match.span()
-            if start < cut < end:
-                return start
+            if start >= cut:
+                break
+            if end > cut:
+                return start  # a complete placeholder would be split: hold it
         return cut
 
 
@@ -247,11 +275,19 @@ class _PartialBlock:
 class SSERestorer:
     """Turn a chunked SSE byte stream into a restored SSE byte stream."""
 
-    def __init__(self, restore: Callable[[str], str], max_len: int) -> None:
+    def __init__(
+        self,
+        restore: Callable[[str], str],
+        max_len: int,
+        placeholders: "Iterable[str] | None" = None,
+        candidate_rx: "re.Pattern[str] | None" = None,
+    ) -> None:
         if not callable(restore):
             raise TypeError("restore must be callable")
         self._restore_fn = restore
         self.max_len = max(0, int(max_len))
+        self._placeholders = tuple(placeholders or ())
+        self._candidate_rx = candidate_rx
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self._buf = ""
         self._text: dict[Any, _TextChannel] = {}
@@ -341,7 +377,7 @@ class SSERestorer:
             channel = self._text.get(idx)
             if channel is None:
                 channel = _TextChannel(
-                    hold=TextHold(self.max_len, self._restore_counted),
+                    hold=TextHold(self.max_len, self._restore_counted, self._placeholders, self._candidate_rx),
                     template=copy.deepcopy(obj),
                     pre=parsed.pre,
                     post=parsed.post,
