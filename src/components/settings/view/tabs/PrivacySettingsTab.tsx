@@ -231,7 +231,8 @@ export default function PrivacySettingsTab() {
           <h3 className="text-lg font-medium text-foreground">PII 脱敏代理</h3>
         </div>
         <p className="text-sm text-muted-foreground">
-          开启后，发送给 Anthropic API 的消息中将自动检测并加密替换姓名、手机号、邮箱等个人信息，响应返回前自动还原，防止 PII 暴露给大模型。
+          开启后，命中的敏感值会在本机被替换为确定性别名（内置规则 + 你在 ~/.pii-proxy/secrets.json 里配置的清单），请求才发给上游；响应返回前按协议精确还原。带签名的 thinking 块不改写。
+          只保护“清单命中 + 规则命中”的值，未命中的内容仍会原文出网。
         </p>
       </div>
 
@@ -240,7 +241,7 @@ export default function PrivacySettingsTab() {
           <div className="space-y-1 flex-1">
             <p className="text-sm font-medium text-foreground">启用 PII 脱敏代理</p>
             <p className="text-xs text-muted-foreground">
-              默认开启。关闭后请求将直接发送至 Anthropic API，不经过代理处理。
+              对新会话生效。关闭后请求不经过代理，命中的敏感值会直接发送给上游。
             </p>
           </div>
           <button
@@ -262,8 +263,9 @@ export default function PrivacySettingsTab() {
         </div>
 
         <div className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
-          <p className="font-medium mb-1">检测实体类型</p>
-          <p>姓名 · 电话号码 · 邮箱地址 · 信用卡号 · 地址</p>
+          <p className="font-medium mb-1">内置检测规则</p>
+          <p>邮箱地址 · AWS/云密钥 · JWT · PEM 私钥 · 带凭据的 URL · GitHub token · password=/密码 类键值 · IPv4 · 手机号 · 身份证号</p>
+          <p className="mt-1">另有你在 ~/.pii-proxy/secrets.json 中配置的字面值清单与自定义正则。</p>
         </div>
       </div>
 
