@@ -452,23 +452,6 @@ describe('conflict policy (§17)', () => {
     settleFirst(skipRunner.firstRun());
     await skipScheduler.whenIdle();
   });
-
-  it('prunes run history after a run settles using the configured retention', async () => {
-    const repo = makeRepo([makeTask()]);
-    repo.pruneRuns = vi.fn(() => 3);
-    const scheduler = createScheduler({
-      repo,
-      runner: makeRunner(null),
-      now,
-      tickMs: 1000,
-      computeNextRun: () => NOW + 60000,
-      runRetention: () => 10,
-    });
-
-    await scheduler.tick();
-    await scheduler.whenIdle();
-    expect(repo.pruneRuns).toHaveBeenCalledWith('t1', 10);
-  });
 });
 
 

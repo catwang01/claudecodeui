@@ -160,7 +160,6 @@ async function main() {
       runner,
       now: () => Date.now(),
       computeNextRun: () => Date.now() + 3600000,
-      runRetention: () => 50,
     });
 
     await scheduler.tick();

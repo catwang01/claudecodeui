@@ -32,8 +32,6 @@ const CONFLICT_POLICIES = new Set(['skip', 'queue', 'replace']);
 // §17 'replace': how long to wait for the aborted run to settle before starting
 // the new one anyway (the generation token keeps the stale run's cleanup harmless).
 const REPLACE_ABORT_TIMEOUT_MS = 5000;
-// §17 retention: how many run rows to keep per task when nothing overrides it.
-const DEFAULT_RUN_RETENTION = 50;
 
 function errorMessage(err) {
   if (err instanceof Error && err.message) return err.message;
@@ -192,33 +190,6 @@ export function createScheduler(deps = {}) {
     return CONFLICT_POLICIES.has(value) ? value : 'skip';
   }
 
-  /** §17: per-task run retention (deps > env > app_config > default). */
-  async function resolveRunRetention() {
-    if (typeof deps.runRetention === 'function') return deps.runRetention();
-    const envValue = parseInt(process.env.SCHEDULED_TASK_RUN_RETENTION, 10);
-    if (Number.isFinite(envValue)) return envValue;
-    try {
-      const db = await import('../modules/database/index.js');
-      const parsed = parseInt(db.appConfigDb?.get?.('scheduled_task_run_retention'), 10);
-      if (Number.isFinite(parsed)) return parsed;
-    } catch (err) {
-      logger.warn?.('[scheduled-tasks] retention lookup failed: ' + errorMessage(err));
-    }
-    return DEFAULT_RUN_RETENTION;
-  }
-
-  /** §17: drop the oldest runs of a task beyond the retention count. Best-effort. */
-  async function pruneTaskRuns(repo, taskId) {
-    if (typeof repo.pruneRuns !== 'function') return;
-    try {
-      const keep = await resolveRunRetention();
-      if (!Number.isFinite(keep) || keep < 1) return;
-      repo.pruneRuns(taskId, keep);
-    } catch (err) {
-      logger.warn?.(`[scheduled-tasks] pruneRuns(${taskId}) failed: ${errorMessage(err)}`);
-    }
-  }
-
   async function prepareAndStart(task, projectPath, trigger, nowMs, options = {}) {
     const repo = await getRepo();
     const runner = await getRunner();
@@ -264,9 +235,6 @@ export function createScheduler(deps = {}) {
             `[scheduled-tasks] post-run advanceTask(${task.id}) failed: ${errorMessage(err)}`
           );
         }
-        // §17: retention is applied after the run settles, so the just-finished
-        // run is kept and only older ones are dropped.
-        await pruneTaskRuns(repo, task.id);
         return result;
       });
 

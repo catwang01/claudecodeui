@@ -218,8 +218,6 @@
     "description": "Control how sessions started by scheduled tasks appear in the app.",
     "saving": "Saving...",
     "hideScheduledTaskSessionsLabel": "Hide scheduled-task sessions",
-    "runRetentionLabel": "Run history per task",
-    "runRetentionDescription": "How many runs of each scheduled task to keep. Older runs are pruned automatically after every run.",
     "hideScheduledTaskSessionsDescription": "Sessions started by a scheduled task will not appear in the sidebar."
   },
   "footerActions": {

@@ -782,13 +782,4 @@ export const scheduledTasksDb = {
   listTasksByPreset(presetId: string): ScheduledTaskRow[] {
     return selectTasksByPreset(presetId);
   },
-
-  pruneRuns(taskId: string, keep = 50): number {
-    const sql =
-      'DELETE FROM scheduled_task_runs WHERE task_id = ? AND id NOT IN (' +
-      'SELECT id FROM scheduled_task_runs WHERE task_id = ? ' +
-      'ORDER BY started_at DESC, rowid DESC LIMIT ?)';
-    const info = getConnection().prepare(sql).run(taskId, taskId, keep);
-    return info.changes;
-  },
 };

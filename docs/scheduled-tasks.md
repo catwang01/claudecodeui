@@ -85,7 +85,6 @@ createRun(input: { taskId, status, trigger, scheduledFor?, startedAt }): Schedul
 finishRun(id, patch: { status, finishedAt, sessionId?, output?, error? }): ScheduledTaskRunRow | undefined
 listRuns(taskId, limit = 20, offset = 0): ScheduledTaskRunRow[]
 countRuns(taskId): number
-pruneRuns(taskId, keep = 50): number
 ```
 Update/advance must bump `updated_at`. `listTasks` search matches title/prompt/project_path, ordered by `created_at DESC`.
 
@@ -1271,24 +1270,25 @@ ALTER TABLE scheduled_tasks ADD COLUMN conflict_policy TEXT NOT NULL DEFAULT 'sk
 - `schedule_create` / `schedule_update` 增加 `conflict_policy` 字段（enum）。
 - `schedule_run` 在排队时返回 `{ queued: true }`。
 
-### 17.5 Run history retention
+### 17.5 Run history retention（已移除）
 
-每次 run 落定后按保留条数裁剪该任务的 `scheduled_task_runs`（调用已有 `repo.pruneRuns(taskId, keep)`，best-effort）。
-保留条数优先级：`deps.runRetention`（测试注入） > 环境变量 `SCHEDULED_TASK_RUN_RETENTION` >
-`app_config.scheduled_task_run_retention` > 默认 `50`。值 `< 1` 或非法表示不裁剪。
+run 历史不再裁剪：`scheduled_task_runs` 全量保留。`repo.pruneRuns`、环境变量
+`SCHEDULED_TASK_RUN_RETENTION`、`app_config.scheduled_task_run_retention` 与
+`GET/POST /api/settings/automations` 的 `scheduledTaskRunRetention` 字段均已删除。
 
-设置接口 `GET/POST /api/settings/automations` 增加 `scheduledTaskRunRetention`（整数 1..10000；未设置读作 50）。
+> 移除原因：裁剪会连带删掉 `session_id`（§9.1 的唯一权威映射），导致旧会话不再被识别为
+> 定时任务会话。代价是 run 行会无限增长，由部署方按需自行清理数据库。
 
 ### 17.6 Frontend
 
 - 任务编辑器新增 conflict policy 下拉（`editor.fields.conflictPolicy`、`editor.conflictPolicy.*`）。
 - 手动运行被排队时面板显示 `runQueued` 提示（`api.runNow` 在 queued 时返回 null）。
-- 设置 → 自动化新增「每个任务保留的运行记录数」数字输入。
+- （已移除）设置 → 自动化曾新增「每个任务保留的运行记录数」数字输入。
 
 ### 17.7 Acceptance
 
 - `service.test.js`：skip 不重复派发、queue 在 run 落定后补跑、replace 调 `abortTaskRun` 并起新 run、
-  `runNow` 按策略返回 `in_flight`/`queued`、run 落定后按配置 `pruneRuns`。
+  `runNow` 按策略返回 `in_flight`/`queued`。
 - `management.test.js`：策略校验/存储/更新、copy 继承、queued 返回 `{ ok:true, queued:true, run:null }`。
 - `tools.test.js` / routes：`conflict_policy` 往返、`{queued:true}` 响应。
 - `scheduled-tasks.db.test.ts`：建任务/更新写入 `conflict_policy`，旧行读作 `skip`。

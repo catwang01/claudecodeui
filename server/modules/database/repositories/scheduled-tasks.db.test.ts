@@ -427,32 +427,6 @@ describe('scheduledTasksDb', () => {
     expect(scheduledTasksDb.listRuns(other.id)).toHaveLength(1);
   });
 
-  it('prunes old runs, keeping the newest N per task only', () => {
-    const task = makeTask({ title: 'Prune me' });
-    const other = makeTask({ title: 'Prune neighbour' });
-    for (let i = 0; i < 5; i += 1) {
-      scheduledTasksDb.createRun({
-        taskId: task.id,
-        status: 'success',
-        trigger: 'schedule',
-        startedAt: new Date(Date.UTC(2026, 5, 1, 0, i, 0)).toISOString(),
-      });
-    }
-    scheduledTasksDb.createRun({ taskId: other.id, status: 'success', trigger: 'schedule', startedAt: '2026-06-01T00:00:00.000Z' });
-
-    expect(scheduledTasksDb.pruneRuns(task.id, 2)).toBe(3);
-    expect(scheduledTasksDb.countRuns(task.id)).toBe(2);
-    expect(scheduledTasksDb.listRuns(task.id, 50).map((row) => row.started_at)).toEqual([
-      '2026-06-01T00:04:00.000Z',
-      '2026-06-01T00:03:00.000Z',
-    ]);
-    expect(scheduledTasksDb.pruneRuns(task.id, 50)).toBe(0);
-    expect(scheduledTasksDb.countRuns(other.id)).toBe(1);
-
-    expect(scheduledTasksDb.pruneRuns(other.id, 0)).toBe(1);
-    expect(scheduledTasksDb.countRuns(other.id)).toBe(0);
-  });
-
   it('upgrades a pre-script-gate database in place and keeps legacy rows working', () => {
     const legacy = must(scheduledTasksDb.getTask(legacyTaskId));
     expect(legacy.title).toBe('Legacy gated task');
