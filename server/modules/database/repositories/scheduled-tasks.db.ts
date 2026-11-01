@@ -595,6 +595,18 @@ export const scheduledTasksDb = {
   },
 
   /**
+   * docs section 14.1: every row still left 'running' by a previous process.
+   * The interrupted-run sweep needs the rows (not just the count) so it can
+   * mirror the terminal status onto each run.json, closing the "DB says error,
+   * disk still says running" asymmetry. Read these *before* failInterruptedRuns.
+   */
+  listRunningRuns(): ScheduledTaskRunRow[] {
+    return getConnection()
+      .prepare("SELECT * FROM scheduled_task_runs WHERE status = 'running'")
+      .all() as ScheduledTaskRunRow[];
+  },
+
+  /**
    * docs section 14.1: fail every run left 'running' by a previous process. The
    * agent is a child of this process, so after a restart it can only be gone;
    * leaving the rows 'running' would inflate the running-task count forever.

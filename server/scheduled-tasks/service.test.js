@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import { createScheduler, getSchedulerState } from './service.js';
 
@@ -338,6 +341,59 @@ describe('interrupted-run sweep (§14.1)', () => {
 
     await expect(scheduler.reconcileInterrupted()).resolves.toBe(0);
     expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it('finalizes each interrupted run.json so the disk status matches the DB', async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-reconcile-'));
+    process.env.SCHEDULED_TASK_DATA_DIR = dataDir;
+    try {
+      const task = makeTask();
+      const run = {
+        id: 'run-x',
+        task_id: 't1',
+        status: 'running',
+        trigger: 'schedule',
+        scheduled_for: null,
+        started_at: '2026-01-01T00:00:01.000Z',
+        finished_at: null,
+        session_id: 'sess-1',
+        output: null,
+        error: null,
+        script_exit_code: null,
+        script_output: null,
+        prompt_used: null,
+        params_json: null,
+        agent_started_at: null,
+        project_path: null,
+      };
+      // Seed run.json exactly as runner.js does when a run starts.
+      const { ensureRunWorkspace, runDir } = await import('./workspace.js');
+      ensureRunWorkspace(task, run);
+
+      const repo = makeRepo([task]);
+      repo.listRunningRuns = vi.fn(() => [run]);
+      repo.failInterruptedRuns = vi.fn(() => 1);
+      const scheduler = createScheduler({
+        repo,
+        runner: makeRunner(null),
+        now,
+        tickMs: 1000,
+        computeNextRun: vi.fn(() => NOW + 60000),
+      });
+
+      await expect(scheduler.reconcileInterrupted()).resolves.toBe(1);
+
+      const record = JSON.parse(fs.readFileSync(path.join(runDir('t1', 'run-x'), 'run.json'), 'utf8'));
+      expect(record.status).toBe('error');
+      expect(record.finishedAt).toBe(new Date(NOW).toISOString());
+      expect(record.error).toBe('server_restart');
+      // The merge must not drop the fields written when the run started.
+      expect(record.startedAt).toBe('2026-01-01T00:00:01.000Z');
+      expect(record.sessionId).toBe('sess-1');
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+      delete process.env.SCHEDULED_TASK_DATA_DIR;
+    }
   });
 });
 describe('conflict policy (§17)', () => {

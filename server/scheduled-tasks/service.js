@@ -54,6 +54,33 @@ function isEnabled() {
   return !DISABLED_VALUES.has(String(raw).toLowerCase());
 }
 
+/**
+ * docs §14.1: mirror the interrupted-run sweep onto disk. For every row the DB
+ * just flipped to 'error', finalize its run.json with the same terminal status,
+ * so the task-side run_status() channel stops reporting 'running'. Reuses the
+ * normal-path helper (finalizeRunWorkspace merges into the existing run.json,
+ * preserving startedAt and friends). Best-effort: workspace.js never throws and
+ * a lazy-import failure is only logged — the DB sweep has already succeeded.
+ */
+async function finalizeInterruptedWorkspaces(repo, rows, { finishedAt, error, logger }) {
+  try {
+    const { finalizeRunWorkspace } = await import('./workspace.js');
+    for (const run of rows) {
+      const task = typeof repo.getTask === 'function' ? repo.getTask(run.task_id) : null;
+      finalizeRunWorkspace(task ?? null, run, {
+        status: 'error',
+        finishedAt,
+        error,
+        // Keep the run's own agent artifacts on disk in sync with the DB row.
+        sessionId: run.session_id ?? null,
+        scriptExitCode: run.script_exit_code ?? null,
+      });
+    }
+  } catch (err) {
+    logger.warn?.(`[scheduled-tasks] finalize interrupted run.json failed: ${errorMessage(err)}`);
+  }
+}
+
 // ─── Lazy defaults (kept lazy so unit tests can inject fakes) ──────────────────
 
 let cachedRunner = null;
@@ -507,16 +534,42 @@ export function createScheduler(deps = {}) {
    * docs §14.1: fail every run left 'running' by a previous process. Only
    * startScheduledTaskService() calls this — createScheduler() itself must stay
    * pure so unit tests keep an untouched repository.
+   *
+   * The sweep is symmetric: the DB row is flipped to 'error' *and* the run's
+   * run.json is finalized to match. The disk half matters because the task-side
+   * status channel (lib.sh run_status()) reads run.json, not the DB — without it
+   * a crashed run's run.json stays frozen on 'running' forever and the gate can
+   * only recover via its TTL / zombie heuristics. Best-effort: a missing
+   * listRunningRuns (older fakes) or a run.json failure never blocks the sweep.
    */
   async function reconcileInterrupted(error = 'server_restart') {
     const repo = await getRepo();
     if (typeof repo.failInterruptedRuns !== 'function') return 0;
+    const finishedAt = new Date(now()).toISOString();
+
+    // Read the rows before the UPDATE flips them, so the disk mirror knows which
+    // run.json files must be finalized (and with the run's own session/exit code).
+    let interrupted = [];
+    if (typeof repo.listRunningRuns === 'function') {
+      try {
+        interrupted = repo.listRunningRuns() || [];
+      } catch (err) {
+        logger.warn?.(`[scheduled-tasks] listRunningRuns failed: ${errorMessage(err)}`);
+      }
+    }
+
+    let failed = 0;
     try {
-      return repo.failInterruptedRuns(new Date(now()).toISOString(), error) || 0;
+      failed = repo.failInterruptedRuns(finishedAt, error) || 0;
     } catch (err) {
       logger.warn?.(`[scheduled-tasks] failInterruptedRuns failed: ${errorMessage(err)}`);
       return 0;
     }
+
+    if (interrupted.length) {
+      await finalizeInterruptedWorkspaces(repo, interrupted, { finishedAt, error, logger });
+    }
+    return failed;
   }
 
   /**

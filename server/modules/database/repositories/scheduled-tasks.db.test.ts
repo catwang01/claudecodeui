@@ -1125,6 +1125,9 @@ describe('agent-started tracking (docs section 14.1)', () => {
       }
     ).count;
     expect(runningBefore).toBeGreaterThanOrEqual(1);
+    // listRunningRuns exposes the rows the sweep is about to flip (for the disk
+    // mirror), so it must see the interrupted row before the UPDATE.
+    expect(scheduledTasksDb.listRunningRuns().some((row) => row.id === interrupted.id)).toBe(true);
     expect(scheduledTasksDb.failInterruptedRuns(finishedAt, 'server_restart')).toBe(runningBefore);
 
     const after = must(scheduledTasksDb.listRuns(task.id, 5, 0).find((row) => row.id === interrupted.id));
@@ -1134,6 +1137,7 @@ describe('agent-started tracking (docs section 14.1)', () => {
 
     // Already-finished rows are untouched and the sweep is idempotent.
     expect(must(scheduledTasksDb.listRuns(task.id, 5, 0).find((row) => row.id === finished.id)).status).toBe('success');
+    expect(scheduledTasksDb.listRunningRuns()).toHaveLength(0);
     expect(scheduledTasksDb.failInterruptedRuns(finishedAt, 'server_restart')).toBe(0);
     expect(scheduledTasksDb.countRunningAgentRuns()).toBe(0);
   });

@@ -1018,13 +1018,18 @@ Repository additions（`server/modules/database/repositories/scheduled-tasks.db.
 ```ts
 markRunAgentStarted(id: string): ScheduledTaskRunRow | undefined  // 幂等，只写一次：WHERE id = ? AND agent_started_at IS NULL
 countRunningAgentRuns(): number    // COUNT(DISTINCT task_id) WHERE status='running' AND agent_started_at IS NOT NULL
+listRunningRuns(): ScheduledTaskRunRow[]    // 所有 status='running' 的行，供清扫前读取（磁盘镜像用）
 failInterruptedRuns(finishedAt: string, error: string): number    // status='running' -> 'error' + finished_at/error，返回受影响行数
 ```
 
 `ScheduledTaskRunRow` 新增 `agent_started_at: string | null`。
 
 崩溃一致性：进程重启后不可能还有 run 在跑（agent 是本进程的子进程），所以
-`startScheduledTaskService()` 在启动 tick 之前先执行一次 `failInterruptedRuns(nowIso, 'server_restart')`，
+`startScheduledTaskService()` 在启动 tick 之前先执行一次
+`reconcileInterrupted('server_restart')`——它先 `listRunningRuns()` 拿到受影响行、
+再 `failInterruptedRuns(nowIso, 'server_restart')` 落库，最后逐个 `finalizeRunWorkspace()`
+把同一终态（`status='error'` / `finishedAt` / `error`）写回磁盘 `run.json`。DB 与磁盘因此对称，
+task 侧 `run_status()` 通道在崩溃路径下不再卡在 `running`（此前只能靠 2400s TTL / 僵尸启发式兜底）。
 否则残留的 `running` 行会把计数永久抬高（顺带修掉 run history 永远显示 Running… 的老问题）。
 只在默认 scheduler 启动时做，`createScheduler()`（含其单元测试）行为不变；`startScheduledTaskService()`
 因此从本轮起是 **async**（先 `await` 清理、再启动 tick，永不 reject；`server/index.js` 的调用点无需 await）。
