@@ -27,7 +27,12 @@ vi.mock('./events.js', () => ({ emitScheduledTaskRunState: vi.fn() }));
 import { scheduledTasksDb } from '../modules/database/index.js';
 import { addProjectManually } from '../projects.js';
 import { queryClaudeSDK, abortClaudeSDKSession } from '../claude-sdk.js';
-import { createTaskRunner, startTaskRun } from './runner.js';
+import {
+  appendScriptOutput,
+  appendScriptOutputTail,
+  createTaskRunner,
+  startTaskRun,
+} from './runner.js';
 import { emitScheduledTaskRunState } from './events.js';
 import { runDir, taskDir, workspacePromptBlock } from './workspace.js';
 import { PREDEFINED_ENV_NAMES, predefinedVarsPromptBlock } from './params.js';
@@ -398,6 +403,82 @@ describe('script gate (§7)', () => {
 
     expect(result.error).toBe('invalid_script_output');
     expect(result.scriptOutput).toHaveLength(20000);
+  });
+
+  // Regression (#42): the gate used to accumulate stdout unbounded and only
+  // truncate at settle time, so a chatty command could grow the Node heap. The
+  // buffer must be capped while streaming, and the pipe must still be drained.
+  it('caps in-memory accumulation for a flood of output and still settles', async () => {
+    // 2,000,000 chars: 100x the 20000-char cap.
+    const result = await runWith({ command: 'yes x | head -c 2000000' });
+
+    expect(result.error).toBe('invalid_script_output');
+    expect(result.scriptExitCode).toBe(0);
+    expect(result.scriptOutput).toHaveLength(20000);
+  });
+
+  // Regression (#47 review): the head-capped buffer used to feed the envelope
+  // parser too, so a gate that prints more than SCRIPT_OUTPUT_LIMIT of noise and
+  // only then its envelope lost the last line -> invalid_script_output -> the
+  // task silently never ran. Parsing now reads a separate bounded tail buffer.
+  it('parses a trailing envelope even when the noise exceeds the output cap', async () => {
+    queryClaudeSDK.mockResolvedValue(undefined);
+
+    const result = await runWith({
+      // 25,000 chars of noise (> 20,000 cap), then the envelope on the last line.
+      command: "yes x | head -c 25000; printf '\\n{\"prompt\":\"go\"}\\n'",
+    });
+
+    expect(result.status).toBe('success');
+    expect(result.promptUsed).toBe('go');
+    // The stored scriptOutput still keeps the head, capped at the limit.
+    expect(result.scriptOutput).toHaveLength(20000);
+    expect(queryClaudeSDK).toHaveBeenCalledTimes(1);
+  });
+
+  describe('appendScriptOutput (#42)', () => {
+    it('never lets the buffer exceed the cap across many large chunks', () => {
+      let buffer = '';
+      // 100 x 100KB = 10MB of streamed output, like a runaway gate command.
+      for (let i = 0; i < 100; i += 1) {
+        buffer = appendScriptOutput(buffer, Buffer.from('x'.repeat(100000)));
+        expect(buffer.length).toBeLessThanOrEqual(20000);
+      }
+      expect(buffer).toHaveLength(20000);
+      // Past the cap the buffer is returned unchanged (no growth, no new copy).
+      expect(appendScriptOutput(buffer, Buffer.from('more'))).toBe(buffer);
+    });
+
+    it('returns the buffer unchanged when already at the limit', () => {
+      const atCap = 'a'.repeat(20000);
+      expect(appendScriptOutput(atCap, Buffer.from('ignored'))).toBe(atCap);
+    });
+
+    it('does not split a surrogate pair at the head boundary', () => {
+      // '😀' (U+1F600) is two UTF-16 code units. A 5-unit cap would cut the
+      // third pair in half, so the orphaned high surrogate is dropped instead.
+      expect(appendScriptOutput('', Buffer.from('😀'.repeat(100)), 5)).toBe('😀😀');
+    });
+  });
+
+  describe('appendScriptOutputTail (#47 review)', () => {
+    it('keeps the most recent output and drops the head past the cap', () => {
+      let tail = appendScriptOutputTail('', Buffer.from('a'.repeat(30000)));
+      expect(tail).toHaveLength(20000);
+      expect(tail).toBe('a'.repeat(20000));
+
+      tail = appendScriptOutputTail(tail, Buffer.from('END'));
+      expect(tail).toBe('a'.repeat(19997) + 'END');
+    });
+
+    it('does not split a surrogate pair at the kept-tail boundary', () => {
+      // A 5-unit cap on '😀😀😀😀😀' must drop the orphaned low surrogate and
+      // keep only complete code points.
+      const tail = appendScriptOutputTail('', Buffer.from('😀'.repeat(5)), 5);
+      expect(tail).toBe('😀😀');
+      const first = tail.charCodeAt(0);
+      expect(first >= 0xd800 && first <= 0xdbff).toBe(true);
+    });
   });
 
   it('passes SCHEDULED_TASK_ID/TITLE/PROJECT into the command environment', async () => {

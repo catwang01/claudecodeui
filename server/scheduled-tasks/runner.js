@@ -131,9 +131,65 @@ function resolveCommandTimeoutSeconds(task) {
   return Math.min(Math.trunc(parsed), MAX_COMMAND_TIMEOUT_SECONDS);
 }
 
+/**
+ * Keep the head of `text` within `maxUnits` UTF-16 code units without leaving a
+ * dangling high surrogate behind when the cut lands mid code point (a code point
+ * is one or two UTF-16 code units: astral characters are surrogate pairs).
+ */
+function headByCodePoint(text, maxUnits) {
+  if (maxUnits <= 0) return '';
+  if (text.length <= maxUnits) return text;
+  let end = maxUnits;
+  const code = text.charCodeAt(end - 1);
+  if (code >= 0xd800 && code <= 0xdbff) end -= 1;
+  return text.slice(0, end);
+}
+
+/**
+ * Keep the tail of `text` within `maxUnits` UTF-16 code units without leaving a
+ * dangling low surrogate at the front when the cut lands mid code point.
+ */
+function tailByCodePoint(text, maxUnits) {
+  if (maxUnits <= 0) return '';
+  if (text.length <= maxUnits) return text;
+  let start = text.length - maxUnits;
+  const code = text.charCodeAt(start);
+  if (code >= 0xdc00 && code <= 0xdfff) start += 1;
+  return text.slice(start);
+}
+
 function truncateScriptOutput(text) {
   if (typeof text !== 'string') return null;
-  return text.length > SCRIPT_OUTPUT_LIMIT ? text.slice(0, SCRIPT_OUTPUT_LIMIT) : text;
+  return text.length > SCRIPT_OUTPUT_LIMIT ? headByCodePoint(text, SCRIPT_OUTPUT_LIMIT) : text;
+}
+
+/**
+ * Append one stdout chunk to the gate's buffer without letting the buffer grow
+ * past SCRIPT_OUTPUT_LIMIT. Exported for tests. The caller must keep draining
+ * the pipe regardless (a chatty gate must never block on a full pipe); only our
+ * in-memory copy of its output is bounded, so a runaway command cannot grow the
+ * Node heap. This keeps the *head* of the stream (what `scriptOutput` stores);
+ * the envelope parser uses appendScriptOutputTail instead.
+ */
+export function appendScriptOutput(buffer, chunk, limit = SCRIPT_OUTPUT_LIMIT) {
+  const remaining = limit - buffer.length;
+  if (remaining <= 0) return buffer;
+  const text = chunk.toString();
+  return text.length <= remaining ? buffer + text : buffer + headByCodePoint(text, remaining);
+}
+
+/**
+ * Append one stdout chunk to a bounded *tail* buffer, keeping up to `limit`
+ * characters of the most recent output. The script-gate envelope conventionally
+ * lives on the last line (§7), so parsing must see the end of the stream even
+ * once the head buffer (appendScriptOutput) has dropped it. Like the head buffer
+ * this stays bounded, and the caller must still drain the pipe.
+ * Exported for tests.
+ */
+export function appendScriptOutputTail(buffer, chunk, limit = SCRIPT_OUTPUT_LIMIT) {
+  const text = chunk.toString();
+  if (text.length >= limit) return tailByCodePoint(text, limit);
+  return tailByCodePoint(buffer + text, limit);
 }
 
 function tryParseEnvelopeObject(text) {
@@ -287,7 +343,9 @@ export function createTaskRunner(deps = {}) {
       }
 
       let stdout = '';
-      let stderr = '';
+      // §7: the envelope conventionally sits on the last line, so parsing gets
+      // its own bounded tail buffer while scriptOutput keeps the bounded head.
+      let tail = '';
       let settled = false;
       let timedOut = false;
       let timer = null;
@@ -319,11 +377,12 @@ export function createTaskRunner(deps = {}) {
       if (timer && typeof timer.unref === 'function') timer.unref();
 
       child.stdout?.on('data', (chunk) => {
-        stdout += chunk.toString();
+        stdout = appendScriptOutput(stdout, chunk);
+        tail = appendScriptOutputTail(tail, chunk);
       });
-      child.stderr?.on('data', (chunk) => {
-        stderr += chunk.toString();
-      });
+      // Drain stderr so a chatty gate can never block on a full pipe. Its content
+      // is intentionally unused: the envelope is only ever read from stdout.
+      child.stderr?.on('data', () => {});
 
       child.on('error', () => {
         settle({
@@ -347,7 +406,9 @@ export function createTaskRunner(deps = {}) {
           return;
         }
 
-        const envelope = parseEnvelope(stdout);
+        // §7: parse the tail buffer, not the (head-capped) scriptOutput — the
+        // envelope is the last line and must survive noise beyond the cap.
+        const envelope = parseEnvelope(tail);
         if (!envelope.ok) {
           settle({ ok: false, code: 'invalid_script_output', scriptOutput, scriptExitCode });
           return;
