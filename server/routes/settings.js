@@ -465,4 +465,29 @@ router.delete('/pii-proxy/pii-groups', async (req, res) => {
   }
 });
 
+// Read-only view of what is configured (proxied from the PII proxy; values are masked).
+router.get('/pii-proxy/config', async (req, res) => {
+  try {
+    const r = await fetch(`${PII_PROXY_BASE}/config`);
+    res.json(await r.json());
+  } catch {
+    res.json({ available: false });
+  }
+});
+
+// Dry-run: show what the model would see for a sample text.
+router.post('/pii-proxy/dry-run', async (req, res) => {
+  const text = typeof req.body?.text === 'string' ? req.body.text : '';
+  try {
+    const r = await fetch(`${PII_PROXY_BASE}/config/dry-run`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    res.json(await r.json());
+  } catch {
+    res.status(502).json({ error: 'proxy unreachable' });
+  }
+});
+
 export default router;

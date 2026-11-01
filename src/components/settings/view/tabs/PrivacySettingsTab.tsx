@@ -24,6 +24,24 @@ type PiiGroup = {
   occurrences: PiiOccurrence[];
 };
 
+type PiiConfig = {
+  path: string;
+  exists: boolean;
+  mode: string;
+  min_literal_len: number;
+  case_sensitive: boolean;
+  literals: { kind: string; masked: string; length: number }[];
+  custom_patterns: { kind: string; regex: string; max_len: number; case_sensitive: boolean }[];
+  builtin_patterns: { kind: string; regex: string; max_len: number; overridden: boolean }[];
+  issues: string[];
+  effective: { literals: number; patterns: number; skipped_literals: number; max_len: number; issues: string[] };
+  available?: boolean;
+};
+
+type DryRunResult = {
+  matches: { kind: string; masked: string; fake: string; start: number; end: number }[];
+  anonymized: string;
+};
 const ENTITY_COLORS: Record<string, string> = {
   PASSWORD:       'bg-rose-500/15 text-rose-700 dark:text-rose-400',
   PRIVATE_KEY:    'bg-red-500/15 text-red-700 dark:text-red-400',
@@ -148,6 +166,11 @@ export default function PrivacySettingsTab() {
   const [logsByReqId, setLogsByReqId] = useState<Map<string, LogEntry[]>>(new Map());
   const [groupsLoading, setGroupsLoading] = useState(false);
   const [query, setQuery] = useState('');
+  const [piiConfig, setPiiConfig] = useState<PiiConfig | null>(null);
+  const [configLoading, setConfigLoading] = useState(false);
+  const [dryText, setDryText] = useState('');
+  const [dryResult, setDryResult] = useState<DryRunResult | null>(null);
+  const [dryLoading, setDryLoading] = useState(false);
 
   useEffect(() => {
     authenticatedFetch('/api/settings/pii-proxy')
@@ -183,6 +206,39 @@ export default function PrivacySettingsTab() {
   }, []);
 
   useEffect(() => { fetchGroups(); }, [fetchGroups]);
+
+  const fetchConfig = useCallback(async () => {
+    setConfigLoading(true);
+    try {
+      const res = await authenticatedFetch('/api/settings/pii-proxy/config');
+      setPiiConfig(await res.json());
+    } catch {
+      setPiiConfig(null);
+    } finally {
+      setConfigLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchConfig(); }, [fetchConfig]);
+
+  const handleDryRun = async () => {
+    if (!dryText.trim()) {
+      return;
+    }
+    setDryLoading(true);
+    try {
+      const res = await authenticatedFetch('/api/settings/pii-proxy/dry-run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: dryText }),
+      });
+      setDryResult(await res.json());
+    } catch {
+      setDryResult(null);
+    } finally {
+      setDryLoading(false);
+    }
+  };
 
   const filtered = useMemo(() => {
     if (!query.trim()) return groups;
@@ -267,6 +323,129 @@ export default function PrivacySettingsTab() {
           <p>邮箱地址 · AWS/云密钥 · JWT · PEM 私钥 · 带凭据的 URL · GitHub token · password=/密码 类键值 · IPv4 · 手机号 · 身份证号</p>
           <p className="mt-1">另有你在 ~/.pii-proxy/secrets.json 中配置的字面值清单与自定义正则。</p>
         </div>
+      </div>
+
+      {/* Configured rules */}
+      <div className="space-y-3 rounded-lg border border-border bg-card p-4">
+        <div className="flex items-center justify-between gap-2">
+          <h4 className="text-sm font-medium text-foreground">已配置规则</h4>
+          <button
+            type="button"
+            onClick={fetchConfig}
+            disabled={configLoading}
+            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={'h-3.5 w-3.5' + (configLoading ? ' animate-spin' : '')} />
+            刷新
+          </button>
+        </div>
+
+        {!piiConfig || piiConfig.available === false ? (
+          <p className="text-xs text-muted-foreground">PII 代理未运行，无法读取配置。</p>
+        ) : (
+          <div className="space-y-3 text-xs">
+            <p className="text-muted-foreground">
+              配置文件 <span className="font-mono text-foreground">{piiConfig.path}</span>{' '}
+              {piiConfig.exists
+                ? <span className="text-green-600 dark:text-green-400">已存在</span>
+                : <span className="text-amber-600 dark:text-amber-400">不存在，仅内置规则生效</span>}
+              {' · '}占位符模式 <span className="font-mono text-foreground">{piiConfig.mode}</span>
+            </p>
+            <p className="text-muted-foreground">
+              生效中：{piiConfig.effective.literals} 个清单值 · {piiConfig.effective.patterns} 条正则 · 最长占位符 {piiConfig.effective.max_len} 字符
+            </p>
+
+            <div>
+              <p className="mb-1 font-medium text-foreground">清单值（已掩码，不显示明文）</p>
+              {piiConfig.literals.length === 0 ? (
+                <p className="text-muted-foreground">无——目前只有内置规则在生效</p>
+              ) : (
+                <ul className="space-y-1">
+                  {piiConfig.literals.map((item, i) => (
+                    <li key={i} className="flex items-center gap-2">
+                      <span className={'rounded px-1.5 py-0.5 text-[10px] ' + entityColor(item.kind)}>{item.kind}</span>
+                      <span className="font-mono text-foreground">{item.masked}</span>
+                      <span className="text-muted-foreground">（{item.length} 字符）</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            {piiConfig.custom_patterns.length > 0 && (
+              <div>
+                <p className="mb-1 font-medium text-foreground">自定义正则</p>
+                <ul className="space-y-1">
+                  {piiConfig.custom_patterns.map((item, i) => (
+                    <li key={i} className="flex flex-wrap items-center gap-2">
+                      <span className={'rounded px-1.5 py-0.5 text-[10px] ' + entityColor(item.kind)}>{item.kind}</span>
+                      <span className="font-mono text-foreground">{item.regex}</span>
+                      <span className="text-muted-foreground">max_len={item.max_len}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div>
+              <p className="mb-1 font-medium text-foreground">内置规则</p>
+              <div className="flex flex-wrap gap-1">
+                {piiConfig.builtin_patterns.map(item => (
+                  <span
+                    key={item.kind}
+                    className={'rounded px-1.5 py-0.5 text-[10px] ' + entityColor(item.kind) + (item.overridden ? ' line-through opacity-60' : '')}
+                    title={item.overridden ? '已被你的自定义规则覆盖' : item.regex}
+                  >
+                    {item.kind}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            {(piiConfig.issues.length > 0 || piiConfig.effective.issues.length > 0) && (
+              <div className="rounded-md bg-amber-500/10 px-3 py-2 text-amber-700 dark:text-amber-400">
+                <p className="font-medium">配置问题</p>
+                <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                  {[...piiConfig.issues, ...piiConfig.effective.issues].map((issue, i) => (
+                    <li key={i}>{issue}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="space-y-2 rounded-md bg-muted/40 p-3">
+              <p className="font-medium text-foreground">试运行：看看模型会收到什么</p>
+              <textarea
+                value={dryText}
+                onChange={e => setDryText(e.target.value)}
+                rows={3}
+                placeholder="粘贴一段文本，例如：密码=hunter2，邮箱 a@b.com"
+                className="w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleDryRun}
+                  disabled={dryLoading || !dryText.trim()}
+                  className="rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground disabled:opacity-50"
+                >
+                  {dryLoading ? '检测中…' : '试运行'}
+                </button>
+                {dryResult && (
+                  <span className="text-muted-foreground">
+                    命中 {dryResult.matches.length} 处
+                    {dryResult.matches.length > 0 ? '：' + dryResult.matches.map(m => m.kind).join('、') : ''}
+                  </span>
+                )}
+              </div>
+              {dryResult && (
+                <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded bg-background p-2 font-mono text-xs text-foreground">
+                  {dryResult.anonymized || '（无内容）'}
+                </pre>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Log viewer */}

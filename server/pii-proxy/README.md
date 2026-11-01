@@ -70,7 +70,21 @@ npm run bench:pii            # 基准：扫描吞吐 / SSE 吞吐 / 任意切分
 curl -s localhost:18090/health
 ```
 
-`/health` 会返回 `mode: v2-aliases`、当前检测器统计、vault 条目数与运行时计数（已脱敏值 / 已还原值 / 未覆盖的二进制 / 跳过的签名块）。`/logs` 与 `/pii-groups` 形状保持不变，设置界面无需改动。
+`/health` 会返回 `mode: v2-aliases`、当前检测器统计、vault 条目数与运行时计数（已脱敏值 / 已还原值 / 未覆盖的二进制 / 跳过的签名块）。`/logs` 与 `/pii-groups` 形状保持不变。
+## 查看当前配置（设置 → 隐私 → PII 脱敏代理）
+
+隐私页现在有一块 **「已配置规则」**：配置文件路径与是否存在、占位符模式、生效的清单值 / 自定义正则 / 内置规则（清单值只显示**掩码**，例如 `my****rd`）、配置体检问题，以及一个 **试运行** 输入框（粘一段文本 → 显示模型实际会收到的内容）。
+
+对应的只读接口：
+
+```bash
+curl -s localhost:18090/config            # 配置视图（值已掩码）
+curl -s -X POST localhost:18090/config/dry-run \
+     -H 'content-type: application/json' -d '{"text": "密码=hunter2 a@b.com"}'
+# → {"matches":[{"kind":"SECRET_KEYWORD","masked":"hu*****2","fake":"password=..."}], "anonymized": "..."}
+```
+
+说明：`/config` 读的是**文件当前内容**，`effective` 字段是**进程内实际生效**的规则——两者不一致就说明改完文件还没重启代理。`/config/dry-run` 使用临时 vault，不会污染真实映射。
 
 ## 保护边界（务必知晓）
 

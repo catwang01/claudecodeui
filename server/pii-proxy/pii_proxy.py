@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import pathlib
+import tempfile
 import time
 import uuid
 from collections import deque
@@ -294,6 +295,75 @@ async def get_pii_groups():
 async def clear_pii_groups():
     _pii_groups.clear()
     return {"ok": True}
+
+
+def _mask_value(value: str) -> str:
+    if len(value) <= 2:
+        return "****"
+    if len(value) <= 6:
+        return value[0] + "***" + value[-1]
+    return value[:2] + "****" + value[-2:]
+
+
+@app.get("/config")
+async def get_config():
+    """Read-only view of what the user configured (values are always masked)."""
+    user_cfg = DetectorConfig.load(SECRETS_FILE)
+    user_kinds = {spec.kind for spec in user_cfg.patterns}
+    builtin = [
+        {"kind": spec.kind, "regex": spec.regex, "max_len": spec.max_len, "overridden": spec.kind in user_kinds}
+        for spec in BUILTIN_PATTERNS
+    ]
+    return {
+        "path": SECRETS_FILE,
+        "exists": os.path.exists(os.path.expanduser(SECRETS_FILE)),
+        "mode": VAULT.stats()["mode"],
+        "min_literal_len": user_cfg.min_literal_len,
+        "case_sensitive": user_cfg.case_sensitive,
+        "literals": [
+            {"kind": kind, "masked": _mask_value(value), "length": len(value)}
+            for kind, value in user_cfg.literals
+        ],
+        "custom_patterns": [
+            {"kind": spec.kind, "regex": spec.regex, "max_len": spec.max_len,
+             "case_sensitive": spec.case_sensitive}
+            for spec in user_cfg.patterns
+        ],
+        "builtin_patterns": builtin,
+        # Issues from the file as written now (may require a restart to take
+        # effect) plus anything the active detector reports.
+        "issues": user_cfg.lint(),
+        "effective": DETECTOR.health(),
+    }
+
+
+@app.post("/config/dry-run")
+async def config_dry_run(payload: dict | None = None):
+    """Show what would be sent upstream for a sample text (never touches the vault)."""
+    text = str((payload or {}).get("text", ""))[:20000]
+    matches = DETECTOR.scan(text)
+    scratch_path = os.path.join(tempfile.gettempdir(), "pii-dryrun-%s.json" % uuid.uuid4().hex[:8])
+    scratch = Vault(scratch_path)
+    try:
+        anonymized = text
+        previews = []
+        for match in sorted(matches, key=lambda m: m.start, reverse=True):
+            fake = scratch.surrogate_for(match.kind, match.value)
+            anonymized = anonymized[: match.start] + fake + anonymized[match.end:]
+        for match in matches:
+            previews.append({
+                "kind": match.kind,
+                "masked": _mask_value(match.value),
+                "fake": scratch.surrogate_for(match.kind, match.value),
+                "start": match.start,
+                "end": match.end,
+            })
+    finally:
+        try:
+            os.unlink(scratch_path)
+        except OSError:
+            pass
+    return {"matches": previews, "anonymized": anonymized}
 
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
