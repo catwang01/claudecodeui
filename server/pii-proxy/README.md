@@ -1,14 +1,26 @@
 # PII Proxy (v2)
 
-本机脱敏网关：在请求离开本机前，把敏感值替换为**确定性可读别名**；在响应返回客户端前，按协议（SSE 事件 / JSON 字段）精确还原。
+本机脱敏网关：在请求离开本机前，把敏感值替换为**格式一致的确定性假值**（fake surrogate，例如真邮箱 → 假邮箱、真内网 IP → 假私网 IP）；在响应返回客户端前，按协议（SSE 事件 / JSON 字段）精确还原。
 
 ## 为什么是 v2
 
 v1 使用不透明密文 `<PII:TYPE>AES密文</PII>` + 响应侧正则扫 tag 裸替换，实测有若干结构性问题（issue #24）：模型改写占位符即永久不可还原；真实流式分块切在占位符内部会漏还原；明文含引号/反斜杠时把 SSE 帧写成非法 JSON；会改写带签名的 thinking 块。v2 换成：
 
-* **确定性别名**：`PII_<KIND>_<6hex>`，字母表 `[A-Za-z0-9_]`，不含 `< > " \ { }`，不需要任何转义；同一真值永远同一个别名（跨重启稳定）。
+* **格式一致的假值（默认）**：按实体类型生成“像真的”替身，同一真值永远同一个假值（跨重启稳定）。从数据保护角度，模型看到的具体值无关紧要，**只要形状对**；自然文本比不透明 hex token 更容易被模型逐字复制，也更利于它理解格式/长度/语义。
+* **可选不透明 token**：`PII_PROXY_PLACEHOLDER_MODE=token` 可退回 `PII_<KIND>_<6hex>` 模式（A/B 对比或排查用）。
+
+| 真值类型 | 假值示例 |
+|---|---|
+| 邮箱 | `alice.chen@corp.example` → `jordan.kim@example.com` |
+| IPv4 | `117.72.145.38` → `10.159.198.181` |
+| 手机号 | `13812345678` → `14735370211` |
+| AWS key | `AKIA...` → `AKIA` + 16 位随机 |
+| JWT | 三段 base64url，长度相近 |
+| PEM 私钥 | 同格式假 RSA 私钥（≤256 字符） |
+| `password=xxx` | 保留 `password=` 前缀，只换值 |
+| 自定义清单值 | 按 kind 生成，或同长度随机串 |
 * **精确映射还原**：查表替换，不再依赖模型逐字回显一个不可理解字符串，也不再扫 tag。
-* **事件级流式还原**：按空行切 SSE 帧 → 解析 JSON → 只改应当改的字段 → `json.dumps` 重新序列化；跨帧 half-placeholder 由定长扣留（默认 48 字符）兜住。
+* **事件级流式还原**：按空行切 SSE 帧 → 解析 JSON → 只改应当改的字段 → `json.dumps` 重新序列化；跨帧半截占位符由定长扣留兜住（窗口 = 当前最长占位符长度，下限 48 字符）。
 * **签名块豁免**：`thinking` / `signature` / `redacted_thinking` / `encrypted_content` 一律不改写。
 * **检测分层**：T0 用户字面清单（默认开）→ T1 有界正则（内置，默认开）→ T2 NER（默认关，本版本不内置）。
 
@@ -47,6 +59,7 @@ v1 使用不透明密文 `<PII:TYPE>AES密文</PII>` + 响应侧正则扫 tag �
 | `PII_PROXY_UPSTREAM_URL` | `~/.claude/settings.json` 的 `env.ANTHROPIC_BASE_URL`，否则 `https://api.anthropic.com` | 转发目标 |
 | `PII_PROXY_SECRETS_FILE` | `~/.pii-proxy/secrets.json` | 清单/规则文件 |
 | `PII_PROXY_VAULT_FILE` | `~/.pii-proxy/vault.json` | 映射持久化文件 |
+| `PII_PROXY_PLACEHOLDER_MODE` | `fake` | `fake` = 同格式假值（推荐）；`token` = 旧的不透明 token |
 
 ## 运行与验证
 
@@ -79,7 +92,7 @@ npm run pii-proxy:cov      # 覆盖率 + 未覆盖行
 npm run bench:pii          # 基准与切分 fuzz
 ```
 
-当前基线：**171 passed + 1 xfailed，整体行覆盖 95%**（pii_vault 98% / pii_stream 96% / pii_detect 93% / pii_proxy 93%）。未覆盖主要是防御性分支（配置回退、保存失败、上游重试）。
+当前基线：**189 passed + 1 xfailed，整体行覆盖 95%**（pii_vault 95% / pii_surrogates 95% / pii_stream 96% / pii_detect 93% / pii_proxy 93%）。未覆盖主要是防御性分支（配置回退、保存失败、上游重试）。
 
 | 测试文件 | 覆盖 |
 |---|---|
@@ -88,8 +101,8 @@ npm run bench:pii          # 基准与切分 fuzz
 | `tests/test_stream_edges.py` | 畸形帧、CRLF、半截 UTF-8、超长/超多帧、转义与嵌套、截断与计数、幂等 |
 | `tests/test_proxy_v2.py` | 请求脱敏覆盖（嵌套 tool_use / tool_result / system list）、响应还原、签名块豁免、fail-open |
 | `tests/test_proxy_edges.py` | UI 端点形状、统计计数、非 messages 路径不动、非 JSON 透传、错误响应还原、别名跨请求稳定、配置合并 |
-| `tests/test_http_e2e.py` | 真实 uvicorn + 真实 HTTP：多轮对话、极端切分、工具调用闭环、特殊字符、上游错误、并发 |
-| `tests/test_vault_edges.py` | 别名格式/确定性/持久化/损坏文件/并发/冲突扩展/签名键跳过 |
+| `tests/test_http_e2e.py` | 真实 uvicorn + 真实 HTTP：多轮对话、极端切分、工具调用闭环、特殊字符、上游错误、并发；以及假值形状（邮箱/IP）与 token 模式对照 |
+| `tests/test_vault_edges.py` | 假值形状（邮箱/IP/手机/身份证/AWS/GitHub/JWT/PEM/基本认证/密码）、确定性、唯一性、不复用原文、持久化、损坏文件、并发、token 模式兼容、签名键跳过 |
 
 **已知未覆盖**（刻意或待补）：
 

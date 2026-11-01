@@ -48,8 +48,13 @@ MESSAGES_PATHS = {"v1/messages", "v1/messages/count_tokens"}
 # Fields that must stay byte-identical: Anthropic signs them and rejects any
 # later replay whose text no longer matches the signature.
 SIGNED_KEYS = ("thinking", "signature", "redacted_thinking", "encrypted_content")
-# Upper bound used by the streaming hold-back window (longest possible alias).
+# Floor for the streaming hold-back window; the real value is the longest
+# placeholder the vault knows about (surrogates stay under 256 chars).
 RESTORE_MAX_LEN = 48
+
+
+def restore_window() -> int:
+    return max(RESTORE_MAX_LEN, VAULT.max_placeholder_len())
 # Never rewrite binary payloads (images / documents); report them instead.
 BINARY_KEYS = ("data", "base64", "image_url")
 
@@ -122,9 +127,7 @@ _stats = {
 
 
 def _aliases_of(text: str) -> list[str]:
-    from pii_vault import ALIAS_RX
-
-    return [m.group(0) for m in ALIAS_RX.finditer(text)]
+    return VAULT.find_placeholders(text)
 
 
 def _log_diff(req_id: str, label: str, before: str, after: str) -> None:
@@ -134,7 +137,7 @@ def _log_diff(req_id: str, label: str, before: str, after: str) -> None:
         return
     ts = datetime.now(timezone.utc).isoformat()
     for alias in _aliases_of(after):
-        kind = alias.split("_")[1]
+        kind = VAULT.kind_of_placeholder(alias) or "SECRET"
         entry = _pii_groups.setdefault(alias, {"entity_type": kind, "hits": deque(maxlen=200)})
         entry["hits"].appendleft({"req_id": req_id, "ts": ts, "label": label})
     diff = "\n".join(
@@ -155,7 +158,7 @@ def _anonymize_text(text: str, req_id: str, label: str) -> str:
         return text
     out = text
     for match in sorted(matches, key=lambda m: m.start, reverse=True):
-        alias = VAULT.alias_for(match.kind, match.value)
+        alias = VAULT.surrogate_for(match.kind, match.value)
         out = out[: match.start] + alias + out[match.end:]
         _stats["anonymized_values"] += 1
     _log_diff(req_id, label, text, out)
@@ -199,11 +202,9 @@ def anonymize_request(data: Any, req_id: str) -> tuple[Any, bool]:
 # --------------------------------------------------------------------------- #
 
 def _count_aliases(node: Any) -> int:
-    from pii_vault import ALIAS_RX
-
     found = 0
     if isinstance(node, str):
-        found += sum(1 for m in ALIAS_RX.finditer(node) if VAULT.reveal(m.group(0)))
+        found += len(VAULT.find_placeholders(node))
     elif isinstance(node, dict):
         for value in node.values():
             found += _count_aliases(value)
@@ -336,7 +337,7 @@ async def proxy(request: Request, path: str):
     resp_headers = {k: v for k, v in upstream.headers.items() if k.lower() not in _HOP_BY_HOP}
 
     if "text/event-stream" in content_type:
-        restorer = SSERestorer(VAULT.restore_text, RESTORE_MAX_LEN)
+        restorer = SSERestorer(VAULT.restore_text, restore_window())
 
         async def _stream():
             try:

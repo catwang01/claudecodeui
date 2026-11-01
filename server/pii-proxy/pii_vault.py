@@ -22,17 +22,24 @@ import hashlib
 import hmac
 import json
 import os
+import random
 import re
 import secrets
 import threading
 from pathlib import Path
 from typing import Any, Iterable
 
+from pii_surrogates import make_surrogate
+
 ALIAS_RX = re.compile(r"PII_([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*)_([0-9a-f]{6,16})(?![0-9a-f])")
 KIND_RX = re.compile(r"[^A-Z0-9]+")
 
 DEFAULT_VAULT_PATH = "~/.pii-proxy/vault.json"
 _HEX_LEN = 6
+# "fake"  : format-preserving realistic surrogate (default, see pii_surrogates.py)
+# "token" : opaque PII_<KIND>_<hex> token (kept for compatibility / A-B testing)
+DEFAULT_MODE = "fake"
+VALID_MODES = ("fake", "token")
 
 
 def _normalize_kind(kind: str) -> str:
@@ -49,55 +56,120 @@ def kind_of(alias: str) -> str | None:
 class Vault:
     """Deterministic alias <-> original-value mapping."""
 
-    def __init__(self, path: str | os.PathLike[str] | None = None, secret: bytes | None = None) -> None:
+    def __init__(
+        self,
+        path: str | os.PathLike[str] | None = None,
+        secret: bytes | None = None,
+        mode: str | None = None,
+    ) -> None:
         self.path = Path(os.path.expanduser(str(path or DEFAULT_VAULT_PATH)))
         self._lock = threading.RLock()
         self._forward: dict[tuple[str, str], str] = {}
         self._reverse: dict[str, str] = {}
+        self._kinds: dict[str, str] = {}
         self._secret: bytes = secret if secret is not None else secrets.token_bytes(32)
         self._dirty = False
+        requested = (mode or os.getenv("PII_PROXY_PLACEHOLDER_MODE", DEFAULT_MODE) or DEFAULT_MODE).lower()
+        self._mode = requested if requested in VALID_MODES else DEFAULT_MODE
+        self._restore_rx: re.Pattern[str] | None = None
         if secret is None:
             self._load()
 
     # ------------------------------------------------------------------ core
 
-    def alias_for(self, kind: str, value: str) -> str:
-        """Return the deterministic alias for *value* (minting one if needed)."""
+    def surrogate_for(self, kind: str, value: str) -> str:
+        """Return the deterministic placeholder for *value* (minting it if needed).
+
+        fake mode  -> a realistic, format-preserving fake (an email stays an
+                      email, a private IP stays a private IP);
+        token mode -> the legacy opaque PII_<KIND>_<hex> token.
+        """
         kind = _normalize_kind(kind)
         key = (kind, value)
         with self._lock:
             existing = self._forward.get(key)
             if existing is not None:
                 return existing
-            digest = hmac.new(self._secret, ("%s\x00%s" % (kind, value)).encode("utf-8"), hashlib.sha256).hexdigest()
-            length = _HEX_LEN
-            while True:
-                alias = "PII_%s_%s" % (kind, digest[:length])
-                owner = self._reverse.get(alias)
-                if owner is None or owner == value:
-                    break
-                length += 1  # extremely unlikely collision: extend the suffix
-            self._forward[key] = alias
-            self._reverse[alias] = value
+            if self._mode == "token":
+                placeholder = self._mint_token(kind, value)
+            else:
+                placeholder = self._mint_surrogate(kind, value)
+            self._forward[key] = placeholder
+            self._reverse[placeholder] = value
+            self._kinds[placeholder] = kind
+            self._restore_rx = None
             self._dirty = True
             self._save_locked()
-            return alias
+            return placeholder
+
+    # Backwards-compatible name (tests and callers used alias_for).
+    alias_for = surrogate_for
+
+    def _mint_token(self, kind: str, value: str) -> str:
+        digest = hmac.new(self._secret, ("%s\x00%s" % (kind, value)).encode("utf-8"), hashlib.sha256).hexdigest()
+        length = _HEX_LEN
+        while True:
+            token = "PII_%s_%s" % (kind, digest[:length])
+            owner = self._reverse.get(token)
+            if owner is None or owner == value:
+                return token
+            length += 1
+
+    def _mint_surrogate(self, kind: str, value: str) -> str:
+        seed = hmac.new(self._secret, ("%s\x00%s" % (kind, value)).encode("utf-8"), hashlib.sha256).digest()
+        for attempt in range(64):
+            rng = random.Random(int.from_bytes(hashlib.sha256(seed + attempt.to_bytes(2, "big")).digest()[:8], "big"))
+            candidate = make_surrogate(kind, value, rng)
+            if not candidate or candidate == value:
+                continue
+            owner = self._reverse.get(candidate)
+            if owner is None or owner == value:
+                return candidate
+        # Astronomically unlikely; fall back to a token so we never lose a value.
+        return self._mint_token(kind, value)
+
+    def kind_of_placeholder(self, placeholder: str) -> str | None:
+        with self._lock:
+            return self._kinds.get(placeholder)
 
     def reveal(self, alias: str) -> str | None:
         with self._lock:
             return self._reverse.get(alias)
 
+    def _placeholder_regex(self) -> re.Pattern[str] | None:
+        """One alternation over every known placeholder (longest first)."""
+        if self._restore_rx is not None:
+            return self._restore_rx
+        if not self._reverse:
+            return None
+        ordered = sorted(self._reverse, key=len, reverse=True)
+        self._restore_rx = re.compile("|".join(re.escape(key) for key in ordered))
+        return self._restore_rx
+
     def restore_text(self, text: str) -> str:
-        """Replace every known alias with its original value (exact lookup)."""
-        if not text or "PII_" not in text:
+        """Replace every known placeholder with its original value (exact lookup)."""
+        if not text:
             return text
         with self._lock:
+            regex = self._placeholder_regex()
+            if regex is None:
+                return text
             reverse = self._reverse
+        return regex.sub(lambda match: reverse.get(match.group(0), match.group(0)), text)
 
-        def _sub(match: re.Match[str]) -> str:
-            return reverse.get(match.group(0), match.group(0))
+    def find_placeholders(self, text: str) -> list[str]:
+        """Return the known placeholders present in *text* (for logging/UI)."""
+        if not text:
+            return []
+        with self._lock:
+            regex = self._placeholder_regex()
+            if regex is None:
+                return []
+        return [match.group(0) for match in regex.finditer(text)]
 
-        return ALIAS_RX.sub(_sub, text)
+    def max_placeholder_len(self) -> int:
+        with self._lock:
+            return max((len(key) for key in self._reverse), default=24)
 
     def restore_obj(self, obj: Any, *, skip_keys: Iterable[str] = ()) -> Any:
         """Recursively restore string values, skipping the given dict keys."""
@@ -126,7 +198,13 @@ class Vault:
 
     def stats(self) -> dict:
         with self._lock:
-            return {"entries": len(self._reverse), "path": str(self.path), "persistent": bool(self._secret)}
+            return {
+                "entries": len(self._reverse),
+                "path": str(self.path),
+                "persistent": bool(self._secret),
+                "mode": self._mode,
+                "max_placeholder_len": self.max_placeholder_len(),
+            }
 
     # -------------------------------------------------------------- persistence
 
@@ -151,6 +229,7 @@ class Vault:
             kind = entry.get("kind") or kind_of(alias) or "SECRET"
             self._forward[(kind, value)] = alias
             self._reverse[alias] = value
+            self._kinds[alias] = kind
 
     def save(self) -> None:
         with self._lock:
@@ -163,8 +242,8 @@ class Vault:
             "version": 2,
             "secret": self._secret.hex(),
             "entries": [
-                {"alias": alias, "kind": kind_of(alias) or "SECRET", "value": value}
-                for alias, value in sorted(self._reverse.items())
+                {"alias": placeholder, "kind": kind, "value": value}
+                for (kind, value), placeholder in sorted(self._forward.items(), key=lambda kv: kv[1])
             ],
         }
         try:

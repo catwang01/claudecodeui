@@ -79,7 +79,8 @@ def test_request_anonymizes_literal_and_keyword(proxy, monkeypatch):
     forwarded = captured["body"].decode()
     assert SECRET_PASSWORD not in forwarded
     assert SECRET_EMAIL not in forwarded
-    assert "PII_PASSWORD_" in forwarded and "PII_EMAIL_ADDRESS_" in forwarded
+    revealed = {proxy.VAULT.reveal(p) for p in proxy.VAULT.find_placeholders(forwarded)}
+    assert SECRET_PASSWORD in revealed and SECRET_EMAIL in revealed
 
 
 def test_nested_tool_use_and_system_list_are_covered(proxy, monkeypatch):
@@ -96,7 +97,8 @@ def test_nested_tool_use_and_system_list_are_covered(proxy, monkeypatch):
         assert client.post("/v1/messages", json=payload).status_code == 200
     forwarded = captured["body"].decode()
     assert SECRET_EMAIL not in forwarded
-    assert forwarded.count("PII_EMAIL_ADDRESS_") >= 2
+    placeholders = proxy.VAULT.find_placeholders(forwarded)
+    assert sum(1 for p in placeholders if proxy.VAULT.reveal(p) == SECRET_EMAIL) >= 2
 
 
 def test_tool_result_is_covered(proxy, monkeypatch):
@@ -157,7 +159,7 @@ def test_sse_is_restored_and_stays_valid_json(proxy, monkeypatch):
     event = {"type": "content_block_delta", "index": 0,
              "delta": {"type": "text_delta", "text": text}}
     raw = _sse(event)
-    cut = raw.index(b"PII_") + 2  # split inside the placeholder prefix
+    cut = raw.index(alias.encode()) + max(1, len(alias) // 2)  # split inside the placeholder
     chunks = [raw[:cut], raw[cut:]]
     send, _ = _mock_upstream(b"", "text/event-stream", sse_chunks=chunks)
     monkeypatch.setattr(pii_proxy._client, "send", send)

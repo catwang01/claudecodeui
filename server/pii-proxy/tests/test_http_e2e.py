@@ -1,4 +1,4 @@
-"""Real end-to-end HTTP tests for PII proxy v2 (issue #24 hardening).
+"""Real end-to-end HTTP tests for PII proxy v2 (issues #24, #36).
 
 Unlike test_proxy_v2.py (FastAPI TestClient + a mocked httpx.send) these tests
 exercise the real network path:
@@ -11,17 +11,26 @@ Nothing is mocked.  The body the fake upstream records is the exact bytes the
 proxy forwarded, and the bytes the client reads are the exact bytes the proxy
 returned, so every assertion below is about observable wire behaviour.
 
-Scenarios covered (issue #24):
+Issue #36 changed the default placeholder from an opaque token (PII_<KIND>_hex)
+to a format-preserving *fake value* (a real-looking email, a private-range IP,
+...).  Assertions here are therefore placeholder-shape agnostic: instead of
+regex-matching the wire body they read the proxy's own vault (or check the
+behavioural round trip) so they hold in both modes.  A couple of fake-mode tests
+*do* assert the shape, on purpose, and one test pins the legacy token mode.
+
+Scenarios covered:
 
 1. process wiring / health;
-2. three-turn conversation with stable aliases;
-3. SSE split byte-by-byte, randomly, and inside an alias;
+2. three-turn conversation with stable placeholders;
+3. SSE split byte-by-byte, randomly, and inside a placeholder;
 4. tool-call loop (input_json_delta shards + content_block_stop);
 5. secrets containing quotes / backslashes / newlines / CJK / emoji;
 6. upstream 500 JSON error, text/plain passthrough, invalid request body,
    count_tokens redaction;
 7. observability endpoints (/health, /logs, /pii-groups and their DELETEs);
-8. eight concurrent requests never leak plaintext upstream.
+8. eight concurrent requests never leak plaintext upstream;
+9. fake-mode surrogate shapes (email, private IPv4);
+10. legacy token mode via PII_PROXY_PLACEHOLDER_MODE=token.
 
 The fixture is module scoped on purpose: starting uvicorn once keeps the whole
 suite under a few seconds while still being a real subprocess with its own
@@ -58,8 +67,18 @@ PII_PROXY_DIR = pathlib.Path(__file__).resolve().parents[1]
 BS = chr(92)
 LF = chr(10)
 
-#: Canonical alias shape (same grammar as pii_vault.ALIAS_RX).
-ALIAS_RX = re.compile(r"PII_[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*_[0-9a-f]{6,16}")
+#: Legacy opaque-token shape (same grammar as pii_vault.ALIAS_RX).  Only the
+#: token-mode test below asserts on it; every other test is placeholder-shape
+#: agnostic and works from the vault mapping instead.
+TOKEN_RX = re.compile(r"PII_[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*_[0-9a-f]{6,16}")
+
+#: Fake-mode email surrogate shape and the RFC 2606 domains pii_surrogates uses.
+FAKE_EMAIL_RX = re.compile(r"^[^@\s]+@[^@\s]+$")
+FAKE_EMAIL_DOMAINS = ("example.com", "example.net", "example.org", "mail.example.com")
+
+#: Plaintext PII used by the fake-mode shape tests.
+REAL_EMAIL = "qi.wei@corp-internal.test"
+REAL_IPV4 = "203.0.113.77"
 
 #: Literal secret with a double quote and a backslash (the D1 trigger).
 PASSWORD = 'pa"ss' + BS + "word-1234"
@@ -258,9 +277,12 @@ def _wait_for_health(base_url: str, process: subprocess.Popen, log_path: pathlib
     )
 
 
-@pytest.fixture(scope="module")
-def live_proxy(tmp_path_factory):
-    root = tmp_path_factory.mktemp("pii-proxy-http-e2e")
+def _spawn_live_stack(root: pathlib.Path, placeholder_mode: str | None = None):
+    """Start a real fake upstream + uvicorn proxy under *root*.
+
+    Returns (live, cleanup).  *placeholder_mode* is exported to the subprocess
+    as PII_PROXY_PLACEHOLDER_MODE; None leaves the proxy on its default (fake).
+    """
     secrets_path = root / "secrets.json"
     secrets_path.write_text(json.dumps(SECRETS, ensure_ascii=False), "utf-8")
     vault_path = root / "vault.json"
@@ -281,6 +303,8 @@ def live_proxy(tmp_path_factory):
             "HOME": str(root),
         }
     )
+    if placeholder_mode is not None:
+        env["PII_PROXY_PLACEHOLDER_MODE"] = placeholder_mode
     log_path = root / "proxy.log"
     log_file = log_path.open("w", encoding="utf-8")
     process = subprocess.Popen(
@@ -301,21 +325,18 @@ def live_proxy(tmp_path_factory):
         stdout=log_file,
         stderr=subprocess.STDOUT,
     )
+    live = LiveProxy(
+        base_url=base_url,
+        upstream_url=upstream_url,
+        upstream=upstream,
+        process=process,
+        root=root,
+        vault_path=vault_path,
+        secrets_path=secrets_path,
+        log_path=log_path,
+    )
 
-    try:
-        _wait_for_health(base_url, process, log_path)
-        live = LiveProxy(
-            base_url=base_url,
-            upstream_url=upstream_url,
-            upstream=upstream,
-            process=process,
-            root=root,
-            vault_path=vault_path,
-            secrets_path=secrets_path,
-            log_path=log_path,
-        )
-        yield live
-    finally:
+    def cleanup() -> None:
         if process.poll() is None:
             process.terminate()
             try:
@@ -326,6 +347,34 @@ def live_proxy(tmp_path_factory):
         upstream_server.shutdown()
         upstream_server.server_close()
         log_file.close()
+
+    try:
+        _wait_for_health(base_url, process, log_path)
+    except Exception:
+        cleanup()
+        raise
+    return live, cleanup
+
+
+@pytest.fixture(scope="module")
+def live_proxy(tmp_path_factory):
+    root = tmp_path_factory.mktemp("pii-proxy-http-e2e")
+    live, cleanup = _spawn_live_stack(root)
+    try:
+        yield live
+    finally:
+        cleanup()
+
+
+@pytest.fixture(scope="module")
+def token_proxy(tmp_path_factory):
+    """A second, throwaway instance pinned to PII_PROXY_PLACEHOLDER_MODE=token."""
+    root = tmp_path_factory.mktemp("pii-proxy-http-e2e-token")
+    live, cleanup = _spawn_live_stack(root, placeholder_mode="token")
+    try:
+        yield live
+    finally:
+        cleanup()
 
 
 @pytest.fixture()
@@ -379,24 +428,82 @@ def _input_json(frames: list) -> str:
     return "".join(out)
 
 
-def _alias_of(text: str) -> str:
-    match = ALIAS_RX.search(text)
-    assert match is not None, "no alias in %r" % text
-    return match.group(0)
+# --------------------------------------------------------------------------- #
+# Vault-driven placeholder helpers
+#
+# These tests deliberately avoid asserting on the *shape* of a placeholder:
+# issue #36 made the default a format-preserving fake value, so a "PII_..."
+# regex no longer describes the wire.  Instead we read the mapping the proxy
+# persists locally (LiveProxy.vault_path is a known fixture path) and, where
+# possible, also assert the behavioural round trip (client gets plaintext back,
+# upstream never sees it).
+# --------------------------------------------------------------------------- #
 
 
-def _prime_alias(client: httpx.Client, upstream: FakeUpstream) -> str:
-    """Send one request with the plaintext secret and return the minted alias."""
+def _vault_entries(live_proxy: LiveProxy) -> list:
+    """Read the placeholder <-> value mapping the proxy persisted to its vault."""
+    try:
+        raw = json.loads(live_proxy.vault_path.read_text("utf-8"))
+    except FileNotFoundError:
+        return []
+    except Exception:
+        return []
+    entries = raw.get("entries", [])
+    return list(entries) if isinstance(entries, list) else []
+
+
+def _placeholder_for(live_proxy: LiveProxy, value: str):
+    """Return the placeholder the vault maps to *value*, or None."""
+    for entry in _vault_entries(live_proxy):
+        if entry.get("value") == value:
+            return entry.get("alias")
+    return None
+
+
+def _reveal(live_proxy: LiveProxy, placeholder: str):
+    """Return the original value for *placeholder* according to the vault."""
+    for entry in _vault_entries(live_proxy):
+        if entry.get("alias") == placeholder:
+            return entry.get("value")
+    return None
+
+
+def _known_placeholders(live_proxy: LiveProxy) -> list:
+    return [entry["alias"] for entry in _vault_entries(live_proxy) if entry.get("alias")]
+
+
+def _placeholders_in(live_proxy: LiveProxy, text: str) -> list:
+    """Every vault placeholder that literally occurs in *text* (wire-observable)."""
+    return [placeholder for placeholder in _known_placeholders(live_proxy) if placeholder in text]
+
+
+def _placeholder_in_for(live_proxy: LiveProxy, text: str, value: str):
+    """The placeholder in *text* that restores to *value*, or None."""
+    for placeholder in _placeholders_in(live_proxy, text):
+        if _reveal(live_proxy, placeholder) == value:
+            return placeholder
+    return None
+
+
+def _prime_placeholder(client: httpx.Client, upstream: FakeUpstream, live_proxy: LiveProxy) -> str:
+    """Send one request with the plaintext secret and return the minted placeholder.
+
+    Resolved from the proxy's own vault rather than by pattern-matching the wire
+    body, so it works for both the opaque-token and the fake-surrogate modes.
+    """
     upstream.responder = None
     response = client.post(
         "/v1/messages",
         json={"model": "m", "messages": [{"role": "user", "content": "prime " + PASSWORD}]},
     )
     assert response.status_code == 200
-    return _alias_of(upstream.last_text())
+    placeholder = _placeholder_for(live_proxy, PASSWORD)
+    assert placeholder is not None, "the proxy never minted a placeholder for the secret"
+    assert placeholder in upstream.last_text(), "placeholder was not forwarded upstream"
+    return placeholder
 
 
-def _split(data: bytes, strategy: str, alias: str = "") -> list:
+def _split(data: bytes, strategy: str, placeholder: str = "") -> list:
     if strategy == "single":
         return [data]
     if strategy == "one_byte":
@@ -411,7 +518,7 @@ def _split(data: bytes, strategy: str, alias: str = "") -> list:
             i += size
         return chunks
     if strategy == "alias_split":
-        needle = alias.encode("utf-8")
+        needle = placeholder.encode("utf-8")
         pos = data.index(needle)
         span = len(needle)
         cuts = sorted({0, pos + 1, pos + 2, pos + span // 2, pos + span - 1, len(data)})
@@ -448,6 +555,8 @@ def test_health_reports_real_wiring(live_proxy) -> None:
     assert body["detector"]["patterns"] >= 1
     assert body["vault"]["path"] == str(live_proxy.vault_path)
     assert body["vault"]["persistent"] is True
+    # Issue #36: format-preserving fake values are the default placeholder mode.
+    assert body["vault"]["mode"] == "fake"
     assert set(body["stats"]) >= {
         "requests",
         "anonymized_values",
@@ -462,15 +571,17 @@ def test_health_reports_real_wiring(live_proxy) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_multi_turn_aliases_stable(client: httpx.Client, upstream: FakeUpstream) -> None:
-    def echo_aliases(method, path, headers, body):
-        aliases = sorted(set(ALIAS_RX.findall(body.decode("utf-8", "replace"))))
-        text = "round ok " + " ".join(aliases)
+def test_multi_turn_aliases_stable(
+    client: httpx.Client, upstream: FakeUpstream, live_proxy: LiveProxy
+) -> None:
+    def echo_placeholders(method, path, headers, body):
+        found = sorted(set(_placeholders_in(live_proxy, body.decode("utf-8", "replace"))))
+        text = "round ok " + " ".join(found)
         return Reply(body=json.dumps({"content": [{"type": "text", "text": text}]}).encode())
 
-    upstream.responder = echo_aliases
+    upstream.responder = echo_placeholders
 
-    # -- turn 1: plaintext goes up, alias comes back down -------------------
+    # -- turn 1: plaintext goes up, placeholder comes back down -------------
     r1 = client.post(
         "/v1/messages",
         json={"model": "m", "messages": [{"role": "user", "content": "the login is " + PASSWORD}]},
@@ -478,8 +589,10 @@ def test_multi_turn_aliases_stable(client: httpx.Client, upstream: FakeUpstream)
     assert r1.status_code == 200
     forwarded1 = upstream.last_text()
     assert PASSWORD not in forwarded1
-    alias = _alias_of(forwarded1)
-    assert alias not in r1.text
+    placeholder = _placeholder_for(live_proxy, PASSWORD)
+    assert placeholder is not None, "no placeholder minted for the secret"
+    assert placeholder in forwarded1
+    assert placeholder not in r1.text
     assert json.loads(r1.text)["content"][0]["text"] == "round ok " + PASSWORD
 
     # -- turn 2: history carries the redacted text and a tool result --------
@@ -489,7 +602,7 @@ def test_multi_turn_aliases_stable(client: httpx.Client, upstream: FakeUpstream)
             "model": "m",
             "messages": [
                 {"role": "user", "content": "the login is " + PASSWORD},
-                {"role": "assistant", "content": "round ok " + alias},
+                {"role": "assistant", "content": "round ok " + placeholder},
                 {
                     "role": "user",
                     "content": [
@@ -502,19 +615,19 @@ def test_multi_turn_aliases_stable(client: httpx.Client, upstream: FakeUpstream)
     assert r2.status_code == 200
     forwarded2 = upstream.last_text()
     assert PASSWORD not in forwarded2
-    # Same true value -> same alias, even though it arrives as plaintext again.
-    assert set(ALIAS_RX.findall(forwarded2)) == {alias}
-    assert alias not in r2.text
+    # Same true value -> same placeholder, even though it arrives as plaintext again.
+    assert set(_placeholders_in(live_proxy, forwarded2)) == {placeholder}
+    assert placeholder not in r2.text
     assert json.loads(r2.text)["content"][0]["text"] == "round ok " + PASSWORD
 
-    # -- turn 3: several occurrences, still one stable alias ----------------
+    # -- turn 3: several occurrences, still one stable placeholder ----------
     r3 = client.post(
         "/v1/messages",
         json={
             "model": "m",
             "messages": [
                 {"role": "user", "content": "again " + PASSWORD + " and " + PASSWORD},
-                {"role": "assistant", "content": [{"type": "text", "text": "kept " + alias}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "kept " + placeholder}]},
                 {
                     "role": "user",
                     "content": [
@@ -527,9 +640,9 @@ def test_multi_turn_aliases_stable(client: httpx.Client, upstream: FakeUpstream)
     assert r3.status_code == 200
     forwarded3 = upstream.last_text()
     assert PASSWORD not in forwarded3
-    assert set(ALIAS_RX.findall(forwarded3)) == {alias}
-    assert forwarded3.count(alias) >= 3
-    assert alias not in r3.text
+    assert set(_placeholders_in(live_proxy, forwarded3)) == {placeholder}
+    assert forwarded3.count(placeholder) >= 3
+    assert placeholder not in r3.text
     assert json.loads(r3.text)["content"][0]["text"] == "round ok " + PASSWORD
 
 
@@ -539,14 +652,18 @@ def test_multi_turn_aliases_stable(client: httpx.Client, upstream: FakeUpstream)
 
 
 @pytest.mark.parametrize("strategy", ["single", "one_byte", "random", "alias_split"])
-def test_sse_extreme_splitting(client: httpx.Client, upstream: FakeUpstream, strategy: str) -> None:
-    alias = _prime_alias(client, upstream)
-    text = "secret: " + alias + " ::done"
+def test_sse_extreme_splitting(
+    client: httpx.Client, upstream: FakeUpstream, live_proxy: LiveProxy, strategy: str
+) -> None:
+    placeholder = _prime_placeholder(client, upstream, live_proxy)
+    text = "secret: " + placeholder + " ::done"
     expected = "secret: " + PASSWORD + " ::done"
 
     def run_split(split_strategy: str):
         raw = _sse_text_stream(text)
-        chunks = _split(raw, split_strategy, alias)
+        # The cuts are computed from the placeholder the fake upstream actually
+        # received (alias_split), so this holds for any placeholder shape.
+        chunks = _split(raw, split_strategy, placeholder)
 
         def respond(method, path, headers, body):
             return Reply(status=200, content_type="text/event-stream", chunks=chunks)
@@ -558,7 +675,7 @@ def test_sse_extreme_splitting(client: httpx.Client, upstream: FakeUpstream, str
         # Every data: frame must be valid JSON (json.loads raises otherwise).
         frames = _data_frames(response.text)
         assert frames, "no SSE frames returned"
-        assert alias not in response.text, "raw alias leaked into the client stream"
+        assert placeholder not in response.text, "raw placeholder leaked into the client stream"
         return _text_of(frames)
 
     baseline = run_split("single")
@@ -572,17 +689,19 @@ def test_sse_extreme_splitting(client: httpx.Client, upstream: FakeUpstream, str
 # --------------------------------------------------------------------------- #
 
 
-def test_tool_call_input_json_is_restored(client: httpx.Client, upstream: FakeUpstream) -> None:
-    alias = _prime_alias(client, upstream)
+def test_tool_call_input_json_is_restored(
+    client: httpx.Client, upstream: FakeUpstream, live_proxy: LiveProxy
+) -> None:
+    placeholder = _prime_placeholder(client, upstream, live_proxy)
 
     tool_input = {
         "path": "/tmp/out.txt",
-        "token": alias,
-        "nested": {"levels": [1, {"v": alias}], "flag": True},
+        "token": placeholder,
+        "nested": {"levels": [1, {"v": placeholder}], "flag": True},
         "note": "plain",
     }
     raw_json = json.dumps(tool_input)
-    pos = raw_json.index(alias)
+    pos = raw_json.index(placeholder)
     cuts = sorted({0, pos + 1, pos + 2, pos + 3, len(raw_json)})
     pieces = [raw_json[a:b] for a, b in zip(cuts, cuts[1:]) if b > a]
     assert len(pieces) >= 4
@@ -637,7 +756,7 @@ def test_tool_call_input_json_is_restored(client: httpx.Client, upstream: FakeUp
     # The request upstream saw is fully anonymised, tool_use / result included.
     forwarded = upstream.last_text()
     assert PASSWORD not in forwarded
-    assert forwarded.count(alias) >= 3
+    assert forwarded.count(placeholder) >= 3
     for block in json.loads(forwarded)["messages"]:
         assert PASSWORD not in json.dumps(block)
 
@@ -654,7 +773,7 @@ def test_tool_call_input_json_is_restored(client: httpx.Client, upstream: FakeUp
     assert frames.index(stops[0]) == len(frames) - 2  # stop just before message_stop
 
     merged = _input_json(frames)
-    assert alias not in merged
+    assert placeholder not in merged
     restored = json.loads(merged)
     assert restored["token"] == PASSWORD
     assert restored["nested"]["levels"][1]["v"] == PASSWORD
@@ -667,16 +786,18 @@ def test_tool_call_input_json_is_restored(client: httpx.Client, upstream: FakeUp
 # --------------------------------------------------------------------------- #
 
 
-def test_special_characters_survive_sse(client: httpx.Client, upstream: FakeUpstream) -> None:
+def test_special_characters_survive_sse(
+    client: httpx.Client, upstream: FakeUpstream, live_proxy: LiveProxy
+) -> None:
     def respond_special(method, path, headers, body):
-        aliases = ALIAS_RX.findall(body.decode("utf-8", "replace"))
-        assert aliases, "request was not anonymised"
-        text = "value=[" + aliases[0] + "]"
+        found = _placeholders_in(live_proxy, body.decode("utf-8", "replace"))
+        assert found, "request was not anonymised"
+        text = "value=[" + found[0] + "]"
         raw = _sse_text_stream(text)
         return Reply(
             status=200,
             content_type="text/event-stream",
-            chunks=_split(raw, "alias_split", aliases[0]),
+            chunks=_split(raw, "alias_split", found[0]),
         )
 
     upstream.responder = respond_special
@@ -688,10 +809,11 @@ def test_special_characters_survive_sse(client: httpx.Client, upstream: FakeUpst
 
     forwarded = upstream.last_text()
     assert SPECIAL not in forwarded
-    alias = _alias_of(forwarded)
+    placeholder = _placeholder_for(live_proxy, SPECIAL)
+    assert placeholder is not None and placeholder in forwarded
 
     frames = _data_frames(response.text)  # every frame must parse
-    assert alias not in response.text
+    assert placeholder not in response.text
     result = _text_of(frames)
     assert result == "value=[" + SPECIAL + "]"
     # Prove each awkward character survived: quote, backslash, newline, CJK, emoji.
@@ -707,12 +829,15 @@ def test_special_characters_survive_sse(client: httpx.Client, upstream: FakeUpst
 # --------------------------------------------------------------------------- #
 
 
-def test_upstream_500_json_error_is_restored(client: httpx.Client, upstream: FakeUpstream) -> None:
+def test_upstream_500_json_error_is_restored(
+    client: httpx.Client, upstream: FakeUpstream, live_proxy: LiveProxy
+) -> None:
     def respond_error(method, path, headers, body):
-        alias = _alias_of(body.decode("utf-8", "replace"))
+        found = _placeholders_in(live_proxy, body.decode("utf-8", "replace"))
+        assert found, "request was not anonymised"
         payload = {
             "type": "error",
-            "error": {"type": "api_error", "message": "boom for " + alias},
+            "error": {"type": "api_error", "message": "boom for " + found[0]},
         }
         return Reply(status=500, content_type="application/json", body=json.dumps(payload).encode())
 
@@ -721,19 +846,23 @@ def test_upstream_500_json_error_is_restored(client: httpx.Client, upstream: Fak
         "/v1/messages",
         json={"model": "m", "messages": [{"role": "user", "content": "bad " + PASSWORD}]},
     )
-    alias = _alias_of(upstream.last_text())
+    placeholder = _placeholder_for(live_proxy, PASSWORD)
+    assert placeholder is not None and placeholder in upstream.last_text()
     assert response.status_code == 500
-    assert alias not in response.text
+    assert placeholder not in response.text
     assert json.loads(response.text)["error"]["message"] == "boom for " + PASSWORD
 
 
-def test_text_plain_is_passed_through_verbatim(client: httpx.Client, upstream: FakeUpstream) -> None:
+def test_text_plain_is_passed_through_verbatim(
+    client: httpx.Client, upstream: FakeUpstream, live_proxy: LiveProxy
+) -> None:
     def respond_plain(method, path, headers, body):
-        alias = _alias_of(body.decode("utf-8", "replace"))
+        found = _placeholders_in(live_proxy, body.decode("utf-8", "replace"))
+        assert found, "request was not anonymised"
         return Reply(
             status=200,
             content_type="text/plain; charset=utf-8",
-            body=("plain " + alias).encode("utf-8"),
+            body=("plain " + found[0]).encode("utf-8"),
         )
 
     upstream.responder = respond_plain
@@ -741,10 +870,12 @@ def test_text_plain_is_passed_through_verbatim(client: httpx.Client, upstream: F
         "/v1/messages",
         json={"model": "m", "messages": [{"role": "user", "content": "plain " + PASSWORD}]},
     )
-    alias = _alias_of(upstream.last_text())
+    placeholder = _placeholder_for(live_proxy, PASSWORD)
+    assert placeholder is not None and placeholder in upstream.last_text()
+    assert _reveal(live_proxy, placeholder) == PASSWORD
     assert response.status_code == 200
     # text/plain is not JSON, so the proxy must not rewrite it.
-    assert response.text == "plain " + alias
+    assert response.text == "plain " + placeholder
     assert PASSWORD not in response.text
 
 
@@ -760,7 +891,9 @@ def test_invalid_request_json_is_forwarded_and_never_500s(client: httpx.Client, 
     assert upstream.last_body() == raw  # fail-open, byte identical
 
 
-def test_count_tokens_is_anonymized(client: httpx.Client, upstream: FakeUpstream) -> None:
+def test_count_tokens_is_anonymized(
+    client: httpx.Client, upstream: FakeUpstream, live_proxy: LiveProxy
+) -> None:
     upstream.responder = None
     response = client.post(
         "/v1/messages/count_tokens",
@@ -769,7 +902,9 @@ def test_count_tokens_is_anonymized(client: httpx.Client, upstream: FakeUpstream
     assert response.status_code == 200
     forwarded = upstream.last_text()
     assert PASSWORD not in forwarded
-    assert ALIAS_RX.search(forwarded) is not None
+    placeholder = _placeholder_for(live_proxy, PASSWORD)
+    assert placeholder is not None and placeholder in forwarded
+    assert _reveal(live_proxy, placeholder) == PASSWORD
     assert upstream.requests[-1]["path"].endswith("/v1/messages/count_tokens")
 
 
@@ -778,7 +913,9 @@ def test_count_tokens_is_anonymized(client: httpx.Client, upstream: FakeUpstream
 # --------------------------------------------------------------------------- #
 
 
-def test_observability_endpoints(client: httpx.Client, upstream: FakeUpstream) -> None:
+def test_observability_endpoints(
+    client: httpx.Client, upstream: FakeUpstream, live_proxy: LiveProxy
+) -> None:
     upstream.responder = None
     assert client.delete("/logs").json() == {"ok": True}
     assert client.delete("/pii-groups").json() == {"ok": True}
@@ -805,14 +942,16 @@ def test_observability_endpoints(client: httpx.Client, upstream: FakeUpstream) -
     entry = logs["entries"][0]
     assert {"id", "ts", "label", "diff"} <= set(entry)
     assert entry["label"].startswith("request")
-    assert ALIAS_RX.search(entry["diff"]) is not None
+    assert _placeholders_in(live_proxy, entry["diff"]), "diff does not mention a known placeholder"
 
     groups = client.get("/pii-groups").json()
     assert set(groups) == {"groups"}
     assert groups["groups"], "expected at least one PII group"
     group = groups["groups"][0]
     assert {"token_key", "entity_type", "masked", "count", "last_seen", "occurrences"} <= set(group)
-    assert group["token_key"].startswith("PII_")
+    # token_key is whatever placeholder the proxy minted (token or surrogate);
+    # what matters is that the vault maps it back to the real secret.
+    assert _reveal(live_proxy, group["token_key"]) == PASSWORD
     assert group["count"] >= 1
     assert "*" in group["masked"]
     assert isinstance(group["occurrences"], list) and group["occurrences"]
@@ -829,7 +968,9 @@ def test_observability_endpoints(client: httpx.Client, upstream: FakeUpstream) -
 # --------------------------------------------------------------------------- #
 
 
-def test_eight_concurrent_requests_never_leak(client: httpx.Client, upstream: FakeUpstream) -> None:
+def test_eight_concurrent_requests_never_leak(
+    client: httpx.Client, upstream: FakeUpstream, live_proxy: LiveProxy
+) -> None:
     upstream.reset()
 
     def respond(method, path, headers, body):
@@ -852,9 +993,107 @@ def test_eight_concurrent_requests_never_leak(client: httpx.Client, upstream: Fa
         statuses = list(pool.map(call, range(8)))
 
     assert statuses == [200] * 8
+    placeholder = _placeholder_for(live_proxy, PASSWORD)
+    assert placeholder is not None, "no placeholder minted for the secret"
     bodies = upstream.bodies()
     assert len(bodies) == 8
     for body in bodies:
         text = body.decode("utf-8")
         assert PASSWORD not in text
-        assert ALIAS_RX.search(text) is not None
+        # Same true value -> same deterministic placeholder, every time.
+        assert set(_placeholders_in(live_proxy, text)) == {placeholder}
+
+
+# --------------------------------------------------------------------------- #
+# 9. Fake-mode surrogates preserve shape (issue #36)
+# --------------------------------------------------------------------------- #
+
+
+def test_fake_mode_email_surrogate_is_shape_preserving(
+    client: httpx.Client, upstream: FakeUpstream, live_proxy: LiveProxy
+) -> None:
+    """The upstream receives an email-shaped fake, never the real address."""
+
+    def echo_email(method, path, headers, body):
+        found = _placeholder_in_for(live_proxy, body.decode("utf-8", "replace"), REAL_EMAIL)
+        assert found is not None, "email was not anonymised"
+        return Reply(
+            body=json.dumps({"content": [{"type": "text", "text": "mail is " + found}]}).encode()
+        )
+
+    upstream.responder = echo_email
+    response = client.post(
+        "/v1/messages",
+        json={"model": "m", "messages": [{"role": "user", "content": "write to " + REAL_EMAIL}]},
+    )
+    assert response.status_code == 200
+
+    forwarded = upstream.last_text()
+    assert REAL_EMAIL not in forwarded
+    placeholder = _placeholder_in_for(live_proxy, forwarded, REAL_EMAIL)
+    assert placeholder is not None, "no vault placeholder restores to the real email"
+    assert placeholder != REAL_EMAIL
+    assert FAKE_EMAIL_RX.match(placeholder), placeholder
+    assert placeholder.rsplit("@", 1)[1] in FAKE_EMAIL_DOMAINS
+    # ... and it still restores to the real address on the way back.
+    assert json.loads(response.text)["content"][0]["text"] == "mail is " + REAL_EMAIL
+
+
+def test_fake_mode_ipv4_surrogate_is_private(
+    client: httpx.Client, upstream: FakeUpstream, live_proxy: LiveProxy
+) -> None:
+    """The upstream receives a 10.x.y.z fake IP, never the real address."""
+
+    def echo_ip(method, path, headers, body):
+        found = _placeholder_in_for(live_proxy, body.decode("utf-8", "replace"), REAL_IPV4)
+        assert found is not None, "IPv4 was not anonymised"
+        return Reply(
+            body=json.dumps({"content": [{"type": "text", "text": "host is " + found}]}).encode()
+        )
+
+    upstream.responder = echo_ip
+    response = client.post(
+        "/v1/messages",
+        json={"model": "m", "messages": [{"role": "user", "content": "host " + REAL_IPV4}]},
+    )
+    assert response.status_code == 200
+
+    forwarded = upstream.last_text()
+    assert REAL_IPV4 not in forwarded
+    placeholder = _placeholder_in_for(live_proxy, forwarded, REAL_IPV4)
+    assert placeholder is not None, "no vault placeholder restores to the real IPv4"
+    assert placeholder != REAL_IPV4
+    assert re.fullmatch(r"10\.\d{1,3}\.\d{1,3}\.\d{1,3}", placeholder), placeholder
+    assert json.loads(response.text)["content"][0]["text"] == "host is " + REAL_IPV4
+
+
+# --------------------------------------------------------------------------- #
+# 10. Legacy token mode still works (PII_PROXY_PLACEHOLDER_MODE=token)
+# --------------------------------------------------------------------------- #
+
+
+def test_token_mode_still_available(token_proxy: LiveProxy) -> None:
+    """A second instance started with PII_PROXY_PLACEHOLDER_MODE=token emits tokens.
+
+    The mode is read at import time, so it cannot be toggled on the running
+    module-scoped proxy; the token_proxy fixture boots a real second stack with
+    the env var set.
+    """
+    health = httpx.get(token_proxy.base_url + "/health", timeout=5.0).json()
+    assert health["vault"]["mode"] == "token"
+
+    token_proxy.upstream.responder = None
+    with httpx.Client(base_url=token_proxy.base_url, timeout=20.0) as http:
+        response = http.post(
+            "/v1/messages",
+            json={"model": "m", "messages": [{"role": "user", "content": "token mode " + PASSWORD}]},
+        )
+    assert response.status_code == 200
+
+    forwarded = token_proxy.upstream.last_text()
+    assert PASSWORD not in forwarded
+    match = TOKEN_RX.search(forwarded)
+    assert match is not None, "token mode did not emit a PII_<KIND>_<hex> token: %r" % forwarded
+    token = match.group(0)
+    assert token.startswith("PII_")
+    assert _reveal(token_proxy, token) == PASSWORD

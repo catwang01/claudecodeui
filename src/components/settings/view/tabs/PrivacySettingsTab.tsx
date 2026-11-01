@@ -231,8 +231,8 @@ export default function PrivacySettingsTab() {
           <h3 className="text-lg font-medium text-foreground">PII 脱敏代理</h3>
         </div>
         <p className="text-sm text-muted-foreground">
-          开启后，命中的敏感值会在本机被替换为确定性别名（内置规则 + 你在 ~/.pii-proxy/secrets.json 里配置的清单），请求才发给上游；响应返回前按协议精确还原。带签名的 thinking 块不改写。
-          只保护“清单命中 + 规则命中”的值，未命中的内容仍会原文出网。
+          开启后，命中的敏感值会在本机被替换成**格式一致的假值**（真邮箱→假邮箱、真 IP→私网假 IP、密码保留前缀只换值），请求才发给上游；响应返回前按协议精确还原成真实数据。带签名的 thinking 块不改写。
+          只保护“清单命中 + 规则命中”的值，未命中的内容仍会原文出网；内置规则之外可在 ~/.pii-proxy/secrets.json 里追加清单。
         </p>
       </div>
 
