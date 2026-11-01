@@ -158,8 +158,11 @@ const PROVIDER_WATCH_PATHS = [
     { provider: 'claude', rootPath: path.join(os.homedir(), '.claude', 'projects') },
     { provider: 'cursor', rootPath: path.join(os.homedir(), '.cursor', 'chats') },
     { provider: 'codex', rootPath: path.join(os.homedir(), '.codex', 'sessions') },
-    { provider: 'gemini', rootPath: path.join(os.homedir(), '.gemini', 'projects') },
-    { provider: 'gemini_sessions', rootPath: path.join(os.homedir(), '.gemini', 'sessions') }
+    { provider: 'gemini', rootPath: path.join(os.homedir(), '.gemini', 'projects') }
+    // NOTE: no 'gemini_sessions' entry — registry.ts has no synchronizer with that
+    // provider name, so synchronizeProviderFile('gemini_sessions', …) always returned
+    // null (a dead watcher). Real Gemini CLI sessions live under ~/.gemini/tmp/<project>/chats/
+    // and are picked up by the 'gemini' synchronizer.
 ];
 const WATCHER_IGNORED_PATTERNS = [
     '**/node_modules/**',
