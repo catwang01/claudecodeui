@@ -1097,3 +1097,56 @@ def test_token_mode_still_available(token_proxy: LiveProxy) -> None:
     token = match.group(0)
     assert token.startswith("PII_")
     assert _reveal(token_proxy, token) == PASSWORD
+
+
+# --------------------------------------------------------------------------- #
+# 12. Protocol bytes over real TCP: tool deltas, random flush points
+# --------------------------------------------------------------------------- #
+
+
+def test_tool_stream_survives_random_transport_splits(
+    client: httpx.Client, upstream: FakeUpstream, live_proxy: LiveProxy
+) -> None:
+    """A multi-event stream carrying a tool input, split at random byte offsets.
+
+    The fake upstream writes each chunk to the socket separately (chunk_delay
+    forces a flush), so the proxy really sees arbitrary transport boundaries -
+    not just the boundaries our own code chose.
+    """
+    placeholder = _prime_placeholder(client, upstream, live_proxy)
+    tool_input = {"token": placeholder, "nested": {"v": [placeholder]}, "note": "x"}
+    raw_json = json.dumps(tool_input)
+    pos = raw_json.index(placeholder)
+    cuts = sorted({0, pos + 1, pos + 2, pos + 3, len(raw_json)})
+    pieces = [raw_json[a:b] for a, b in zip(cuts, cuts[1:]) if b > a]
+
+    events = [
+        {"type": "message_start", "message": {"id": "msg_split", "type": "message", "role": "assistant"}},
+        {"type": "content_block_start", "index": 0,
+         "content_block": {"type": "tool_use", "id": "toolu_split", "name": "write", "input": {}}},
+    ]
+    events += [
+        {"type": "content_block_delta", "index": 0,
+         "delta": {"type": "input_json_delta", "partial_json": piece}}
+        for piece in pieces
+    ]
+    events += [{"type": "content_block_stop", "index": 0}, {"type": "message_stop"}]
+    stream = _sse(*events)
+
+    chunks = _split(stream, "random", placeholder)
+    assert len(chunks) > 10
+
+    def respond(method, path, headers, body):
+        return Reply(status=200, content_type="text/event-stream", chunks=chunks, chunk_delay=0.002)
+
+    upstream.responder = respond
+    response = client.post("/v1/messages", json={"model": "m", "messages": []})
+    assert response.status_code == 200
+    frames = _data_frames(response.text)
+    assert placeholder not in response.text, "placeholder leaked through the transport splits"
+    assert json.loads(_input_json(frames)) == {
+        "token": PASSWORD,
+        "nested": {"v": [PASSWORD]},
+        "note": "x",
+    }
+

@@ -92,7 +92,7 @@ npm run pii-proxy:cov      # 覆盖率 + 未覆盖行
 npm run bench:pii          # 基准与切分 fuzz
 ```
 
-当前基线：**189 passed + 1 xfailed，整体行覆盖 95%**（pii_vault 95% / pii_surrogates 95% / pii_stream 96% / pii_detect 93% / pii_proxy 93%）。未覆盖主要是防御性分支（配置回退、保存失败、上游重试）。
+当前基线：**390 passed + 1 xfailed，整体行覆盖 94%**（pii_vault 94% / pii_surrogates 95% / pii_stream 96% / pii_detect 93% / pii_proxy 93%）。未覆盖主要是防御性分支（配置回退、保存失败、上游重试）。
 
 | 测试文件 | 覆盖 |
 |---|---|
@@ -101,7 +101,8 @@ npm run bench:pii          # 基准与切分 fuzz
 | `tests/test_stream_edges.py` | 畸形帧、CRLF、半截 UTF-8、超长/超多帧、转义与嵌套、截断与计数、幂等 |
 | `tests/test_proxy_v2.py` | 请求脱敏覆盖（嵌套 tool_use / tool_result / system list）、响应还原、签名块豁免、fail-open |
 | `tests/test_proxy_edges.py` | UI 端点形状、统计计数、非 messages 路径不动、非 JSON 透传、错误响应还原、别名跨请求稳定、配置合并 |
-| `tests/test_http_e2e.py` | 真实 uvicorn + 真实 HTTP：多轮对话、极端切分、工具调用闭环、特殊字符、上游错误、并发；以及假值形状（邮箱/IP）与 token 模式对照 |
+| `tests/test_stream_fuzz.py` | **协议字节级 fuzz**：构造真实 SSE 流（text_delta + input_json_delta + stop/message_stop），按整块/逐字节/随机/每一个切点投递；断言帧仍合法 JSON、文本与工具参数还原正确、事件结构不变、零占位符残留 |
+| `tests/test_http_e2e.py` | 真实 uvicorn + 真实 HTTP：多轮对话、极端切分、工具调用闭环、特殊字符、上游错误、并发、工具流随机传输切分；以及假值形状（邮箱/IP）与 token 模式对照 |
 | `tests/test_vault_edges.py` | 假值形状（邮箱/IP/手机/身份证/AWS/GitHub/JWT/PEM/基本认证/密码）、确定性、唯一性、不复用原文、持久化、损坏文件、并发、token 模式兼容、签名键跳过 |
 
 **已知未覆盖**（刻意或待补）：
