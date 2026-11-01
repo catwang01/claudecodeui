@@ -14,6 +14,7 @@ import { cn } from '../../../../lib/utils';
 import { api, authenticatedFetch } from '../../../../utils/api';
 import { forkTreeStore } from '../../utils/forkTreeStore';
 import { buildForkTree } from '../../utils/forkTree';
+import { buildSessionListSignature } from '../../utils/sessionListSignature';
 
 type SearchMode = 'projects' | 'conversations' | 'recent';
 
@@ -208,8 +209,15 @@ export default function SidebarContent({
     // resolves) and the client filters the list, so no refetch is needed.
   }, [hideScheduledTaskSessions]);
 
-  const loadGlobalRecents = useCallback(async (offset: number, replace: boolean) => {
-    if (isLoadingGlobalRecentsRef.current) return;
+  // A refresh requested while a fetch is already in flight must not be dropped, otherwise a
+  // session that arrived mid-load (most visibly a fork) stays invisible until the next view switch.
+  const reloadGlobalRecentsPendingRef = useRef(false);
+
+  const loadGlobalRecents = useCallback(async function loadRecents(offset: number, replace: boolean) {
+    if (isLoadingGlobalRecentsRef.current) {
+      if (replace) reloadGlobalRecentsPendingRef.current = true;
+      return;
+    }
     isLoadingGlobalRecentsRef.current = true;
     setIsLoadingGlobalRecents(true);
     try {
@@ -231,6 +239,10 @@ export default function SidebarContent({
     } finally {
       isLoadingGlobalRecentsRef.current = false;
       setIsLoadingGlobalRecents(false);
+      if (reloadGlobalRecentsPendingRef.current) {
+        reloadGlobalRecentsPendingRef.current = false;
+        void loadRecents(0, true);
+      }
     }
   }, []);
 
@@ -239,6 +251,35 @@ export default function SidebarContent({
     setVisibleCount(RECENT_PAGE_SIZE);
     void loadGlobalRecents(0, true);
   }, [loadGlobalRecents, searchMode]);
+
+  // Recents fetch once when the view opens, so a session that appears afterwards — a fork,
+  // or a session created in another tab — never shows up on its own: the Projects list is
+  // kept live by the "projects_updated" broadcast, but nothing re-fetches Recents. Watch the
+  // set of session IDs the sidebar knows about and refetch when it changes. IDs only, not
+  // lastActivity, which mutates on every streamed token.
+  const visibleSessionSignature = useMemo(
+    () => buildSessionListSignature(projectListProps.projects, projectListProps.getProjectSessions),
+    [projectListProps.projects, projectListProps.getProjectSessions],
+  );
+  const lastSessionSignatureRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (searchMode !== 'recent') {
+      // Reset so re-entering the view uses the mode-entry fetch instead of double-fetching.
+      lastSessionSignatureRef.current = null;
+      return;
+    }
+    if (lastSessionSignatureRef.current === null || lastSessionSignatureRef.current === visibleSessionSignature) {
+      lastSessionSignatureRef.current = visibleSessionSignature;
+      return;
+    }
+    lastSessionSignatureRef.current = visibleSessionSignature;
+    // Debounce: a burst of sessions (bulk indexing) should trigger one refetch.
+    const timer = setTimeout(() => {
+      void loadGlobalRecents(0, true);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [visibleSessionSignature, searchMode, loadGlobalRecents]);
 
   const recentSessions = useMemo(() => {
     if (searchMode !== 'recent') return [];
