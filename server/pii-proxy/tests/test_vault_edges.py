@@ -206,6 +206,43 @@ def test_save_failure_is_swallowed(tmp_path):
     vault.save()
 
 
+def test_minting_batches_disk_writes_instead_of_rewriting_per_entry(tmp_path, monkeypatch):
+    """Regression (issue #50): every new alias used to serialize + rewrite the
+    whole vault (O(n^2) write amplification, blocking). Minting must stay in
+    memory; a single `flush()` persists the batch."""
+    path = tmp_path / "v.json"
+    vault = Vault(path, secret=b"2" * 32)
+    writes = {"n": 0}
+    original = vault._save_locked
+
+    def counting(force: bool = False) -> None:
+        if vault._dirty or force:  # only count calls that actually write
+            writes["n"] += 1
+        original(force=force)
+
+    monkeypatch.setattr(vault, "_save_locked", counting)
+
+    values = ["user%d@corp.example" % i for i in range(60)]
+    for value in values:
+        vault.surrogate_for("EMAIL_ADDRESS", value)
+
+    assert writes["n"] == 0, "minting must not touch the disk"
+    assert vault.stats()["entries"] == 60
+
+    vault.flush()
+    assert writes["n"] == 1, "the whole batch is one write"
+    vault.flush()
+    assert writes["n"] == 1, "flushing a clean vault is a no-op"
+
+    on_disk = json.loads(path.read_text("utf-8"))
+    assert len(on_disk["entries"]) == 60
+    reloaded = Vault(path)
+    assert reloaded.stats()["entries"] == 60
+    for value in values:
+        # Deterministic across the restart: same value -> same alias.
+        assert reloaded.surrogate_for("EMAIL_ADDRESS", value) == vault.surrogate_for("EMAIL_ADDRESS", value)
+
+
 def test_concurrent_minting_is_consistent(tmp_path):
     vault = _vault(tmp_path)
     results: list[str] = []

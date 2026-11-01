@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -204,3 +205,30 @@ def test_health_exposes_detector_and_vault(proxy):
         body = client.get("/health").json()
     assert body["status"] == "ok" and body["mode"] == "v2-aliases"
     assert "detector" in body and "vault" in body
+
+
+def test_anonymize_runs_off_the_event_loop(proxy, monkeypatch):
+    """Regression (issue #50): the request anonymization path (regex scan + vault
+    mint/flush) must run in a worker thread, not on the asyncio event loop that
+    also drives streaming SSE responses."""
+    seen = {}
+    real = pii_proxy.anonymize_request
+
+    def spy(data, req_id):
+        try:
+            asyncio.get_running_loop()
+            seen["on_event_loop"] = True
+        except RuntimeError:
+            seen["on_event_loop"] = False
+        return real(data, req_id)
+
+    monkeypatch.setattr(pii_proxy, "anonymize_request", spy)
+    send, captured = _mock_upstream(b'{"content": []}')
+    monkeypatch.setattr(pii_proxy._client, "send", send)
+    with TestClient(pii_proxy.app) as client:
+        resp = client.post("/v1/messages", json={"messages": [
+            {"role": "user", "content": "mail " + SECRET_EMAIL},
+        ]})
+    assert resp.status_code == 200
+    assert seen.get("on_event_loop") is False, "anonymize must not block the event loop"
+    assert SECRET_EMAIL not in captured["body"].decode()  # still anonymized

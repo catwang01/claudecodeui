@@ -98,8 +98,10 @@ class Vault:
             self._reverse[placeholder] = value
             self._kinds[placeholder] = kind
             self._restore_rx = None
+            # Only touch memory here: mark dirty and let the caller batch the
+            # disk write via flush(). Rewriting the whole table on every mint is
+            # O(n^2) write amplification and blocks the request (issue #50).
             self._dirty = True
-            self._save_locked()
             return placeholder
 
     # Backwards-compatible name (tests and callers used alias_for).
@@ -244,6 +246,17 @@ class Vault:
     def save(self) -> None:
         with self._lock:
             self._save_locked(force=True)
+
+    def flush(self) -> None:
+        """Persist pending minted aliases in a single write.
+
+        Minting (`surrogate_for`) only updates memory and marks the vault dirty;
+        callers flush once at a request boundary so the whole table is not
+        rewritten per mint. Cheap no-op when nothing has been minted since the
+        last flush. Unlike `save`, this does not force a write when clean.
+        """
+        with self._lock:
+            self._save_locked()
 
     def _save_locked(self, force: bool = False) -> None:
         if not self._dirty and not force:

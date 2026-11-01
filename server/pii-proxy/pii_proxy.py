@@ -193,9 +193,15 @@ def _walk_anonymize(obj: Any, path: str, req_id: str) -> Any:
 
 
 def anonymize_request(data: Any, req_id: str) -> tuple[Any, bool]:
-    before = json.dumps(data, sort_keys=True)
-    out = _walk_anonymize(data, "request", req_id)
-    return out, json.dumps(out, sort_keys=True) != before
+    try:
+        before = json.dumps(data, sort_keys=True)
+        out = _walk_anonymize(data, "request", req_id)
+        return out, json.dumps(out, sort_keys=True) != before
+    finally:
+        # Minting during the walk only dirties the vault in memory. Persist it
+        # once per request instead of rewriting the whole table on every new
+        # alias (issue #50). Runs in the executor thread, never on the loop.
+        VAULT.flush()
 
 
 # --------------------------------------------------------------------------- #
@@ -376,7 +382,12 @@ async def proxy(request: Request, path: str):
     if request.method == "POST" and path in MESSAGES_PATHS and body:
         try:
             data = json.loads(body)
-            data, modified = anonymize_request(data, req_id)
+            # DETECTOR.scan + vault minting/flush are CPU- and IO-bound; run
+            # them off the event loop so concurrent requests (and any in-flight
+            # SSE stream) are not stalled (issue #50).
+            data, modified = await asyncio.get_running_loop().run_in_executor(
+                None, anonymize_request, data, req_id
+            )
             if modified:
                 body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         except Exception as exc:  # fail-open: never block a request because of us
