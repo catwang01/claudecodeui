@@ -12,6 +12,28 @@ const __dirname = path.dirname(__filename);
 const router = express.Router();
 
 /**
+ * Check whether `target` lies strictly within `base`.
+ *
+ * Uses a `path.relative`-based boundary check: a path is only "under" the base
+ * when its relative path is non-empty, does not escape upward (`..`) and is not
+ * absolute. This avoids the classic prefix bug where `/Users/edward-xxx/...`
+ * would pass a naive `startsWith('/Users/edward')` comparison.
+ *
+ * Both arguments are resolved internally, so callers may pass raw or already
+ * resolved paths interchangeably.
+ *
+ * @param {string} base - Base directory (resolved internally)
+ * @param {string} target - Candidate path (resolved internally)
+ * @returns {boolean} true when `target` is strictly inside `base`
+ */
+export function isPathUnderBase(base, target) {
+  const resolvedBase = path.resolve(base);
+  const resolvedTarget = path.resolve(target);
+  const rel = path.relative(resolvedBase, resolvedTarget);
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+/**
  * Recursively scan directory for command files (.md)
  * @param {string} dir - Directory to scan
  * @param {string} baseDir - Base directory for relative paths
@@ -455,7 +477,7 @@ router.post('/list', async (req, res) => {
  */
 router.post('/load', async (req, res) => {
   try {
-    const { commandPath } = req.body;
+    const { commandPath, projectPath } = req.body;
 
     if (!commandPath) {
       return res.status(400).json({
@@ -463,22 +485,29 @@ router.post('/load', async (req, res) => {
       });
     }
 
-    // Security: Prevent path traversal
+    // Security: Prevent path traversal. The command file must live inside the
+    // user-level (~/.claude/commands) or, when projectPath is provided, the
+    // project-level (<projectPath>/.claude/commands) directory.
     const resolvedPath = path.resolve(commandPath);
-    if (!resolvedPath.startsWith(path.resolve(os.homedir())) &&
-        !resolvedPath.includes('.claude/commands')) {
+    const userBase = path.join(os.homedir(), '.claude', 'commands');
+    const projectBase = projectPath
+      ? path.join(projectPath, '.claude', 'commands')
+      : null;
+    if (!(isPathUnderBase(userBase, resolvedPath) ||
+          (projectBase && isPathUnderBase(projectBase, resolvedPath)))) {
       return res.status(403).json({
         error: 'Access denied',
         message: 'Command must be in .claude/commands directory'
       });
     }
 
-    // Read and parse the command file
-    const content = await fs.readFile(commandPath, 'utf8');
+    // Read and parse the command file. Read `resolvedPath` (the same value that
+    // was validated above) so the check and the read cannot diverge.
+    const content = await fs.readFile(resolvedPath, 'utf8');
     const { data: metadata, content: commandContent } = parseFrontmatter(content);
 
     res.json({
-      path: commandPath,
+      path: resolvedPath,
       metadata,
       content: commandContent
     });
@@ -544,15 +573,12 @@ router.post('/execute', async (req, res) => {
     // Security: validate commandPath is within allowed directories
     {
       const resolvedPath = path.resolve(commandPath);
-      const userBase = path.resolve(path.join(os.homedir(), '.claude', 'commands'));
+      const userBase = path.join(os.homedir(), '.claude', 'commands');
       const projectBase = context?.projectPath
-        ? path.resolve(path.join(context.projectPath, '.claude', 'commands'))
+        ? path.join(context.projectPath, '.claude', 'commands')
         : null;
-      const isUnder = (base) => {
-        const rel = path.relative(base, resolvedPath);
-        return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
-      };
-      if (!(isUnder(userBase) || (projectBase && isUnder(projectBase)))) {
+      if (!(isPathUnderBase(userBase, resolvedPath) ||
+            (projectBase && isPathUnderBase(projectBase, resolvedPath)))) {
         return res.status(403).json({
           error: 'Access denied',
           message: 'Command must be in .claude/commands directory'
