@@ -164,7 +164,7 @@ def test_load_detector_merges_user_literals_and_reports_issues(proxy, tmp_path, 
     }), encoding="utf-8")
     monkeypatch.setattr(pii_proxy, "SECRETS_FILE", str(secrets))
     detector = pii_proxy.load_detector()
-    kinds = {spec.kind for spec, _, _ in detector._patterns}
+    kinds = {spec.kind for spec, *_ in detector._patterns}
     assert "EMP" in kinds and "EMAIL_ADDRESS" in kinds  # user pattern + builtins merged
     assert any("shorter than min_literal_len" in issue for issue in detector.issues)
     assert detector.scan("EMP-1234 " + SECRET) != []

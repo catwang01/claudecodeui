@@ -133,13 +133,27 @@ def _literal_run(regex: str) -> str | None:
 
     Deliberately conservative. A wrong anchor silently skips a pattern, i.e.
     leaks the data we are protecting, so character classes and escapes are
-    removed before the runs are taken, and any pattern containing an
-    alternation gets no anchor at all (its "literal" may be optional).
+    removed before the runs are taken, and a pattern gets no anchor at all
+    whenever the literal it would key on may be absent from a match:
+
+    * alternation (``|``) - the "literal" may belong to another branch;
+    * optional / zero-or-more constructs (``?``, ``*``) - the literal may be
+      matched zero times;
+    * a zero-bounded repeat (``{0}``, ``{0,n}``, ``{0,}``) applied to an
+      element that can contribute a literal - that literal becomes optional.
+
+    Repeats of a stripped character class or escape (``[A-Z ]{0,40}``) are
+    harmless: that element yields no run, so the anchor still comes from a
+    required literal elsewhere.
     """
     if "|" in regex:
         return None
     stripped = re.sub(r"\\.", " ", regex)
     stripped = re.sub(r"\[[^\]]*\]", " ", stripped)
+    if "?" in stripped or "*" in stripped:
+        return None
+    if re.search(r"[A-Za-z0-9_)]\{\s*0", stripped):
+        return None
     stripped = re.sub(r"\{\d+,?\d*\}", " ", stripped)
     runs = re.findall(r"[A-Za-z0-9_]{3,}", stripped)
     runs = [r for r in runs if r.upper() not in {"BEGIN", "END"}]
@@ -165,7 +179,7 @@ class Detector:
             self._literal_rx = re.compile(pattern, flags)
             for kind, value in self._literals:
                 self._literal_kind[value if cfg.case_sensitive else value.lower()] = kind
-        self._patterns: list[tuple[PatternSpec, "re.Pattern[str]", str | None]] = []
+        self._patterns: list[tuple[PatternSpec, "re.Pattern[str]", str | None, bool]] = []
         for spec in cfg.patterns:
             if any(issue.startswith("pattern %s " % spec.kind) for issue in self._issues):
                 continue
@@ -173,7 +187,15 @@ class Detector:
                 compiled = re.compile(spec.regex, 0 if spec.case_sensitive else re.IGNORECASE)
             except re.error:
                 continue
-            self._patterns.append((spec, compiled, _literal_run(spec.regex)))
+            anchor = _literal_run(spec.regex)
+            # The anchor check is as substring ``in`` test, so it must follow
+            # the pattern's case setting: fold the anchor (and the haystack)
+            # for IGNORECASE patterns, otherwise a lower-case match would be
+            # skipped and leak.
+            fold = not spec.case_sensitive
+            if anchor is not None and fold:
+                anchor = anchor.lower()
+            self._patterns.append((spec, compiled, anchor, fold))
 
     @property
     def issues(self) -> list[str]:
@@ -186,7 +208,7 @@ class Detector:
     @property
     def max_len(self) -> int:
         longest = max((len(v) for _, v in self._literals), default=0)
-        spans = [spec.max_len for spec, _, _ in self._patterns]
+        spans = [spec.max_len for spec, _, _, _ in self._patterns]
         return max([longest] + spans + [1])
 
     def health(self) -> dict:
@@ -206,8 +228,9 @@ class Detector:
                 key = value if self.cfg.case_sensitive else value.lower()
                 kind = self._literal_kind.get(key, "LITERAL")
                 found.append(Match(offset + m.start(), offset + m.end(), kind, value))
-        for spec, rx, anchor in self._patterns:
-            if anchor is not None and anchor not in text:
+        folded = text.lower()
+        for spec, rx, anchor, fold in self._patterns:
+            if anchor is not None and anchor not in (folded if fold else text):
                 continue
             for m in rx.finditer(text):
                 value = m.group(0)
@@ -223,8 +246,9 @@ class Detector:
         make every 1 KB chunk rescan 4 KB.
         """
         overlap = self._literal_max
-        for spec, _rx, anchor in self._patterns:
-            if anchor is None or anchor in buf:
+        folded = buf.lower()
+        for spec, _rx, anchor, fold in self._patterns:
+            if anchor is None or anchor in (folded if fold else buf):
                 overlap = max(overlap, spec.max_len)
         return max(1, overlap)
 

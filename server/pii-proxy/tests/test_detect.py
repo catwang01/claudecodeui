@@ -188,3 +188,59 @@ def test_overlap_stays_small_when_long_pattern_anchor_is_absent():
     det = Detector(DetectorConfig(patterns=[PatternSpec("JWT", r"\beyJ[A-Za-z0-9_]{8,}", 4096)]))
     assert det._overlap("nothing interesting in this sentence") < 64
     assert det._overlap("eyJhbGciOiJIUzI1NiJ9") == 4096
+
+# --------------------------------------------------------------------------- #
+# Regressions for issue #51: the anchor prefilter must never suppress a real
+# match. Two fail-open gaps: the anchor comparison ignored a case-insensitive
+# pattern's case setting, and _literal_run keyed on literals that could be
+# optional.
+# --------------------------------------------------------------------------- #
+
+CI_SECRET = PatternSpec("CUSTOM_CI", r"Secret-[0-9]+", 32, False)
+OPT_GROUP = PatternSpec("CUSTOM_OPT", r"(foo)?bar", 32, True)
+
+
+def test_anchor_prefilter_respects_case_insensitive_patterns():
+    """A case_sensitive=False pattern must still match a lower-case instance.
+
+    Anchor "Secret" is folded, so "secret-123" is not skipped by the prefilter.
+    """
+    det = Detector(DetectorConfig(patterns=[CI_SECRET]))
+    assert [m.kind for m in det.scan("secret-123")] == ["CUSTOM_CI"]
+    assert [m.kind for m in det.scan("SECRET-7")] == ["CUSTOM_CI"]
+    assert det.scan("nothing here") == []
+
+
+def test_anchor_prefilter_finds_case_insensitive_match_across_windows():
+    """The incremental overlap window must respect the case setting too."""
+    det = Detector(DetectorConfig(patterns=[PatternSpec("CUSTOM_CI3", r"Secret-[0-9]{3}", 32, False)]))
+    text = "x secret-123"
+    buf, consumed, found = "", 0, []
+    for i in range(len(text)):
+        buf += text[i]
+        matches, consumed = det.scan_window(buf, consumed)
+        found.extend(matches)
+    assert [m.kind for m in found] == ["CUSTOM_CI3"]
+    assert [(m.start, m.end) for m in found] == [(2, 12)]
+
+
+def test_optional_group_pattern_gets_no_anchor_and_still_matches():
+    from pii_detect import _literal_run
+
+    assert _literal_run(r"(foo)?bar") is None       # "foo" is optional
+    assert _literal_run(r"(foo)*bar") is None       # "foo" may be matched zero times
+    assert _literal_run(r"foo{0,3}bar") is None     # literal repeat may be zero
+    det = Detector(DetectorConfig(patterns=[OPT_GROUP]))
+    assert [m.kind for m in det.scan("bar")] == ["CUSTOM_OPT"]
+    assert [m.kind for m in det.scan("foobar")] == ["CUSTOM_OPT"]
+
+
+def test_required_literals_next_to_stripped_repeats_keep_their_anchor():
+    """A zero-bounded repeat of a character class is harmless: the class yields
+    no run, so the anchor still comes from a required literal."""
+    from pii_detect import _literal_run
+
+    assert _literal_run(r"-----BEGIN [A-Z ]{0,40}PRIVATE KEY-----") == "PRIVATE"
+    assert _literal_run(r"\beyJ[A-Za-z0-9_\-]{8,}") == "eyJ"
+    assert _literal_run(r"tok\+en") == "tok"        # escaped '+' is a literal, not a quantifier
+
