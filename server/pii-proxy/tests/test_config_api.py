@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 from fastapi.testclient import TestClient
@@ -70,7 +71,7 @@ def test_dry_run_previews_what_the_model_would_see(proxy):
     assert "my-real-password" not in body["anonymized"]
     assert "EMP-123456" not in body["anonymized"]
     assert "DevTestPW42" not in body["anonymized"]
-    assert "@example" in body["anonymized"]          # fake email shape
+    assert re.search(r"[^@\s]+@(?:example\.com|example\.net|example\.org|mail\.example\.com)", body["anonymized"])
     assert proxy.VAULT.stats()["entries"] == before  # dry-run never touches the real vault
 
 
