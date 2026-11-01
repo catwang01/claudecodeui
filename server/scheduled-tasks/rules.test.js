@@ -198,6 +198,40 @@ describe('cron rules', () => {
     );
   });
 
+  it('treats a */n day field as unrestricted, so the other day field ANDs (Vixie)', () => {
+    // 2026-01-01 is a Thursday. */1 expands to every day-of-month, so by Vixie
+    // it is unrestricted and must AND with Monday — next is Mon 2026-01-05,
+    // *not* every day.
+    expect(computeNextRun({ kind: 'cron', expression: '0 9 */1 * 1', timeZone: 'UTC' }, at('2026-01-01T00:00:00Z'))).toBe(
+      at('2026-01-05T09:00:00Z')
+    );
+    // */2 expands to odd days-of-month; ANDed with Friday the next match is
+    // Fri 2026-01-09 (odd-day Fridays), not the first odd day (Thu 2026-01-01).
+    expect(computeNextRun({ kind: 'cron', expression: '0 9 */2 * 5', timeZone: 'UTC' }, at('2026-01-01T00:00:00Z'))).toBe(
+      at('2026-01-09T09:00:00Z')
+    );
+  });
+
+  it('treats a */n day-of-week field as unrestricted (symmetric) and flags by leading char', () => {
+    // dow */1 = every weekday, unrestricted → AND with day-of-month 15.
+    expect(computeNextRun({ kind: 'cron', expression: '0 0 15 * */1', timeZone: 'UTC' }, at('2026-01-01T00:00:00Z'))).toBe(
+      at('2026-01-15T00:00:00Z')
+    );
+    expect(normalizeRule({ kind: 'cron', expression: '0 9 */1 * 1', timeZone: 'UTC' })).toMatchObject({
+      domRestricted: false,
+      dowRestricted: true,
+    });
+    expect(normalizeRule({ kind: 'cron', expression: '0 9 */1 * */2', timeZone: 'UTC' })).toMatchObject({
+      domRestricted: false,
+      dowRestricted: false,
+    });
+    // A list that starts with '*' is unrestricted; a range is restricted.
+    expect(normalizeRule({ kind: 'cron', expression: '0 9 1-5 * *,3', timeZone: 'UTC' })).toMatchObject({
+      domRestricted: true,
+      dowRestricted: false,
+    });
+  });
+
   it('supports month fields, ranges, lists and steps', () => {
     expect(computeNextRun({ kind: 'cron', expression: '0 0 1 3 *', timeZone: 'UTC' }, at('2026-01-01T00:00:00Z'))).toBe(
       at('2026-03-01T00:00:00Z')

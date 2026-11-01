@@ -289,8 +289,10 @@ function normalizeCron(rule) {
     expression,
     timeZone: rule.timeZone,
     fields,
-    domRestricted: parts[2] !== '*',
-    dowRestricted: parts[4] !== '*',
+    // Vixie marks a day field unrestricted when it *starts with* '*', so `*/n`
+    // (and `*/1`) is unrestricted just like `*` — not only the literal `*`.
+    domRestricted: !parts[2].startsWith('*'),
+    dowRestricted: !parts[4].startsWith('*'),
   };
 }
 
