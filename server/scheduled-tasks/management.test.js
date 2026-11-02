@@ -105,6 +105,28 @@ const baseTask = {
   rule: { kind: 'interval', everySeconds: 3600 },
 };
 
+describe('scheduled task providers', () => {
+  it('updates the provider and clears an incompatible previous model', async () => {
+    const { management } = setup();
+    const created = await management.createTask({ ...baseTask, model: 'claude-sonnet-4.6' });
+    const updated = await management.updateTask(created.task.id, { provider: 'copilot' });
+
+    expect(updated).toMatchObject({ ok: true, task: { provider: 'copilot', model: null } });
+  });
+
+  it('rejects unknown providers on creation and update without changing the task', async () => {
+    const { management, repo } = setup();
+    expect(await management.createTask({ ...baseTask, provider: 'unknown' }))
+      .toMatchObject({ ok: false, code: 'invalid_input' });
+    expect(repo._tasks.size).toBe(0);
+
+    const created = await management.createTask({ ...baseTask, provider: 'copilot' });
+    expect(await management.updateTask(created.task.id, { provider: '' }))
+      .toMatchObject({ ok: false, code: 'invalid_input' });
+    expect((await management.getTask(created.task.id)).task.provider).toBe('copilot');
+  });
+});
+
 describe('taskRowToJson preset fields (§10.2)', () => {
   it('maps snake_case and camelCase preset links', () => {
     expect(taskRowToJson({ preset_id: 'p1', preset_task_id: 't1' })).toMatchObject({

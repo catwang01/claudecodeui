@@ -3,6 +3,7 @@ import crossSpawn from 'cross-spawn';
 import { notifyRunFailed, notifyRunStopped } from './services/notification-orchestrator.js';
 import { cursorAdapter } from './providers/cursor/adapter.js';
 import { createNormalizedMessage } from './providers/types.js';
+import { filterScheduledTaskEnv } from './scheduled-tasks/params.js';
 
 // Use cross-spawn on Windows for better command execution
 const spawnFunction = process.platform === 'win32' ? crossSpawn : spawn;
@@ -125,7 +126,7 @@ async function spawnCursor(command, options = {}, ws) {
       const cursorProcess = spawnFunction('cursor-agent', args, {
         cwd: workingDir,
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env } // Inherit all environment variables
+        env: { ...process.env, ...filterScheduledTaskEnv(options.env) }
       });
 
       activeCursorProcesses.set(processKey, cursorProcess);

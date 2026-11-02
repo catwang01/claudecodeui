@@ -4,6 +4,8 @@ import path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CopilotClient } from '@github/copilot-sdk';
 import { sessionsDb } from './database/db.js';
+import { scheduledTasksDb } from './modules/database/index.js';
+import { SCHEDULE_TOOL_NAMES } from './scheduled-tasks/tools.js';
 
 const summaryRefreshMocks = vi.hoisted(() => ({
   waitForCopilotSessionSummary: vi.fn(),
@@ -31,6 +33,8 @@ const {
 const tempPaths = [];
 
 afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   vi.clearAllMocks();
   for (const tempPath of tempPaths.splice(0)) {
     fs.rmSync(tempPath, { recursive: true, force: true });
@@ -274,7 +278,8 @@ describe('getCopilotEventsPath', () => {
 });
 
 describe('queryCopilotSDK native persistence', () => {
-  it('registers native Copilot events without creating a Claude transcript', async () => {
+  it.each([false, true])('registers native events and user-scoped tools (resume=%s)', async (resume) => {
+    vi.stubEnv('SCHEDULED_TASKS_TOOLS', '1');
     const sessionId = `native-${Date.now()}`;
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'copilot-native-session-'));
     tempPaths.push(cwd);
@@ -307,12 +312,25 @@ describe('queryCopilotSDK native persistence', () => {
       disconnect: vi.fn().mockResolvedValue(undefined),
     };
 
-    vi.spyOn(CopilotClient.prototype, 'start').mockResolvedValue(undefined);
-    vi.spyOn(CopilotClient.prototype, 'createSession').mockResolvedValue(fakeSession);
+    const startClient = vi.spyOn(CopilotClient.prototype, 'start').mockResolvedValue(undefined);
+    const stopClient = vi.spyOn(CopilotClient.prototype, 'stop').mockResolvedValue([]);
+    const openSession = vi.spyOn(CopilotClient.prototype, resume ? 'resumeSession' : 'createSession')
+      .mockResolvedValue(fakeSession);
+    vi.spyOn(sessionsDb, 'getSessionById').mockReturnValue(
+      resume ? { session_id: sessionId, provider_session_id: sessionId } : null
+    );
     const createSessionSpy = vi.spyOn(sessionsDb, 'createSession').mockReturnValue(sessionId);
-    const writer = { send: vi.fn() };
+    const writer = { send: vi.fn(), userId: 7 };
 
-    await queryCopilotSDK('Use the native Copilot session.', { cwd }, writer);
+    await queryCopilotSDK(
+      'Use the native Copilot session.',
+      {
+        cwd,
+        ...(resume ? { sessionId } : {}),
+        env: { SCHEDULED_TASK_ID: 'copilot-task', PATH: 'not-allowed' },
+      },
+      writer
+    );
 
     expect(createSessionSpy).toHaveBeenCalledWith(
       sessionId,
@@ -325,6 +343,36 @@ describe('queryCopilotSDK native persistence', () => {
       sessionId
     );
     expect(fs.existsSync(legacyClaudePath)).toBe(false);
+    expect(startClient.mock.contexts[0].resolvedEnv).toMatchObject({
+      SCHEDULED_TASK_ID: 'copilot-task',
+      PATH: process.env.PATH,
+    });
+    expect(process.env.SCHEDULED_TASK_ID).not.toBe('copilot-task');
+    expect(stopClient).toHaveBeenCalledOnce();
+    const config = openSession.mock.calls[0][resume ? 1 : 0];
+    const createTool = config.tools.find((tool) => tool.name === 'schedule_create');
+    expect(createTool).toBeDefined();
+    vi.stubEnv('SCHEDULED_TASKS_WORKSPACE', '0');
+    const persistTask = vi.spyOn(scheduledTasksDb, 'createTask').mockImplementation((input) => ({
+      id: 'copilot-created-task',
+      ...input,
+    }));
+
+    const result = await createTool.handler({
+      title: 'Copilot reminder',
+      prompt: 'Summarize changes',
+      every_seconds: 300,
+    });
+
+    expect(JSON.parse(result.textResultForLlm)).toMatchObject({
+      id: 'copilot-created-task',
+      projectPath: cwd,
+      provider: 'copilot',
+    });
+    expect(persistTask).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 7,
+      projectPath: cwd,
+    }));
   });
 });
 
@@ -362,13 +410,53 @@ describe('buildCopilotAttachments', () => {
   });
 });
 
-describe('Copilot internal artifact tools', () => {
+describe('Copilot internal tools', () => {
   it('registers download and image tools on every session', () => {
     const config = copilotSdk.buildCopilotSessionConfig({ model: 'gpt-5.5' });
 
     expect(config.model).toBe('gpt-5.5');
-    expect(config.tools.map((tool) => tool.name)).toEqual(['download', 'image']);
+    expect(config.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(['download', 'image']));
     expect(config.tools.every((tool) => tool.skipPermission === true)).toBe(true);
+  });
+
+  describe('Copilot internal schedule tools', () => {
+    it('exposes every shared schedule tool with a serializable input schema', () => {
+      vi.stubEnv('SCHEDULED_TASKS_TOOLS', '1');
+      const config = copilotSdk.buildCopilotSessionConfig({ workingDirectory: 'C:\\repo' });
+      const scheduleTools = config.tools.filter((tool) => tool.name.startsWith('schedule_'));
+
+      expect(scheduleTools.map((tool) => tool.name)).toEqual(SCHEDULE_TOOL_NAMES);
+      const create = scheduleTools.find((tool) => tool.name === 'schedule_create');
+      expect(create.parameters.toJSONSchema()).toMatchObject({
+        type: 'object',
+        required: ['prompt', 'title'],
+        properties: {
+          every_seconds: { type: 'number' },
+        },
+      });
+    });
+
+    it('omits scheduling tools when disabled without removing artifact tools', () => {
+      vi.stubEnv('SCHEDULED_TASKS_TOOLS', '0');
+      const config = copilotSdk.buildCopilotSessionConfig({});
+
+      expect(config.tools.map((tool) => tool.name)).toEqual(['download', 'image']);
+    });
+
+    it('keeps task access scoped to the calling project and returns MCP errors to Copilot', async () => {
+      vi.stubEnv('SCHEDULED_TASKS_TOOLS', '1');
+      vi.spyOn(scheduledTasksDb, 'getTask').mockReturnValue({
+        id: 'other-project-task',
+        project_path: 'C:\\other-project',
+      });
+      const config = copilotSdk.buildCopilotSessionConfig({ workingDirectory: 'C:\\repo' });
+      const get = config.tools.find((tool) => tool.name === 'schedule_get');
+      expect(get).toBeDefined();
+
+      const result = await get.handler({ id: 'other-project-task' });
+
+      expect(JSON.parse(result.textResultForLlm)).toMatchObject({ code: 'not_found' });
+    });
   });
 
   it('returns download metadata for an existing file', async () => {

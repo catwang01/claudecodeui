@@ -18,9 +18,7 @@ import { createScheduleTools, isScheduleToolsEnabled, SCHEDULE_TOOL_NAMES } from
 // §12.2 parameter env contract + §13.1 predefined variable names. params.js is
 // pure (no imports), so this cannot cycle.
 import {
-  PARAM_ENV_PREFIX,
-  PARAMS_ENV_NAME,
-  PREDEFINED_ENV_NAMES,
+  filterScheduledTaskEnv,
 } from './scheduled-tasks/params.js';
 import { getTapSession } from './tap.js';
 import crypto from 'crypto';
@@ -412,16 +410,7 @@ export function mapCliOptionsToSDK(options = {}) {
   // NODE_OPTIONS / LD_PRELOAD or re-add CLAUDECODE. The allowlist is the §12.2 +
   // §13.1 contract, imported from params.js so it cannot drift.
   // Absent options.env is a strict no-op.
-  const predefinedEnvNames = new Set(PREDEFINED_ENV_NAMES);
-  if (options.env && typeof options.env === 'object' && !Array.isArray(options.env)) {
-    for (const [key, value] of Object.entries(options.env)) {
-      const allowed =
-        key === PARAMS_ENV_NAME || key.startsWith(PARAM_ENV_PREFIX) || predefinedEnvNames.has(key);
-      if (!allowed) continue;
-      if (value === undefined || value === null) continue;
-      env[key] = String(value);
-    }
-  }
+  Object.assign(env, filterScheduledTaskEnv(options.env));
 
   sdkOptions.env = env;
 

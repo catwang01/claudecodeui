@@ -26,6 +26,20 @@ export const PARAM_ENV_PREFIX = 'SCHEDULED_TASK_PARAM_';
 /** §12.2: compact JSON escape hatch holding every resolved value. */
 export const PARAMS_ENV_NAME = 'SCHEDULED_TASK_PARAMS';
 
+export function filterScheduledTaskEnv(input) {
+  const env = {};
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return env;
+  for (const [key, value] of Object.entries(input)) {
+    if (
+      (key === PARAMS_ENV_NAME || key.startsWith(PARAM_ENV_PREFIX) || PREDEFINED_ENV_NAMES.includes(key))
+      && value !== undefined && value !== null
+    ) {
+      env[key] = String(value);
+    }
+  }
+  return env;
+}
+
 /** §12.1 limits. */
 export const MAX_PARAM_COUNT = 32;
 export const MAX_PARAM_JSON_BYTES = 16 * 1024;

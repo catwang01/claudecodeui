@@ -15,7 +15,7 @@
  * task prompt. Gate errors (script_exit_<code> / script_failed / script_timeout /
  * invalid_script_output / commands_disabled) fail the run without an agent call.
  *
- * MVP: only provider 'claude' is supported.
+ * The task's provider selects the agent backend for execution and cancellation.
  * Timeout: SCHEDULED_TASK_TIMEOUT_MS (default 1800000) then error + best-effort abort.
  * Test seam: SCHEDULED_TASK_DRY_RUN=1 runs everything up to (and including) the gate,
  * then replaces only the agent call with output '[dry-run] <effective prompt>' and
@@ -54,6 +54,10 @@ import { emitScheduledTaskRunState } from './events.js';
 import { addProjectManually } from '../projects.js';
 import { normalizeProjectPath } from '../shared/utils.js';
 import { queryClaudeSDK, abortClaudeSDKSession } from '../claude-sdk.js';
+import { queryCopilotSDK, abortCopilotSession } from '../copilot-sdk.js';
+import { queryCodex, abortCodexSession } from '../openai-codex.js';
+import { spawnCursor, abortCursorSession } from '../cursor-cli.js';
+import { spawnGemini, abortGeminiSession } from '../gemini-cli.js';
 import {
   ensureRunWorkspace,
   ensureTaskWorkspace,
@@ -71,7 +75,6 @@ import {
 } from './params.js';
 
 const DEFAULT_TIMEOUT_MS = 1800000;
-const SUPPORTED_PROVIDERS = new Set(['claude']);
 const SCRIPT_OUTPUT_LIMIT = 20000;
 const DEFAULT_COMMAND_TIMEOUT_SECONDS = 60;
 const MAX_COMMAND_TIMEOUT_SECONDS = 3600;
@@ -258,10 +261,31 @@ function errorMessage(err) {
 export function createTaskRunner(deps = {}) {
   const db = deps.scheduledTasksDb ?? scheduledTasksDb;
   const ensureProject = deps.addProjectManually ?? addProjectManually;
-  const query = deps.queryClaudeSDK ?? queryClaudeSDK;
-  const abortSession = deps.abortClaudeSDKSession ?? abortClaudeSDKSession;
+  const providers = {
+    claude: {
+      query: deps.queryClaudeSDK ?? queryClaudeSDK,
+      abort: deps.abortClaudeSDKSession ?? abortClaudeSDKSession,
+    },
+    copilot: {
+      query: deps.queryCopilotSDK ?? queryCopilotSDK,
+      abort: deps.abortCopilotSession ?? abortCopilotSession,
+    },
+    codex: {
+      query: deps.queryCodex ?? queryCodex,
+      abort: deps.abortCodexSession ?? abortCodexSession,
+    },
+    cursor: {
+      query: deps.spawnCursor ?? spawnCursor,
+      abort: deps.abortCursorSession ?? abortCursorSession,
+    },
+    gemini: {
+      query: deps.spawnGemini ?? spawnGemini,
+      abort: deps.abortGeminiSession ?? abortGeminiSession,
+    },
+  };
   const spawnImpl = deps.spawn ?? nodeSpawn;
   const timeoutOverride = deps.timeoutMs;
+  const activeRunProviders = new Map();
 
   function finishOnce(task, run, status, extra = {}) {
     const output = extra.output !== undefined ? extra.output : null;
@@ -523,7 +547,8 @@ export function createTaskRunner(deps = {}) {
       ? `${promptBlocks.join('\n\n')}\n\n${effectivePrompt}`
       : effectivePrompt;
 
-    if (!SUPPORTED_PROVIDERS.has(task.provider ?? 'claude')) {
+    const provider = task.provider ?? 'claude';
+    if (!Object.hasOwn(providers, provider)) {
       return finishOnce(task, run, 'error', {
         error: `Unsupported provider: ${task.provider}`,
         promptUsed: effectivePrompt,
@@ -531,6 +556,7 @@ export function createTaskRunner(deps = {}) {
         scriptOutput,
       });
     }
+    const agent = providers[provider];
 
     // docs §14.2: record that the agent is being started. Everything before this
     // point — the script gate (a script that runs is *not* a running task), a
@@ -574,6 +600,7 @@ export function createTaskRunner(deps = {}) {
 
     const writer = {
       userId: task.user_id ?? task.userId ?? null,
+      isWebSocketWriter: true,
       send(message) {
         if (!message || typeof message !== 'object') return;
         switch (message.kind) {
@@ -600,6 +627,12 @@ export function createTaskRunner(deps = {}) {
             if (typeof message.content === 'string' && message.content) errorText = message.content;
             break;
           }
+          case 'complete': {
+            if (typeof message.exitCode === 'number' && message.exitCode !== 0 && !errorText) {
+              errorText = `Agent exited with code ${message.exitCode}`;
+            }
+            break;
+          }
           default:
             break;
         }
@@ -608,11 +641,15 @@ export function createTaskRunner(deps = {}) {
 
     // Unattended runs have no browser to answer permission prompts, so approvals
     // must be bypassed — same as the external API route (server/routes/agent.js).
-    const options = { cwd: projectPath, permissionMode: 'bypassPermissions' };
+    const options = {
+      cwd: projectPath,
+      projectPath,
+      permissionMode: 'bypassPermissions',
+      skipPermissions: true,
+    };
     if (task.model) options.model = task.model;
     // §12.5/§13.3: hand the predefined variables and the resolved parameters to the
-    // provider CLI through server/claude-sdk.js, which merges options.env into
-    // sdkOptions.env (only these two namespaces are accepted there).
+    // provider CLI; each backend accepts only the scheduled-task namespaces.
     options.env = { ...predefinedVars, ...(paramVars ?? {}) };
 
     const agentResult = (status, extra = {}) =>
@@ -637,13 +674,13 @@ export function createTaskRunner(deps = {}) {
     markAgentStarted();
 
     try {
-      await Promise.race([query(agentPrompt, options, writer), timedOut]);
+      await Promise.race([agent.query(agentPrompt, options, writer), timedOut]);
     } catch (err) {
       if (err && err.isScheduledTaskTimeout) {
         // Best-effort abort: the session may already be gone by now.
         if (sessionId) {
           try {
-            await abortSession(sessionId);
+            await agent.abort(sessionId);
           } catch (abortErr) {
             console.warn(
               `[scheduled-tasks] abort(${sessionId}) failed: ${errorMessage(abortErr)}`
@@ -693,10 +730,11 @@ export function createTaskRunner(deps = {}) {
         resolution.ok && resolution.params.length ? JSON.stringify(resolution.values) : null,
     });
 
+    activeRunProviders.set(run.id, task.provider ?? 'claude');
     const done = execute(task, run, resolution).catch((err) => {
       // execute() only throws on unexpected internal faults (e.g. the DB layer).
       return finishOnce(task, run, 'error', { error: errorMessage(err) });
-    });
+    }).finally(() => activeRunProviders.delete(run.id));
 
     return { run, done };
   }
@@ -718,7 +756,11 @@ export function createTaskRunner(deps = {}) {
           (!projectPath || !row.project_path || sameProjectPath(row.project_path, projectPath))
       );
       if (!running) return null;
-      await abortSession(running.session_id);
+      const provider = activeRunProviders.get(running.id) ?? db.getTask(taskId)?.provider ?? 'claude';
+      if (!Object.hasOwn(providers, provider)) {
+        throw new Error(`Unsupported provider: ${provider}`);
+      }
+      await providers[provider].abort(running.session_id);
       return running.session_id;
     } catch (err) {
       console.warn('[scheduled-tasks] abortTaskRun failed:', errorMessage(err));

@@ -169,6 +169,30 @@ describe('tool registration', () => {
 });
 
 describe('schedule_create', () => {
+  it('inherits the calling provider and allows an explicit provider override', async () => {
+    const repo = makeRepo();
+    const tools = createScheduleTools({
+      projectPath: PROJECT,
+      provider: 'copilot',
+      deps: { repo, rules, now: () => NOW, workspace: false },
+    });
+    const create = tools.find((definition) => definition.name === 'schedule_create');
+
+    const inherited = await create.handler({ title: 'inherited', prompt: 'p', every_seconds: 300 });
+    expect(JSON.parse(inherited.content[0].text)).toMatchObject({ provider: 'copilot' });
+
+    const explicit = await create.handler({
+      title: 'explicit', prompt: 'p', every_seconds: 300, provider: 'codex',
+    });
+    expect(JSON.parse(explicit.content[0].text)).toMatchObject({ provider: 'codex' });
+
+    const update = tools.find((definition) => definition.name === 'schedule_update');
+    const changed = await update.handler({
+      id: JSON.parse(inherited.content[0].text).id, provider: 'gemini',
+    });
+    expect(JSON.parse(changed.content[0].text)).toMatchObject({ provider: 'gemini' });
+  });
+
   it('attributes the task to the session user when one is known', async () => {
     const repo = makeRepo();
     const tools = createScheduleTools({

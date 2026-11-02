@@ -180,6 +180,7 @@ export interface ScheduledTaskInput {
 }
 
 export interface ScheduledTaskPatch {
+  provider?: string;
   title?: string;
   prompt?: string;
   projectPath?: string;

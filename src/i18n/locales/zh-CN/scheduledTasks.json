@@ -208,6 +208,7 @@
       "project": "项目",
       "projectPlaceholder": "选择项目…",
       "model": "模型（可选）",
+      "provider": "执行 Provider",
       "modelPlaceholder": "留空则使用提供方默认值",
       "enabled": "启用",
       "enabledHint": "暂停后仍保留计划，但不会运行。",

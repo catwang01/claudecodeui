@@ -130,6 +130,7 @@ describe('ScheduledTasksPanel copy / export / import', () => {
     Object.values(hook).forEach((value) => {
       if (typeof value === 'function' && 'mockReset' in value) value.mockReset();
     });
+
     Object.values(api).forEach((value) => {
       if (typeof value === 'function' && 'mockReset' in value) value.mockReset();
     });
@@ -138,6 +139,33 @@ describe('ScheduledTasksPanel copy / export / import', () => {
     api.listProjectOptions.mockResolvedValue([{ value: '/tmp/project', label: 'project' }]);
   });
 
+  it('creates a task using the chosen provider', async () => {
+      render(<ScheduledTasksPanel onClose={vi.fn()} />);
+      fireEvent.click(screen.getByText('actions.newTask'));
+      fireEvent.change(screen.getByLabelText('editor.fields.title'), { target: { value: 'Copilot task' } });
+      fireEvent.change(screen.getByLabelText('editor.fields.prompt'), { target: { value: 'Audit changes' } });
+      await screen.findByText('project');
+      fireEvent.click(screen.getByRole('checkbox', { name: 'project' }));
+      fireEvent.change(screen.getByLabelText('editor.fields.provider'), { target: { value: 'copilot' } });
+      fireEvent.click(screen.getByText('actions.create'));
+
+      await waitFor(() => expect(hook.createTask).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: 'copilot' }),
+      ));
+    });
+
+    it('preserves and edits the existing task provider', async () => {
+      hook.tasks = [makeTask({ provider: 'copilot', model: 'gpt-5.5' })];
+      render(<ScheduledTasksPanel onClose={vi.fn()} />);
+      fireEvent.click(screen.getByLabelText('actions.edit'));
+      expect(screen.getByLabelText('editor.fields.provider')).toHaveValue('copilot');
+      fireEvent.change(screen.getByLabelText('editor.fields.provider'), { target: { value: 'codex' } });
+      fireEvent.click(screen.getByText('actions.save'));
+
+      await waitFor(() => expect(hook.updateTask).toHaveBeenCalledWith(
+        'task-1', expect.objectContaining({ provider: 'codex', model: null }),
+      ));
+    });
   it('duplicates a task through the copy dialog and refreshes the list', async () => {
     hook.tasks = [makeTask()];
     render(<ScheduledTasksPanel onClose={vi.fn()} />);

@@ -208,6 +208,7 @@ export default function ScheduledTasksPanel({
     setActionError(null);
     if (editorTask) {
       await updateTask(editorTask.id, {
+        provider: values.provider,
         title: values.title,
         prompt: values.prompt,
         projectPath: values.projectPath,
@@ -226,7 +227,7 @@ export default function ScheduledTasksPanel({
         prompt: values.prompt,
         projectPath: values.projectPath,
         projectPaths: values.projectPaths,
-        provider: 'claude',
+        provider: values.provider,
         model: values.model,
         command: values.command,
         commandTimeoutSeconds: values.commandTimeoutSeconds,

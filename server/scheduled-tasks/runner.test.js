@@ -20,6 +20,10 @@ vi.mock('../claude-sdk.js', () => ({
   queryClaudeSDK: vi.fn(),
   abortClaudeSDKSession: vi.fn(),
 }));
+vi.mock('../copilot-sdk.js', () => ({ queryCopilotSDK: vi.fn(), abortCopilotSession: vi.fn() }));
+vi.mock('../openai-codex.js', () => ({ queryCodex: vi.fn(), abortCodexSession: vi.fn() }));
+vi.mock('../cursor-cli.js', () => ({ spawnCursor: vi.fn(), abortCursorSession: vi.fn() }));
+vi.mock('../gemini-cli.js', () => ({ spawnGemini: vi.fn(), abortGeminiSession: vi.fn() }));
 
 // §15: the run-state events broadcast by the server.
 vi.mock('./events.js', () => ({ emitScheduledTaskRunState: vi.fn() }));
@@ -27,6 +31,10 @@ vi.mock('./events.js', () => ({ emitScheduledTaskRunState: vi.fn() }));
 import { scheduledTasksDb } from '../modules/database/index.js';
 import { addProjectManually } from '../projects.js';
 import { queryClaudeSDK, abortClaudeSDKSession } from '../claude-sdk.js';
+import { queryCopilotSDK, abortCopilotSession } from '../copilot-sdk.js';
+import { queryCodex } from '../openai-codex.js';
+import { spawnCursor } from '../cursor-cli.js';
+import { spawnGemini } from '../gemini-cli.js';
 import {
   appendScriptOutput,
   appendScriptOutputTail,
@@ -97,6 +105,9 @@ beforeEach(() => {
   addProjectManually.mockReset().mockResolvedValue(true);
   queryClaudeSDK.mockReset();
   abortClaudeSDKSession.mockReset().mockResolvedValue(true);
+  for (const fn of [queryCopilotSDK, abortCopilotSession, queryCodex, spawnCursor, spawnGemini]) {
+    fn.mockReset();
+  }
 });
 
 afterEach(() => {
@@ -110,6 +121,107 @@ afterEach(() => {
 });
 
 describe('startTaskRun', () => {
+  it.each([
+    ['copilot', queryCopilotSDK],
+    ['codex', queryCodex],
+    ['cursor', spawnCursor],
+    ['gemini', spawnGemini],
+  ])('executes a %s task with its configured model and captures its normalized output', async (provider, query) => {
+    query.mockImplementation(async (_prompt, _options, writer) => {
+      expect(writer.isWebSocketWriter).toBe(true);
+      writer.send({ kind: 'session_created', sessionId: `${provider}-session` });
+      writer.send({ kind: 'text', role: 'assistant', content: `${provider} reply` });
+    });
+
+    const result = await startTaskRun(makeTask({ provider, model: 'selected-model' })).done;
+
+    expect(result).toMatchObject({
+      status: 'success', sessionId: `${provider}-session`, output: `${provider} reply`,
+    });
+    expect(query).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        model: 'selected-model',
+        cwd: '/tmp/scheduled-project',
+        skipPermissions: true,
+        env: expect.objectContaining({ SCHEDULED_TASK_ID: 't1' }),
+      }),
+      expect.any(Object)
+    );
+    expect(queryClaudeSDK).not.toHaveBeenCalled();
+  });
+
+  it('aborts Copilot rather than Claude when a Copilot task times out', async () => {
+    queryCopilotSDK.mockImplementation((_prompt, _options, writer) => {
+      writer.send({ kind: 'session_created', sessionId: 'copilot-timeout' });
+      return new Promise(() => {});
+    });
+    const runner = createTaskRunner({ timeoutMs: 25 });
+    const result = await runner.startTaskRun(makeTask({ provider: 'copilot' })).done;
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('timed out');
+    expect(abortCopilotSession).toHaveBeenCalledWith('copilot-timeout');
+    expect(abortClaudeSDKSession).not.toHaveBeenCalled();
+  });
+
+  it('uses the task provider when replacing an active run', async () => {
+    const runner = createTaskRunner({
+      scheduledTasksDb: {
+        getTask: () => makeTask({ provider: 'copilot' }),
+        listRuns: () => [{ status: 'running', session_id: 'copilot-replaced' }],
+      },
+    });
+
+    expect(await runner.abortTaskRun('t1')).toBe('copilot-replaced');
+    expect(abortCopilotSession).toHaveBeenCalledWith('copilot-replaced');
+    expect(abortClaudeSDKSession).not.toHaveBeenCalled();
+  });
+
+  it('keeps cancelling the original provider after the task provider is edited', async () => {
+    const task = makeTask({ provider: 'copilot' });
+    let finish;
+    let notifyStarted;
+    const started = new Promise((resolve) => { notifyStarted = resolve; });
+    const completion = new Promise((resolve) => { finish = resolve; });
+    queryCopilotSDK.mockImplementation(async (_prompt, _options, writer) => {
+      writer.send({ kind: 'session_created', sessionId: 'original-copilot' });
+      notifyStarted();
+      await completion;
+    });
+    const runner = createTaskRunner({
+      scheduledTasksDb: {
+        ...scheduledTasksDb,
+        getTask: () => task,
+        listRuns: () => [{ id: 'run-1', status: 'running', session_id: 'original-copilot' }],
+      },
+    });
+    const { done } = runner.startTaskRun(task);
+    await started;
+    task.provider = 'claude';
+
+    try {
+      expect(await runner.abortTaskRun(task.id)).toBe('original-copilot');
+      expect(abortCopilotSession).toHaveBeenCalledWith('original-copilot');
+      expect(abortClaudeSDKSession).not.toHaveBeenCalled();
+    } finally {
+      finish();
+      await done;
+    }
+  });
+
+  it.each([
+    ['cursor', spawnCursor],
+    ['gemini', spawnGemini],
+  ])('records a nonzero %s CLI completion as a failed run', async (provider, query) => {
+    query.mockImplementation(async (_prompt, _options, writer) => {
+      writer.send({ kind: 'complete', exitCode: 1 });
+    });
+    const result = await startTaskRun(makeTask({ provider })).done;
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('exited with code 1');
+  });
+
   it('creates the running run row synchronously', () => {
     queryClaudeSDK.mockImplementation(() => new Promise(() => {}));
 
@@ -193,11 +305,11 @@ describe('startTaskRun', () => {
   });
 
   it('produces an error run for unsupported providers without querying the agent', async () => {
-    const { done } = startTaskRun(makeTask({ provider: 'gemini' }));
+    const { done } = startTaskRun(makeTask({ provider: 'unknown' }));
     const result = await done;
 
     expect(result.status).toBe('error');
-    expect(result.error).toMatch(/Unsupported provider: gemini/);
+    expect(result.error).toMatch(/Unsupported provider: unknown/);
     expect(queryClaudeSDK).not.toHaveBeenCalled();
   });
 
@@ -981,7 +1093,7 @@ describe('agent-started tracking (§14.2)', () => {
     expect(missing.status).toBe('error');
     expect(missing.error).toBe('missing_required_param');
 
-    const provider = await startTaskRun(makeTask({ provider: 'codex' })).done;
+    const provider = await startTaskRun(makeTask({ provider: 'unknown' })).done;
     expect(provider.status).toBe('error');
     expect(String(provider.error)).toContain('Unsupported provider');
 
@@ -1043,4 +1155,3 @@ describe('agent-started tracking (§14.2)', () => {
     expect(emitScheduledTaskRunState.mock.calls[0][0]).toMatchObject({ status: 'skipped' });
   });
 });
-

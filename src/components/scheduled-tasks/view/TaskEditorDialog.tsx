@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { X } from 'lucide-react';
+import { PROVIDER_LABELS } from '../../../../shared/providerConstants';
 import { Button } from '../../../shared/view/ui';
 import { cn } from '../../../lib/utils';
 import SettingsToggle from '../../settings/view/SettingsToggle';
@@ -14,6 +15,7 @@ import ParamsEditor from './ParamsEditor';
 import RuleEditor from './RuleEditor';
 
 export type TaskEditorValues = {
+  provider: string;
   title: string;
   prompt: string;
   projectPath: string;
@@ -62,6 +64,7 @@ export default function TaskEditorDialog({ task, onClose, onSubmit }: TaskEditor
     return task?.projectPath ? [task.projectPath] : [];
   });
   const [model, setModel] = useState(task?.model ?? '');
+  const [provider, setProvider] = useState(task?.provider ?? 'claude');
   const [command, setCommand] = useState(task?.command ?? '');
   const [commandTimeout, setCommandTimeout] = useState(
     String(task?.commandTimeoutSeconds ?? COMMAND_TIMEOUT_DEFAULT),
@@ -161,6 +164,7 @@ export default function TaskEditorDialog({ task, onClose, onSubmit }: TaskEditor
         prompt: prompt.trim(),
         projectPath: projectPaths[0] ?? '',
         projectPaths,
+        provider,
         model: model.trim() ? model.trim() : null,
         command: trimmedCommand ? trimmedCommand : null,
         commandTimeoutSeconds,
@@ -267,6 +271,22 @@ export default function TaskEditorDialog({ task, onClose, onSubmit }: TaskEditor
             <p className="mt-1 text-[11px] text-muted-foreground">
               {t('editor.fields.projectsSelected', { count: projectPaths.length })}
             </p>
+          </FormField>
+
+          <FormField label={t('editor.fields.provider')} htmlFor="scheduled-task-provider">
+            <select
+              id="scheduled-task-provider"
+              className={controlClassName}
+              value={provider}
+              onChange={(event) => {
+                setProvider(event.target.value);
+                setModel('');
+              }}
+            >
+              {Object.entries(PROVIDER_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
           </FormField>
 
           <FormField label={t('editor.fields.model')} htmlFor="scheduled-task-model">

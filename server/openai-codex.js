@@ -17,6 +17,7 @@ import { Codex } from '@openai/codex-sdk';
 import { notifyRunFailed, notifyRunStopped } from './services/notification-orchestrator.js';
 import { codexAdapter } from './providers/codex/adapter.js';
 import { createNormalizedMessage } from './providers/types.js';
+import { filterScheduledTaskEnv } from './scheduled-tasks/params.js';
 
 // Track active sessions
 const activeCodexSessions = new Map();
@@ -212,7 +213,7 @@ export async function queryCodex(command, options = {}, ws) {
 
   try {
     // Initialize Codex SDK
-    codex = new Codex();
+    codex = new Codex({ env: { ...process.env, ...filterScheduledTaskEnv(options.env) } });
 
     // Thread options with sandbox and approval settings
     const threadOptions = {

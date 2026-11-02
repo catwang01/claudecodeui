@@ -16,6 +16,7 @@
 import { tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod/v4';
 import { createManagement } from './management.js';
+import { PROVIDER_LABELS } from '../../shared/providerConstants.js';
 // §10.4: the workspace module owns the layout text (README.md + run prompt); the
 // same text is embedded in the schedule_create / schedule_preset_install
 // descriptions so an authoring agent knows the contract before the first run.
@@ -257,9 +258,14 @@ const tagsField = z
   .describe('Optional tags (at most 20, each at most 32 characters). Replaces the whole list; [] clears it.')
   .optional();
 
+const providerField = z.enum(Object.keys(PROVIDER_LABELS))
+  .describe('Agent provider for execution. Creation defaults to the calling conversation provider; omission on update keeps the existing provider.')
+  .optional();
+
 /**
  * @param {object} [options]
  * @param {string|null} [options.projectPath] calling session cwd (default target project)
+ * @param {string} [options.provider] calling conversation provider (defaults to Claude)
  * @param {object} [options.management] pre-built management layer (tests)
  * @param {object} [options.deps] deps forwarded to createManagement (tests)
  * @returns {Array} SDK MCP tool definitions
@@ -280,7 +286,8 @@ export function createScheduleTools(options = {}) {
       prompt: args.prompt,
       projectPaths: args.project_paths,
       projectPath: args.project_path || projectPath,
-      provider: 'claude',
+      provider: args.provider ?? options.provider ?? 'claude',
+      model: args.model,
       command: args.command,
       commandTimeoutSeconds: args.command_timeout_seconds,
       params: args.params,
@@ -311,6 +318,8 @@ export function createScheduleTools(options = {}) {
     const patch = {};
     if (args.title !== undefined) patch.title = args.title;
     if (args.prompt !== undefined) patch.prompt = args.prompt;
+    if (args.provider !== undefined) patch.provider = args.provider;
+    if (args.model !== undefined) patch.model = args.model;
 
     const selector = management.ruleFromArgs(args, { required: false });
     if (!selector.ok) return selector;
@@ -328,6 +337,8 @@ export function createScheduleTools(options = {}) {
     if (
       patch.title === undefined &&
       patch.prompt === undefined &&
+      patch.provider === undefined &&
+      patch.model === undefined &&
       patch.command === undefined &&
       patch.commandTimeoutSeconds === undefined &&
       patch.params === undefined &&
@@ -340,7 +351,7 @@ export function createScheduleTools(options = {}) {
         ok: false,
         code: 'invalid_input',
         message:
-          'Nothing to update: provide title, prompt, project_paths, params, conflict policy, tags, command, command timeout or one selector',
+          'Nothing to update: provide title, prompt, provider, model, project_paths, params, conflict policy, tags, command, command timeout or one selector',
       };
     }
     const result = await management.updateTask(args.id, patch, scope);
@@ -504,6 +515,8 @@ export function createScheduleTools(options = {}) {
       {
         prompt: z.string().describe('Prompt sent to the agent when the task runs.'),
         title: z.string().describe('Short human-readable title.'),
+        provider: providerField,
+        model: z.string().describe('Model for the selected provider; defaults to its standard model.').optional(),
         project_path: z
           .string()
           .describe('Target project path; defaults to the current session project.')
@@ -541,7 +554,8 @@ export function createScheduleTools(options = {}) {
     tool(
       'schedule_update',
       SCHEDULER_PRECEDENCE_NOTE +
-        ' Update a scheduled task title, prompt, project_paths (the full multi-project binding), params, conflict_policy (skip | queue | replace), script gate (command/command_timeout_seconds) and/or its schedule (at most one selector).' +
+        ' Update a scheduled task title, prompt, provider, model, project_paths (the full multi-project binding), params, conflict_policy (skip | queue | replace), script gate (command/command_timeout_seconds) and/or its schedule (at most one selector).' +
+        ' Changing provider clears the previous model unless a replacement model is supplied.' +
         ' A command gate runs before the agent and prints a JSON envelope ({"skip":true,"reason":"..."} | {"prompt":"..."} | {"skip":false}); null clears the gate.' +
         ' params replaces the parameter definitions; null removes every parameter.' +
         PREDEFINED_VARS_NOTE,
@@ -549,6 +563,8 @@ export function createScheduleTools(options = {}) {
         id: z.string().describe('Scheduled task id.'),
         title: z.string().optional(),
         prompt: z.string().optional(),
+        provider: providerField,
+        model: z.string().nullable().optional(),
         params: paramsNullableField,
         conflict_policy: conflictPolicyField.optional(),
         tags: tagsField,

@@ -13,7 +13,8 @@
  * for Node.js — no separate installation required.
  */
 
-import { CopilotClient, approveAll, defineTool } from '@github/copilot-sdk';
+import { CopilotClient, approveAll, convertMcpCallToolResult, defineTool } from '@github/copilot-sdk';
+import { z } from 'zod/v4';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -23,6 +24,8 @@ import { notifyRunFailed, notifyRunStopped } from './services/notification-orche
 import { COPILOT_MODELS } from '../shared/modelConstants.js';
 import { sessionDb, sessionsDb } from './database/db.js';
 import { getProjects } from './projects.js';
+import { createScheduleTools, isScheduleToolsEnabled } from './scheduled-tasks/tools.js';
+import { filterScheduledTaskEnv } from './scheduled-tasks/params.js';
 import {
   waitForCopilotSessionSummary,
 } from './modules/providers/list/copilot/copilot-session-synchronizer.provider.js';
@@ -281,7 +284,7 @@ function resolveArtifactPath(filepath, workingDirectory) {
     : path.resolve(workingDirectory || process.cwd(), filepath);
 }
 
-export function createCopilotInternalTools(workingDirectory) {
+export function createCopilotInternalTools(workingDirectory, userId = null) {
   return [
     defineTool('download', {
       description: 'Make an existing file available for the user to download. Use this for generated files, including HTML artifacts. The file must already exist on disk.',
@@ -330,15 +333,23 @@ export function createCopilotInternalTools(workingDirectory) {
         });
       },
     }),
+    ...(isScheduleToolsEnabled()
+      ? createScheduleTools({ projectPath: workingDirectory, userId, provider: 'copilot' }).map((tool) => defineTool(tool.name, {
+          description: tool.description,
+          parameters: z.object(tool.inputSchema),
+          skipPermission: true,
+          handler: async (args) => convertMcpCallToolResult(await tool.handler(args)),
+        }))
+      : []),
   ];
 }
 
-export function buildCopilotSessionConfig(config) {
+export function buildCopilotSessionConfig(config, { userId = null } = {}) {
   return {
     ...config,
     tools: [
       ...(config.tools || []),
-      ...createCopilotInternalTools(config.workingDirectory),
+      ...createCopilotInternalTools(config.workingDirectory, userId),
     ],
   };
 }
@@ -385,6 +396,14 @@ let _client = null;
 let _clientStarting = false;
 const _clientReadyCallbacks = [];
 
+function createClient(env) {
+  const gitHubToken = process.env.COPILOT_GITHUB_TOKEN || process.env.GITHUB_TOKEN;
+  return new CopilotClient({
+    ...(gitHubToken ? { gitHubToken } : {}),
+    ...(env ? { env } : {}),
+  });
+}
+
 async function getClient() {
   if (_client) return _client;
 
@@ -396,10 +415,7 @@ async function getClient() {
 
   _clientStarting = true;
   try {
-    const gitHubToken = process.env.COPILOT_GITHUB_TOKEN || process.env.GITHUB_TOKEN;
-    const client = new CopilotClient({
-      ...(gitHubToken ? { gitHubToken } : {}),
-    });
+    const client = createClient();
     await client.start();
     _client = client;
     _clientStarting = false;
@@ -466,6 +482,7 @@ export async function queryCopilotSDK(command, options = {}, ws) {
   let capturedSessionId = sessionId || null;
   let jsonlPath = null;
   const abortController = new AbortController();
+  let taskClient = null;
 
   const send = (msg) => {
     try {
@@ -482,7 +499,13 @@ export async function queryCopilotSDK(command, options = {}, ws) {
   };
 
   try {
-    const client = await getClient();
+    const taskEnv = filterScheduledTaskEnv(options.env);
+    if (Object.keys(taskEnv).length > 0) {
+      // Runtime environment is client-wide, so each scheduled run needs its own client.
+      taskClient = createClient({ ...process.env, ...taskEnv });
+      await taskClient.start();
+    }
+    const client = taskClient ?? await getClient();
 
     // ── Permission handler ────────────────────────────────────────────────────
     // For bypassPermissions / acceptEdits: approve silently.
@@ -533,7 +556,7 @@ export async function queryCopilotSDK(command, options = {}, ws) {
         workingDirectory: cwd,
         streaming: true,
         enableConfigDiscovery: true,
-      }));
+      }, { userId: ws?.userId ?? null }));
     } else {
       console.log('[copilot-sdk] Creating new session, model:', model);
       session = await client.createSession(buildCopilotSessionConfig({
@@ -542,7 +565,7 @@ export async function queryCopilotSDK(command, options = {}, ws) {
         workingDirectory: cwd,
         streaming: true,
         enableConfigDiscovery: true,
-      }));
+      }, { userId: ws?.userId ?? null }));
     }
 
     // ── Map session IDs ───────────────────────────────────────────────────────
@@ -773,6 +796,14 @@ export async function queryCopilotSDK(command, options = {}, ws) {
     }));
   } finally {
     if (capturedSessionId) activeSessions.delete(capturedSessionId);
+    if (taskClient) {
+      try {
+        const errors = await taskClient.stop();
+        for (const error of errors) console.warn('[copilot-sdk] Task client shutdown failed:', error);
+      } catch (error) {
+        console.warn('[copilot-sdk] Task client shutdown failed:', error);
+      }
+    }
   }
 }
 

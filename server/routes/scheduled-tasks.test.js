@@ -259,6 +259,20 @@ const validBody = {
 };
 
 describe('POST /api/scheduled-tasks', () => {
+  it('round-trips the chosen provider and permits changing it through PATCH', async () => {
+    const created = await api('POST', '/', { ...validBody, provider: 'copilot' });
+    expect(created.status).toBe(201);
+    expect(created.body.task.provider).toBe('copilot');
+
+    const updated = await api('PATCH', '/' + created.body.task.id, { provider: 'codex' });
+    expect(updated.status).toBe(200);
+    expect(updated.body.task.provider).toBe('codex');
+
+    const invalid = await api('PATCH', '/' + created.body.task.id, { provider: 'unknown' });
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.code).toBe('invalid_input');
+  });
+
   it('creates a task and returns 201 with camelCase task JSON', async () => {
     const { status, body } = await api('POST', '/', validBody);
 

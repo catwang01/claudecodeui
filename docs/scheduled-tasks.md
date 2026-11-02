@@ -17,6 +17,14 @@ When due, the server starts a **new** headless agent session in `projectPath`, s
 `prompt`, records a run row, then advances `nextRunAt` (or disables a one-shot task).
 Runs are also triggerable manually (`POST /:id/run`).
 
+Execution provider is configurable in the task editor and through REST/tool inputs:
+`claude`, `copilot`, `codex`, `cursor`, or `gemini`. The selected backend must already
+be installed and authenticated. Claude and Copilot conversations expose the shared
+schedule tools; `schedule_create` defaults to the calling conversation's provider
+unless explicitly overridden. Existing tasks and REST/UI creation without a provider
+continue to default to Claude. Changing a task's provider clears the previous model
+unless a replacement model is supplied in the same update.
+
 Rule kinds (mirrors DSH selectors):
 
 | kind | payload | notes |
@@ -94,11 +102,13 @@ export function startTaskRun(task, { trigger = 'schedule', scheduledFor = null }
   { run: ScheduledTaskRunRow, done: Promise<{ run, status, sessionId, output, error }> }
 ```
 Creates the 'running' run row synchronously, then executes on the microtask queue; never
-rejects (failures come back as `status: 'error'`). MVP executes `provider === 'claude'`
-via `queryClaudeSDK` with a headless writer (`{ userId, send(){} }`), collecting
-`session_created` ids and assistant text; other providers produce an error run.
+rejects (failures come back as `status: 'error'`). Dispatches to the selected provider's
+query/spawn function with a headless writer (`{ userId, isWebSocketWriter: true, send(){} }`),
+collecting `session_created` ids and assistant text. Unknown providers produce an error run.
+Each backend receives the allowlisted task environment; Copilot uses an isolated runtime
+client per scheduled run so concurrent tasks cannot share task-specific environment.
 Timeout: `SCHEDULED_TASK_TIMEOUT_MS` (default 1800000) then error + best-effort abort.
-Test seam: when `SCHEDULED_TASK_DRY_RUN=1`, skip `queryClaudeSDK` entirely and finish the run
+Test seam: when `SCHEDULED_TASK_DRY_RUN=1`, skip the selected provider entirely and finish the run
 as `success` with `output = '[dry-run] <prompt>'` and `sessionId = null`. This keeps the
 end-to-end verification deterministic and token-free.
 
@@ -152,8 +162,10 @@ the in-process SDK MCP server (`mcp__internal__*`), mirroring DSH's
 
 Tools are registered by `server/scheduled-tasks/tools.js` and mounted by
 `createInternalToolsServer({ projectPath })` in `server/claude-sdk.js`; the session's
-`cwd` becomes the default target project. All eight names are appended to
-`sdkOptions.allowedTools` so they never raise an approval prompt. Set
+`cwd` becomes the default target project. Copilot adapts the same definitions through
+`defineTool` in `server/copilot-sdk.js`, preserving project scope and the session owner.
+Claude appends the tool names to `sdkOptions.allowedTools`; Copilot marks these internal
+tools `skipPermission` so they never raise an approval prompt. Set
 `SCHEDULED_TASKS_TOOLS=0` to omit them.
 
 Tasks are **project-scoped**: a tool call only sees/edits tasks whose `project_path`
@@ -320,7 +332,7 @@ getAllScheduledTaskSessionIds(): Set<string>
 ### 9.2 会话装饰与过滤（server/database/db.js，照 auto-doc 的写法）
 
 - `applyScheduledTaskOrigin(sessions, provider)`：给匹配的会话加
-  `session.scheduledTaskOrigin = { taskId, taskTitle }`（仅 claude）。
+  `session.scheduledTaskOrigin = { taskId, taskTitle }`（所有执行 provider）。
 - `filterHiddenScheduledTaskSessions(sessions)`：`app_config.scheduled_task_hide_sessions`
   不为 `'false'`（**默认隐藏**）时把这些会话从数组里剔除；必须在 apply 之后调用。
 - `projects.js`：在 `getProjects` 与 `getSessions` 里紧跟 auto-doc 的那两行调用；并把

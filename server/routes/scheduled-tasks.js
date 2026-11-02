@@ -366,6 +366,7 @@ export function createScheduledTasksRouter(overrides = {}) {
       const body = req.body || {};
       const result = await (await getManagement()).updateTask(req.params.id, {
         title: body.title,
+        provider: body.provider,
         prompt: body.prompt,
         projectPath: body.projectPath,
         projectPaths: body.projectPaths,

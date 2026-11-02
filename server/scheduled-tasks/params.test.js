@@ -16,6 +16,7 @@ import {
   builtinParamsEnv,
   checkParamValue,
   coerceParamValue,
+  filterScheduledTaskEnv,
   normalizeParamDefs,
   paramEnv,
   paramEnvName,
@@ -26,6 +27,28 @@ import {
   predefinedVarsPromptBlock,
   resolveParams,
 } from './params.js';
+
+describe('provider task environment', () => {
+  it('passes task variables without allowing runtime or credential overrides', () => {
+    expect(filterScheduledTaskEnv({
+      SCHEDULED_TASK_ID: 'task-1',
+      SCHEDULED_TASK_PARAM_LIMIT: 5,
+      SCHEDULED_TASK_PARAMS: '{"limit":5}',
+      SCHEDULED_TASK_UNKNOWN: 'ignored',
+      PATH: 'unsafe',
+      NODE_OPTIONS: '--inspect',
+      GITHUB_TOKEN: 'override',
+      CLAUDECODE: '1',
+      SCHEDULED_TASK_DIR: null,
+    })).toEqual({
+      SCHEDULED_TASK_ID: 'task-1',
+      SCHEDULED_TASK_PARAM_LIMIT: '5',
+      SCHEDULED_TASK_PARAMS: '{"limit":5}',
+    });
+    expect(filterScheduledTaskEnv(null)).toEqual({});
+    expect(filterScheduledTaskEnv([])).toEqual({});
+  });
+});
 
 describe('env contract constants (§12.2)', () => {
   it('exposes the documented prefix and aggregate variable', () => {

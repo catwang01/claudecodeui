@@ -16,6 +16,7 @@
  */
 
 import { normalizeProjectPath } from '../shared/utils.js';
+import { PROVIDER_LABELS } from '../../shared/providerConstants.js';
 // §12: the pure parameter layer owns the model, coercion and resolution.
 import { normalizeParamDefs, parseParamDefs, resolveParams } from './params.js';
 
@@ -696,6 +697,10 @@ export function createManagement(deps = {}) {
   // ─── Mutations ──────────────────────────────────────────────────────────────
 
   async function createTask(input = {}, scope = {}) {
+    const provider = input.provider === undefined ? 'claude' : nonEmptyString(input.provider);
+    if (!Object.hasOwn(PROVIDER_LABELS, provider)) {
+      return fail('invalid_input', `Unsupported provider: ${String(input.provider)}`);
+    }
     const repo = await getRepo();
     const rules = await getRules();
 
@@ -751,7 +756,7 @@ export function createManagement(deps = {}) {
       prompt: input.prompt,
       projectPath,
       projectPathsJson: projectPaths.length > 1 ? JSON.stringify(projectPaths) : null,
-      provider: nonEmptyString(input.provider) || 'claude',
+      provider,
       model: nonEmptyString(input.model),
       kind: checked.rule.kind,
       ruleJson: JSON.stringify(checked.rule),
@@ -778,6 +783,14 @@ export function createManagement(deps = {}) {
     if (!row) return notFound();
 
     const changes = {};
+    if (patch.provider !== undefined) {
+      const provider = nonEmptyString(patch.provider);
+      if (!Object.hasOwn(PROVIDER_LABELS, provider)) {
+        return fail('invalid_input', `Unsupported provider: ${String(patch.provider)}`);
+      }
+      changes.provider = provider;
+      if (provider !== row.provider && patch.model === undefined) changes.model = null;
+    }
     if (patch.title !== undefined) {
       const title = nonEmptyString(patch.title);
       if (!title) return fail('invalid_input', 'title must be a non-empty string');

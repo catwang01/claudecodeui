@@ -577,10 +577,9 @@ function applyForkParent(sessions, provider) {
 }
 
 // Tag sessions that were started by a scheduled task run.
-// docs/scheduled-tasks.md section 9.2: claude-only because the scheduler always starts
-// Claude sessions. Hiding is presentation-only (client filter).
+// Hiding is presentation-only (client filter), regardless of the run's provider.
 function applyScheduledTaskOrigin(sessions, provider = 'claude') {
-  if (!sessions?.length || provider !== 'claude') return;
+  if (!sessions?.length) return;
   try {
     const ids = sessions.map(s => s.id).filter(Boolean);
     if (!ids.length) return;
