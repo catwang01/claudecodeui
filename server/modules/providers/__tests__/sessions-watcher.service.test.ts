@@ -32,6 +32,12 @@ vi.mock('../registry.js', () => ({
       synchronizeFile: vi.fn(),
     },
     {
+      provider: 'codex',
+      watchPaths: ['C:\\Users\\test\\.codex\\sessions'],
+      synchronize: vi.fn(),
+      synchronizeFile: vi.fn(),
+    },
+    {
       provider: 'copilot',
       watchPaths: [
         'C:\\Users\\test\\.copilot\\session-state',
@@ -53,6 +59,7 @@ vi.mock('../services/session-synchronizer.service.js', () => ({
 import {
   closeSessionsWatcher,
   initializeSessionsWatcher,
+  legacyCoveredPaths,
 } from '../services/sessions-watcher.service.js';
 
 describe('sessions watcher', () => {
@@ -104,6 +111,43 @@ describe('sessions watcher', () => {
       ['C:\\Users\\test\\.claude\\projects'],
       expect.not.objectContaining({ depth: expect.anything() })
     );
+  });
+
+  it('skips claude (covered by the legacy depth:1 watcher) but keeps codex watched', () => {
+    const legacyRoots = [
+      { provider: 'claude', rootPath: 'C:\\Users\\test\\.claude\\projects' },
+      { provider: 'codex', rootPath: 'C:\\Users\\test\\.codex\\sessions' },
+    ];
+    initializeSessionsWatcher({
+      getProjects: vi.fn().mockResolvedValue([]),
+      broadcast: vi.fn(),
+      coveredPaths: legacyCoveredPaths(legacyRoots),
+    });
+
+    const watchedPathSets = mocks.watch.mock.calls.map(
+      (call) => (call as unknown as [string[]])[0],
+    );
+    // claude is covered by the legacy depth:1 watcher → not watched a second time here.
+    expect(watchedPathSets).not.toContainEqual(['C:\\Users\\test\\.claude\\projects']);
+    // codex is NOT covered — its sessions are 3 levels deep, so the legacy depth:1
+    // watcher can't see them → codex must keep this watcher (issue #55).
+    expect(watchedPathSets).toContainEqual(['C:\\Users\\test\\.codex\\sessions']);
+    // copilot is not covered → still watched.
+    expect(watchedPathSets).toContainEqual([
+      'C:\\Users\\test\\.copilot\\session-state',
+      'C:\\Users\\test\\.copilot\\session-store.db',
+    ]);
+  });
+
+  it('treats only claude as legacy-covered, never codex', () => {
+    expect(
+      legacyCoveredPaths([
+        { provider: 'claude', rootPath: 'C:\\Users\\test\\.claude\\projects' },
+        { provider: 'codex', rootPath: 'C:\\Users\\test\\.codex\\sessions' },
+        { provider: 'cursor', rootPath: 'C:\\Users\\test\\.cursor\\chats' },
+        { provider: 'gemini', rootPath: 'C:\\Users\\test\\.gemini\\projects' },
+      ]),
+    ).toEqual(['C:\\Users\\test\\.claude\\projects']);
   });
 
   it('ignores Copilot session database writes', async () => {

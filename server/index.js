@@ -145,7 +145,7 @@ import { initializeDatabase, sessionNamesDb, sessionDb, sessionFileCache, sessio
 import { startScheduledTaskService, stopScheduledTaskService, getRunningTaskCount, getRunningScheduledTasks } from './scheduled-tasks/service.js';
 import { onScheduledTaskRunState } from './scheduled-tasks/events.js';
 import { stopAllTapSessions, tapViewerProxyForSession } from './tap.js';
-import { sessionSynchronizerService, initializeSessionsWatcher } from './modules/providers/index.js';
+import { sessionSynchronizerService, initializeSessionsWatcher, legacyCoveredPaths } from './modules/providers/index.js';
 import { configureWebPush } from './services/vapid-keys.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
 import { IS_PLATFORM } from './constants/config.js';
@@ -3182,7 +3182,14 @@ async function startServer() {
             // Start watching the projects folder for changes
             await setupProjectsWatcher();
 
-            // Initialize file-based sessions watcher (watches ~/.copilot/session-state, etc.)
+            // Initialize file-based sessions watcher (covers codex/opencode/copilot and
+            // the cursor ~/.cursor/projects / gemini ~/.gemini/tmp dirs the legacy
+            // watcher does not). legacyCoveredPaths() returns only the legacy paths the
+            // legacy depth:1 watcher reliably sees — claude ~/.claude/projects — so those
+            // are skipped here, avoiding a duplicate DB sync + double projects_updated
+            // broadcast on every change (issue #55). Codex is intentionally NOT covered:
+            // its sessions live at ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl (depth 3),
+            // invisible to the legacy depth:1 watcher, so it must stay watched here.
             initializeSessionsWatcher({
                 getProjects: async () => getProjects(),
                 broadcast: (msg) => {
@@ -3191,6 +3198,7 @@ async function startServer() {
                         if (client.readyState === WebSocket.OPEN) client.send(str);
                     });
                 },
+                coveredPaths: legacyCoveredPaths(PROVIDER_WATCH_PATHS),
             });
 
             // Sync all provider sessions to DB on startup (non-blocking)

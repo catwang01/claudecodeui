@@ -81,14 +81,56 @@ function providerForFile(filePath: string): string {
   return 'claude';
 }
 
+/**
+ * Filter the legacy watcher's roots (`setupProjectsWatcher` in `server/index.js`)
+ * down to the ones this sessions watcher may safely skip because the legacy watcher
+ * already covers them.
+ *
+ * Only claude qualifies: its layout `~/.claude/projects/<cwd>/<sessionId>.jsonl`
+ * sits at depth 1 — exactly what the legacy watcher (`depth: 1`) sees — so watching
+ * it here too syncs the DB and broadcasts `projects_updated` twice for every change
+ * (issue #55).
+ *
+ * Codex is deliberately excluded even though it shares a root with the legacy
+ * watcher: real codex sessions live at `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`
+ * (depth 3). The legacy `depth: 1` watcher never sees those files — it also ignores
+ * `addDir`, so newly created date directories don't help either. Covering codex here
+ * would leave codex with no effective watcher (no `projects_updated` on codex
+ * writes), so codex must stay on this unlimited-depth watcher.
+ */
+export function legacyCoveredPaths(
+  legacyRoots: { provider: string; rootPath: string }[],
+): string[] {
+  return legacyRoots
+    .filter(({ provider }) => provider === 'claude')
+    .map(({ rootPath }) => rootPath);
+}
+
 export function initializeSessionsWatcher(opts: {
   getProjects: GetProjectsFn;
   broadcast: BroadcastFn;
+  /**
+   * Absolute paths already watched by the legacy projects watcher
+   * (`setupProjectsWatcher` in `server/index.js`). Any synchronizer watchPath
+   * resolving to one of these is skipped so the two watchers don't both sync +
+   * broadcast the same file change; synchronizers left with no paths are dropped
+   * entirely (issue #55). Callers should derive this via `legacyCoveredPaths()`,
+   * which excludes providers (codex) the legacy depth:1 watcher can't actually see.
+   */
+  coveredPaths?: string[];
 }): void {
   getProjectsFn = opts.getProjects;
   broadcastFn = opts.broadcast;
 
-  const allPaths = ALL_SYNCHRONIZERS.flatMap(s => s.watchPaths);
+  const covered = new Set((opts.coveredPaths ?? []).map((p) => path.resolve(p)));
+
+  // Keep only watch paths the legacy watcher does not already cover.
+  const activeSynchronizers = ALL_SYNCHRONIZERS.map((synchronizer) => ({
+    synchronizer,
+    watchPaths: synchronizer.watchPaths.filter((wp) => !covered.has(path.resolve(wp))),
+  })).filter((entry) => entry.watchPaths.length > 0);
+
+  const allPaths = activeSynchronizers.flatMap((entry) => entry.watchPaths);
 
   if (allPaths.length === 0) return;
 
@@ -102,14 +144,14 @@ export function initializeSessionsWatcher(opts: {
       .catch((err) => console.error('[sessions-watcher] onUpdate error:', err));
   };
 
-  watchers = ALL_SYNCHRONIZERS.map((synchronizer) => {
-    const watcher = chokidar.watch(synchronizer.watchPaths, {
+  watchers = activeSynchronizers.map(({ synchronizer, watchPaths }) => {
+    const watcher = chokidar.watch(watchPaths, {
       persistent: true,
       ignoreInitial: true,
       ...(synchronizer.provider === 'copilot' ? { depth: 1 } : {}),
       ignored: (filePath) => {
         const resolvedPath = path.resolve(filePath);
-        const isExplicitlyWatched = synchronizer.watchPaths.some((watchPath) => {
+        const isExplicitlyWatched = watchPaths.some((watchPath) => {
           const resolvedWatchPath = path.resolve(watchPath);
           return resolvedPath === resolvedWatchPath
             || resolvedPath.startsWith(`${resolvedWatchPath}${path.sep}`);
