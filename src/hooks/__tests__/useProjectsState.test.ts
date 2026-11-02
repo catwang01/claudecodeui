@@ -4,6 +4,7 @@ import {
   mergeProjects,
   mergeSelectedSessionMetadata,
   projectsHaveChanges,
+  removeSessionFromProjects,
 } from "../useProjectsState";
 
 describe("useProjectsState metadata synchronization", () => {
@@ -122,5 +123,70 @@ describe("useProjectsState metadata synchronization", () => {
     expect(merged[0]).toBe(untouched);
     expect(merged[1].sessions![0]).toBe(changed.sessions![0]);
     expect(merged[1].sessions![1].isRead).toBe(false);
+  });
+});
+
+describe("removeSessionFromProjects", () => {
+  const makeProject = (
+    name: string,
+    collections: Partial<Pick<Project, "sessions" | "codexSessions" | "cursorSessions" | "geminiSessions" | "copilotSessions">>,
+    total: number,
+  ): Project => ({
+    name,
+    displayName: name,
+    fullPath: `/${name}`,
+    sessionMeta: { total },
+    ...collections,
+  });
+
+  it("only decrements the owning project's session total", () => {
+    const owner = makeProject("owner", { sessions: [{ id: "target" }, { id: "keep" }] }, 2);
+    const other = makeProject("other", { sessions: [{ id: "unrelated" }] }, 5);
+    const emptyTotal = makeProject("empty-total", {}, 0);
+
+    const next = removeSessionFromProjects([owner, other, emptyTotal], "target");
+
+    expect(next[0].sessions).toEqual([{ id: "keep" }]);
+    expect(next[0].sessionMeta?.total).toBe(1);
+    // Non-owning projects keep both their count and their reference.
+    expect(next[1]).toBe(other);
+    expect(next[1].sessionMeta?.total).toBe(5);
+    expect(next[2]).toBe(emptyTotal);
+    expect(next[2].sessionMeta?.total).toBe(0);
+  });
+
+  it.each([
+    "sessions",
+    "codexSessions",
+    "cursorSessions",
+    "geminiSessions",
+    "copilotSessions",
+  ] as const)("finds the session in %s", (collection) => {
+    const owner = makeProject("owner", { [collection]: [{ id: "target" }] } as Partial<Project>, 3);
+    const other = makeProject("other", { sessions: [{ id: "unrelated" }] }, 4);
+
+    const next = removeSessionFromProjects([owner, other], "target");
+
+    expect(next[0].sessionMeta?.total).toBe(2);
+    expect(next[0][collection]).toEqual([]);
+    expect(next[1]).toBe(other);
+  });
+
+  it("never drops the total below zero", () => {
+    const owner = makeProject("owner", { sessions: [{ id: "target" }] }, 0);
+
+    const next = removeSessionFromProjects([owner], "target");
+
+    expect(next[0].sessionMeta?.total).toBe(0);
+  });
+
+  it("leaves every project untouched when no project contains the session", () => {
+    const first = makeProject("first", { sessions: [{ id: "a" }] }, 1);
+    const second = makeProject("second", { codexSessions: [{ id: "b" }] }, 2);
+
+    const next = removeSessionFromProjects([first, second], "missing");
+
+    expect(next[0]).toBe(first);
+    expect(next[1]).toBe(second);
   });
 });

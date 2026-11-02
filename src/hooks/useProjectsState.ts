@@ -86,6 +86,53 @@ export const projectsHaveChanges = (
   });
 };
 
+const PROJECT_SESSION_COLLECTIONS = [
+  'sessions',
+  'codexSessions',
+  'cursorSessions',
+  'geminiSessions',
+  'copilotSessions',
+] as const;
+
+/**
+ * Optimistically drop a deleted session from the projects list.
+ *
+ * A session belongs to exactly one project, so only the owning project's
+ * `sessionMeta.total` is decremented. Decrementing every project (the previous
+ * behaviour) drifted the counters used by the delete-project guard
+ * (`resolveDeleteRequest`): unrelated projects' totals were pulled down to 0,
+ * making `force` false and triggering a spurious "force delete" confirmation.
+ *
+ * Projects that do not contain the session are returned by reference so memos
+ * depending on them keep bailing out.
+ */
+export const removeSessionFromProjects = (
+  projects: Project[],
+  sessionIdToDelete: string,
+): Project[] =>
+  projects.map((project) => {
+    const ownsSession = PROJECT_SESSION_COLLECTIONS.some((key) =>
+      project[key]?.some((session) => session.id === sessionIdToDelete),
+    );
+
+    if (!ownsSession) {
+      return project;
+    }
+
+    return {
+      ...project,
+      sessions: project.sessions?.filter((session) => session.id !== sessionIdToDelete) ?? [],
+      codexSessions: project.codexSessions?.filter((session) => session.id !== sessionIdToDelete) ?? [],
+      cursorSessions: project.cursorSessions?.filter((session) => session.id !== sessionIdToDelete) ?? [],
+      geminiSessions: project.geminiSessions?.filter((session) => session.id !== sessionIdToDelete) ?? [],
+      copilotSessions: project.copilotSessions?.filter((session) => session.id !== sessionIdToDelete) ?? [],
+      sessionMeta: {
+        ...project.sessionMeta,
+        total: Math.max(0, (project.sessionMeta?.total as number | undefined ?? 0) - 1),
+      },
+    };
+  });
+
 /**
  * Rebuild the projects array from a `projects_updated` payload, reusing unchanged
  * project/session object references so React.memo can bail out cheaply.
@@ -569,20 +616,7 @@ export function useProjectsState({
         navigate('/');
       }
 
-      setProjects((prevProjects) =>
-        prevProjects.map((project) => ({
-          ...project,
-          sessions: project.sessions?.filter((session) => session.id !== sessionIdToDelete) ?? [],
-          codexSessions: project.codexSessions?.filter((session) => session.id !== sessionIdToDelete) ?? [],
-          cursorSessions: project.cursorSessions?.filter((session) => session.id !== sessionIdToDelete) ?? [],
-          geminiSessions: project.geminiSessions?.filter((session) => session.id !== sessionIdToDelete) ?? [],
-          copilotSessions: project.copilotSessions?.filter((session) => session.id !== sessionIdToDelete) ?? [],
-          sessionMeta: {
-            ...project.sessionMeta,
-            total: Math.max(0, (project.sessionMeta?.total as number | undefined ?? 0) - 1),
-          },
-        })),
-      );
+      setProjects((prevProjects) => removeSessionFromProjects(prevProjects, sessionIdToDelete));
     },
     [navigate, selectedSession?.id],
   );
