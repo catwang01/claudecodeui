@@ -20,6 +20,7 @@
     "claude": "Claude",
     "cursor": "Cursor",
     "codex": "Codex",
+    "copilot": "Copilot",
     "gemini": "Gemini"
   },
   "tools": {
